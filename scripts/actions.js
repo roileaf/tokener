@@ -11,6 +11,39 @@ import {
 
 export const REVERT_FLAG_KEY = 'lastRevert';
 export const REVERT_FLAG_PATH = `flags.${MODULE_ID}.${REVERT_FLAG_KEY}`;
+export const BREAKOUT_FLAG_KEY = 'breakout';
+export const BREAKOUT_FLAG_PATH = `flags.${MODULE_ID}.${BREAKOUT_FLAG_KEY}`;
+const PF2E_AUTOSCALE_PATH = 'flags.pf2e.autoscale';
+
+/**
+ * Created tokens with breakout room draw their frame smaller inside the art, so the token is
+ * enlarged by this factor on top of its normal scale to keep the frame at grid size.
+ */
+export function getBreakoutScale(candidate) {
+  const scale = Number(candidate?.breakoutScale);
+  return Number.isFinite(scale) && scale > 1 ? scale : 1;
+}
+
+/**
+ * Breakout room recorded on the token by the Token Creator. It only counts while that art is
+ * still shown, so reverting or replacing the art outside Tokener never leaves a stale record.
+ */
+export function readBreakoutState(documentLike, { current = true } = {}) {
+  const state =
+    readPath(documentLike?._source, BREAKOUT_FLAG_PATH) ??
+    readPath(documentLike, BREAKOUT_FLAG_PATH);
+  const scale = Number(state?.scale);
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  if (current && normalizePath(readDocumentPath(documentLike, 'texture.src')).trim() !== state.src)
+    return null;
+  return { ...state, scale };
+}
+
+/** A token's scale without any breakout enlargement, i.e. what the creature normally uses. */
+export function getBaseTokenScale(documentLike, scale) {
+  const breakout = readBreakoutState(documentLike);
+  return breakout ? scale / breakout.scale : scale;
+}
 
 export function getApplyActions() {
   return [
@@ -85,7 +118,7 @@ export function getApplyTargets(action) {
   }
 }
 
-export function buildTokenUpdate(candidate, { scale, ringScale, profile } = {}) {
+export function buildTokenUpdate(candidate, { scale, ringScale, profile, document } = {}) {
   const tokenSrc = getImageSource(candidate?.tokenSrc);
   if (!tokenSrc) throw new Error('Tokener candidate has no token image.');
 
@@ -94,13 +127,15 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile } = {}) 
   const ringScaleOverride = getScaleOverride(ringScale);
   const baseScaleX = numberOr(candidate?.scaleX ?? candidate?.scale, 1);
   const baseScaleY = numberOr(candidate?.scaleY ?? candidate?.scale, baseScaleX);
-  const scaleX = scaleOverride ?? baseScaleX;
-  const scaleY = scaleOverride ?? baseScaleY;
+  const breakout = getBreakoutScale(candidate);
+  const scaleX = (scaleOverride ?? baseScaleX) * breakout;
+  const scaleY = (scaleOverride ?? baseScaleY) * breakout;
   const update = {
     'texture.src': tokenSrc,
     'texture.scaleX': scaleX,
     'texture.scaleY': scaleY,
     randomImg: false,
+    ...buildBreakoutUpdate(breakout, tokenSrc, document, systemProfile),
   };
 
   if (!supportsDynamicTokenRing(systemProfile)) return update;
@@ -111,10 +146,37 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile } = {}) 
     update['ring.subject.scale'] =
       ringScaleOverride ??
       numberOr(candidate.subjectScale, Math.max(Math.abs(scaleX), Math.abs(scaleY)));
+    if (isObject(candidate.ringColors)) {
+      update['ring.colors.ring'] = candidate.ringColors.ring ?? null;
+      update['ring.colors.background'] = candidate.ringColors.background ?? null;
+    }
   } else {
     update['ring.enabled'] = false;
   }
 
+  return update;
+}
+
+/**
+ * PF2e's size-based autoscale rewrites the token scale every time it is prepared, which would
+ * undo the breakout enlargement, so it is turned off while breakout art is applied and restored
+ * when other art replaces it.
+ */
+function buildBreakoutUpdate(breakout, src, documentLike, profile) {
+  const previous = readBreakoutState(documentLike, { current: false });
+  const pf2e = profile?.id === 'pf2e';
+  const update = {};
+  if (breakout > 1) {
+    const autoscale = previous
+      ? previous.autoscale
+      : (readPath(documentLike?._source, PF2E_AUTOSCALE_PATH) ?? null);
+    update[BREAKOUT_FLAG_PATH] = { scale: breakout, src, autoscale: autoscale ?? null };
+    if (pf2e) update[PF2E_AUTOSCALE_PATH] = false;
+  } else if (previous) {
+    update[BREAKOUT_FLAG_PATH] = null;
+    if (pf2e && typeof previous.autoscale === 'boolean')
+      update[PF2E_AUTOSCALE_PATH] = previous.autoscale;
+  }
   return update;
 }
 
@@ -123,7 +185,11 @@ export function buildActorUpdate(candidate, options = {}) {
   const actorUpdate = {};
   if (profile.supportsPrototypeToken !== false) {
     for (const [key, value] of Object.entries(
-      buildTokenUpdate(candidate, { ...options, profile }),
+      buildTokenUpdate(candidate, {
+        ...options,
+        profile,
+        document: options.document ?? options.actor?.prototypeToken,
+      }),
     )) {
       actorUpdate[`prototypeToken.${key}`] = value;
     }
@@ -358,6 +424,10 @@ function captureTokenState(documentLike, profile = resolveSystemProfile()) {
     },
     randomImg: Boolean(readDocumentPath(documentLike, 'randomImg')),
   };
+  if (profile?.id === 'pf2e') {
+    const autoscale = readPath(documentLike?._source ?? documentLike, PF2E_AUTOSCALE_PATH);
+    if (typeof autoscale === 'boolean') state.autoscale = autoscale;
+  }
   if (supportsDynamicTokenRing(profile)) {
     state.ring = {
       enabled: Boolean(readDocumentPath(documentLike, 'ring.enabled')),
@@ -366,6 +436,11 @@ function captureTokenState(documentLike, profile = resolveSystemProfile()) {
         scale: numberOr(readDocumentPath(documentLike, 'ring.subject.scale'), 1),
       },
     };
+    const ringColor = readDocumentPath(documentLike, 'ring.colors.ring');
+    const backgroundColor = readDocumentPath(documentLike, 'ring.colors.background');
+    if (ringColor !== undefined || backgroundColor !== undefined) {
+      state.ring.colors = { ring: ringColor ?? null, background: backgroundColor ?? null };
+    }
   }
   return state;
 }
@@ -378,10 +453,16 @@ function tokenStateToUpdate(state, profile = resolveSystemProfile()) {
     'texture.scaleY': numberOr(state?.texture?.scaleY, 1),
     randomImg: Boolean(state?.randomImg),
   };
+  if (profile?.id === 'pf2e' && typeof state?.autoscale === 'boolean')
+    update[PF2E_AUTOSCALE_PATH] = state.autoscale;
   if (supportsDynamicTokenRing(profile)) {
     update['ring.enabled'] = Boolean(state?.ring?.enabled);
     update['ring.subject.texture'] = subjectTexture;
     update['ring.subject.scale'] = numberOr(state?.ring?.subject?.scale, 1);
+    if (isObject(state?.ring?.colors)) {
+      update['ring.colors.ring'] = state.ring.colors.ring ?? null;
+      update['ring.colors.background'] = state.ring.colors.background ?? null;
+    }
   }
   return update;
 }

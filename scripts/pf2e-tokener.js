@@ -7,6 +7,7 @@ import { registerPickerGridSizeSetting } from './grid-size.js';
 import { renderTokenHud, updateOpenPanelsCanvasZoom } from './hud.js';
 import { registerImageTagSettings } from './image-tags.js';
 import { registerPermissionSettings } from './permissions.js';
+import { registerTokenCreatorSettings } from './token-creator.js';
 
 export { MODULE_ID } from './constants.js';
 export {
@@ -99,6 +100,19 @@ export {
   registerPermissionSettings,
   shouldRestrictTokenerToSelectedToken,
 } from './permissions.js';
+export {
+  canUseTokenCreator,
+  normalizeTokenCreatorOptions,
+  openTokenCreator,
+  registerTokenCreatorSettings,
+} from './token-creator.js';
+export {
+  buildCreatedTokenCandidate,
+  buildCreatedTokenFileName,
+  getCreatedTokenFolder,
+  getTokenFrameLayout,
+} from './token-composer.js';
+export { getAlphaBounds, getBorderPalette, removeImageBackground } from './background-removal.js';
 export { getCandidatePreviewTagGroups, getImagePreviewItems, openImagePreview } from './preview.js';
 export {
   filterSourceOptionsByQuery,
@@ -157,6 +171,7 @@ function registerFoundryIntegration() {
     registerImageTagSettings();
     registerPickerGridSizeSetting();
     registerPermissionSettings();
+    registerTokenCreatorSettings();
   });
 
   hooks.once('ready', () => {

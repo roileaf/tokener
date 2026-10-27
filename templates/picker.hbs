@@ -169,6 +169,16 @@
         </div>
       </div>
 
+      {{#if creator.available}}
+        <button
+          class='pf2e-tokener-create-button'
+          type='button'
+          data-picker-action='create-token'
+          data-tooltip='{{creator.tooltip}}'
+          data-tooltip-direction='UP'
+        ><i class='fas fa-wand-magic-sparkles'></i> {{creator.label}}</button>
+      {{/if}}
+
       {{#if revert.available}}
         <div class='pf2e-tokener-revert'>
           <button

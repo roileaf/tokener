@@ -2065,3 +2065,654 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.pf2e-tokener-app .pf2e-tokener-create-button {
+  height: 26px;
+  padding: 0 8px;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  background: rgba(70, 45, 101, 0.8);
+  border: 1px solid rgba(186, 160, 222, 0.42);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  background: rgba(18, 20, 23, 0.94);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-layout {
+  display: grid;
+  grid-template-columns: 496px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-controls {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  background: rgba(14, 16, 19, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 5px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-card h4 {
+  margin: 0;
+  padding: 0;
+  color: var(--color-text-light-6, #cfc6b8);
+  border: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-canvas-wrap {
+  position: relative;
+  box-sizing: border-box;
+  width: 496px;
+  height: 496px;
+  padding: 7px;
+  background: rgba(14, 16, 19, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 5px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-preview {
+  display: block;
+  width: 480px;
+  height: 480px;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  background-color: #1b1e22;
+  background-image:
+    linear-gradient(45deg, #24282d 25%, transparent 25%),
+    linear-gradient(-45deg, #24282d 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #24282d 75%),
+    linear-gradient(-45deg, transparent 75%, #24282d 75%);
+  background-size: 20px 20px;
+  background-position:
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0;
+  border-radius: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-preview:focus-visible {
+  box-shadow: 0 0 0 1px #8fb9d6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-preview:active {
+  cursor: grabbing;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-brushing .pf2e-tokener-creator-preview {
+  cursor: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-selecting .pf2e-tokener-creator-preview {
+  cursor: crosshair;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-empty {
+  position: absolute;
+  inset: 7px;
+  display: none;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--color-text-light-6, #cfc6b8);
+  text-align: center;
+  font-size: 12px;
+  pointer-events: none;
+  border: 1px dashed rgba(143, 185, 214, 0.35);
+  border-radius: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-empty i {
+  font-size: 28px;
+  opacity: 0.6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-empty .pf2e-tokener-creator-empty {
+  display: grid;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-mask-bar {
+  position: absolute;
+  top: 13px;
+  left: 13px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(14, 16, 19, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-empty .pf2e-tokener-creator-mask-bar {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-view-bar {
+  position: absolute;
+  right: 13px;
+  bottom: 13px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(14, 16, 19, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-empty .pf2e-tokener-creator-view-bar {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-icon-button.pf2e-tokener-creator-view-label {
+  width: auto;
+  min-width: 40px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-icon-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-icon-button:hover,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-icon-button:focus-visible {
+  background: rgba(143, 185, 214, 0.14);
+  box-shadow: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-icon-button.is-active {
+  color: #11181c;
+  background: #d6b56d;
+  border-color: #d6b56d;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-icon-button:disabled {
+  opacity: 0.35;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  height: 26px;
+  margin: 0;
+  padding: 0 9px;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  white-space: nowrap;
+  background: rgba(31, 77, 101, 0.8);
+  border: 1px solid rgba(143, 185, 214, 0.42);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button:hover,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button:focus-visible {
+  background: rgba(52, 111, 141, 0.95);
+  box-shadow: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button.is-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button.is-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-slider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  align-items: center;
+  margin: 0;
+  color: var(--color-text-light-6, #cfc6b8);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-slider input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: #8fb9d6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-value {
+  min-width: 4ch;
+  padding: 1px 6px;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--color-border-dark-4, #444);
+  border-radius: 5px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented label {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented span {
+  display: block;
+  height: 24px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--color-text-light-6, #cfc6b8);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 24px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented label:hover span {
+  color: var(--color-text-light-highlight, #f5f2e8);
+  background: rgba(143, 185, 214, 0.08);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented input:checked + span {
+  color: #11181c;
+  font-weight: 700;
+  background: #9fc4dc;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-segmented input:focus-visible + span {
+  box-shadow: 0 0 0 1px #8fb9d6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-check {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-check input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-checkbox {
+  box-sizing: border-box;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(143, 185, 214, 0.58);
+  border-radius: 3px;
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-check
+  input:checked
+  + .pf2e-tokener-creator-checkbox {
+  background: #8fb9d6;
+  border-color: #8fb9d6;
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-check
+  input:checked
+  + .pf2e-tokener-creator-checkbox::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  margin-top: -2px;
+  border: solid #11181c;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-check
+  input:focus-visible
+  + .pf2e-tokener-creator-checkbox {
+  box-shadow: 0 0 0 1px #8fb9d6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-colors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-light-6, #cfc6b8);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-swatch input[type='color'] {
+  width: 26px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 4px;
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-swatch
+  input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-swatch input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-hint,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts {
+  margin: 0;
+  color: var(--color-text-light-6, #cfc6b8);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts dt,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts dd {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts dd {
+  color: var(--color-text-light-highlight, #f5f2e8);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts kbd {
+  display: inline-block;
+  min-width: 16px;
+  margin: 0 1px;
+  padding: 0 4px;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  text-align: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  box-shadow: none;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-actions .pf2e-tokener-creator-button {
+  flex: 0 0 auto;
+  min-width: 64px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-status {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-light-6, #cfc6b8);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-status.is-error {
+  color: #ff8a80;
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-background:not([data-mode='auto'])
+  [data-background-mode='auto'],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-background:not([data-mode='ai'])
+  [data-background-mode='ai'],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-frame:not([data-style='painted'])
+  [data-frame-style='painted'],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-frame:not([data-style='ring'])
+  [data-frame-style='ring'],
+.pf2e-tokener-creator-app .pf2e-tokener-creator:not([data-pop-out='true']) [data-pop-out-tools] {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-target span {
+  height: 26px;
+  line-height: 26px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-target i {
+  margin-right: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-label {
+  color: var(--color-text-light-6, #cfc6b8);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator[data-edit-target='portrait'] [data-token-only],
+.pf2e-tokener-creator-app .pf2e-tokener-creator[data-edit-target='portrait'] [data-pop-out-tools],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator:not([data-edit-target='portrait'])
+  [data-portrait-only],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-portrait:not([data-background='color'])
+  [data-portrait-color] {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-sliders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 7px 14px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts-panel summary {
+  color: var(--color-text-light-6, #cfc6b8);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts-panel[open] summary {
+  margin-bottom: 7px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-shortcuts-panel .pf2e-tokener-creator-shortcuts {
+  grid-template-columns: repeat(2, auto minmax(0, 1fr));
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator:not([data-edit-target='portrait'])
+  [data-portrait-separate-only],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator:not([data-portrait-image='separate'])
+  [data-portrait-separate-only] {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button.is-primary {
+  color: #11181c;
+  font-weight: 700;
+  background: #d6b56d;
+  border-color: #d6b56d;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button.is-primary:hover {
+  background: #e3c682;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose {
+  display: grid;
+  gap: 7px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-options {
+  display: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-compose.has-options
+  .pf2e-tokener-creator-compose-options {
+  display: grid;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 1;
+  margin: 0;
+  padding: 4px;
+  line-height: 0;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option:hover {
+  border-color: rgba(143, 185, 214, 0.6);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option.is-active {
+  border-color: #d6b56d;
+  box-shadow: 0 0 0 1px #d6b56d inset;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

@@ -1,0 +1,392 @@
+<section
+  class='pf2e-tokener-creator'
+  data-pop-out='{{#if options.popOut}}true{{else}}false{{/if}}'
+  data-edit-target='{{editTarget}}'
+  data-portrait-image='{{portraitImage}}'
+>
+  <div class='pf2e-tokener-creator-layout'>
+    <div class='pf2e-tokener-creator-stage is-empty'>
+      <div class='pf2e-tokener-creator-segmented pf2e-tokener-creator-target'>
+        {{#each editTargets}}
+          <label>
+            <input type='radio' name='editTarget' value='{{value}}' {{#if selected}}checked{{/if}} />
+            <span><i class='{{icon}}'></i> {{label}}</span>
+          </label>
+        {{/each}}
+      </div>
+      <div class='pf2e-tokener-creator-canvas-wrap'>
+        <canvas
+          class='pf2e-tokener-creator-preview'
+          width='{{previewSize}}'
+          height='{{previewSize}}'
+          tabindex='0'
+        ></canvas>
+        <div class='pf2e-tokener-creator-empty'>
+          <i class='fas fa-image'></i>
+          <span>{{labels.dropHint}}</span>
+        </div>
+
+        <div class='pf2e-tokener-creator-view-bar'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='view-out'
+            data-tooltip='{{labels.viewOutTooltip}}'
+          ><i class='fas fa-magnifying-glass-minus'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button pf2e-tokener-creator-view-label'
+            data-creator-action='view-reset'
+            data-tooltip='{{labels.viewResetTooltip}}'
+          >{{labels.viewLabel}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='view-in'
+            data-tooltip='{{labels.viewInTooltip}}'
+          ><i class='fas fa-magnifying-glass-plus'></i></button>
+        </div>
+
+        <div class='pf2e-tokener-creator-mask-bar'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button is-active'
+            data-creator-action='mask-move'
+            aria-pressed='true'
+            data-tooltip='{{labels.maskMoveTooltip}}'
+          ><i class='fas fa-up-down-left-right'></i></button>
+          <span class='pf2e-tokener-creator-divider'></span>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='mask-cut'
+            aria-pressed='false'
+            data-tooltip='{{labels.cleanupCutTooltip}}'
+          ><i class='fas fa-scissors'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='mask-restore'
+            aria-pressed='false'
+            data-tooltip='{{labels.cleanupRestoreTooltip}}'
+          ><i class='fas fa-paint-roller'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='mask-wand'
+            aria-pressed='false'
+            data-tooltip='{{labels.cleanupWandTooltip}}'
+          ><i class='fas fa-fill-drip'></i></button>
+          <span class='pf2e-tokener-creator-divider' data-pop-out-tools></span>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-pop-out-tools
+            data-creator-action='mask-paint'
+            aria-pressed='false'
+            data-tooltip='{{labels.maskPaintTooltip}}'
+          ><i class='fas fa-paintbrush'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-pop-out-tools
+            data-creator-action='mask-erase'
+            aria-pressed='false'
+            data-tooltip='{{labels.maskEraseTooltip}}'
+          ><i class='fas fa-eraser'></i></button>
+          {{#if aiTools}}
+            <button
+              type='button'
+              class='pf2e-tokener-creator-icon-button'
+              data-pop-out-tools
+              data-creator-action='mask-select'
+              aria-pressed='false'
+              data-tooltip='{{labels.maskSelectTooltip}}'
+            ><i class='fas fa-hand-pointer'></i></button>
+          {{/if}}
+          <span class='pf2e-tokener-creator-divider'></span>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='mask-undo'
+            data-tooltip='{{labels.maskUndoTooltip}}'
+          ><i class='fas fa-rotate-left'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-creator-action='mask-redo'
+            data-tooltip='{{labels.maskRedoTooltip}}'
+          ><i class='fas fa-rotate-right'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-pop-out-tools
+            data-creator-action='mask-auto'
+            data-tooltip='{{labels.maskAutoTooltip}}'
+          ><i class='fas fa-wand-magic'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-pop-out-tools
+            data-creator-action='mask-clear'
+            data-tooltip='{{labels.maskClearTooltip}}'
+          ><i class='fas fa-ban'></i></button>
+        </div>
+      </div>
+
+      <div class='pf2e-tokener-creator-card'>
+        <div class='pf2e-tokener-creator-sliders'>
+        <label class='pf2e-tokener-creator-slider'>
+          <span>{{labels.zoom}}</span>
+          <span class='pf2e-tokener-creator-value'>{{zoom.label}}</span>
+          <input
+            type='range'
+            name='zoom'
+            min='{{zoom.min}}'
+            max='{{zoom.max}}'
+            step='0.01'
+            value='{{zoom.value}}'
+          />
+        </label>
+        <label class='pf2e-tokener-creator-slider'>
+          <span>{{labels.brushSize}}</span>
+          <span class='pf2e-tokener-creator-value'>{{brushSize}}px</span>
+          <input type='range' name='brushSize' min='4' max='160' step='1' value='{{brushSize}}' />
+        </label>
+        </div>
+        <div class='pf2e-tokener-creator-compose' data-token-only>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-primary'
+            data-creator-action='auto-compose'
+            data-tooltip='{{labels.autoComposeTooltip}}'
+          ><i class='fas fa-wand-magic-sparkles'></i> {{labels.autoCompose}}</button>
+          <div class='pf2e-tokener-creator-compose-options'></div>
+        </div>
+        <div class='pf2e-tokener-creator-row'>
+          <button type='button' class='pf2e-tokener-creator-button' data-creator-action='reset-view'>
+            <i class='fas fa-arrows-to-dot'></i>
+            {{labels.resetView}}
+          </button>
+        </div>
+        <details class='pf2e-tokener-creator-shortcuts-panel'>
+          <summary><i class='fas fa-keyboard'></i> {{labels.shortcutsHeading}}</summary>
+          <dl class='pf2e-tokener-creator-shortcuts'>
+            {{#each labels.shortcuts}}
+              <dt {{#if popOut}}data-pop-out-tools{{/if}}>{{{keys}}}</dt>
+              <dd {{#if popOut}}data-pop-out-tools{{/if}}>{{label}}</dd>
+            {{/each}}
+          </dl>
+        </details>
+      </div>
+    </div>
+
+    <div class='pf2e-tokener-creator-controls'>
+      <section class='pf2e-tokener-creator-card'>
+        <h4>{{labels.source}}</h4>
+        <div class='pf2e-tokener-creator-row'>
+          <button type='button' class='pf2e-tokener-creator-button' data-creator-action='browse'>
+            <i class='fas fa-folder-open'></i>
+            {{labels.browse}}
+          </button>
+          <button type='button' class='pf2e-tokener-creator-button' data-creator-action='upload'>
+            <i class='fas fa-upload'></i>
+            {{labels.upload}}
+          </button>
+          <button type='button' class='pf2e-tokener-creator-button' data-creator-action='portrait'>
+            <i class='fas fa-user'></i>
+            {{labels.portrait}}
+          </button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-token-only
+            data-creator-action='token-from-portrait'
+            data-tooltip='{{labels.fromPortraitTooltip}}'
+          ><i class='fas fa-image-portrait'></i> {{labels.fromPortrait}}</button>
+        </div>
+        <p class='pf2e-tokener-creator-hint' data-portrait-separate-only>{{labels.portraitSeparateHint}}</p>
+        <input type='file' name='upload' accept='image/*' hidden />
+      </section>
+
+      <section
+        class='pf2e-tokener-creator-card pf2e-tokener-creator-background'
+        data-mode='{{options.backgroundMode}}'
+      >
+        <h4>{{labels.background}}</h4>
+        <div class='pf2e-tokener-creator-segmented'>
+          {{#each backgroundModes}}
+            <label data-tooltip='{{tooltip}}'>
+              <input type='radio' name='backgroundMode' value='{{value}}' {{#if selected}}checked{{/if}} />
+              <span>{{label}}</span>
+            </label>
+          {{/each}}
+        </div>
+        <label class='pf2e-tokener-creator-slider' data-background-mode='auto'>
+          <span>{{labels.tolerance}}</span>
+          <span class='pf2e-tokener-creator-value'>{{options.tolerance}}</span>
+          <input type='range' name='tolerance' min='1' max='120' step='1' value='{{options.tolerance}}' />
+        </label>
+        <label class='pf2e-tokener-creator-slider' data-background-mode='auto'>
+          <span>{{labels.feather}}</span>
+          <span class='pf2e-tokener-creator-value'>{{options.feather}}</span>
+          <input type='range' name='feather' min='0' max='8' step='1' value='{{options.feather}}' />
+        </label>
+        <p class='pf2e-tokener-creator-hint' data-background-mode='ai'>{{labels.aiHint}}</p>
+        <div class='pf2e-tokener-creator-row'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='mask-cut'
+          ><i class='fas fa-scissors'></i> {{labels.cleanupButton}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='cleanup-reset'
+          ><i class='fas fa-rotate-left'></i> {{labels.cleanupReset}}</button>
+        </div>
+      </section>
+
+      <section
+        class='pf2e-tokener-creator-card pf2e-tokener-creator-portrait'
+        data-portrait-only
+        data-background='{{options.portraitBackground}}'
+      >
+        <h4>{{labels.portraitHeading}}</h4>
+        <span class='pf2e-tokener-creator-label'>{{labels.portraitImage}}</span>
+        <div class='pf2e-tokener-creator-segmented'>
+          {{#each portraitImageModes}}
+            <label>
+              <input type='radio' name='portraitImage' value='{{value}}' {{#if selected}}checked{{/if}} />
+              <span>{{label}}</span>
+            </label>
+          {{/each}}
+        </div>
+        <span class='pf2e-tokener-creator-label'>{{labels.portraitAspect}}</span>
+        <div class='pf2e-tokener-creator-segmented'>
+          {{#each portraitAspects}}
+            <label>
+              <input type='radio' name='portraitAspect' value='{{value}}' {{#if selected}}checked{{/if}} />
+              <span>{{label}}</span>
+            </label>
+          {{/each}}
+        </div>
+        <span class='pf2e-tokener-creator-label'>{{labels.portraitBackground}}</span>
+        <div class='pf2e-tokener-creator-segmented'>
+          {{#each portraitBackgrounds}}
+            <label>
+              <input type='radio' name='portraitBackground' value='{{value}}' {{#if selected}}checked{{/if}} />
+              <span>{{label}}</span>
+            </label>
+          {{/each}}
+        </div>
+        <label class='pf2e-tokener-creator-swatch' data-portrait-color>
+          <input type='color' name='portraitColor' value='{{options.portraitColor}}' />
+          <span>{{labels.portraitBackground}}</span>
+        </label>
+        <p class='pf2e-tokener-creator-hint'>{{labels.portraitHint}}</p>
+      </section>
+
+      <section
+        data-token-only
+        class='pf2e-tokener-creator-card pf2e-tokener-creator-frame'
+        data-style='{{options.frameStyle}}'
+      >
+        <h4>{{labels.frame}}</h4>
+        <div class='pf2e-tokener-creator-segmented'>
+          {{#each frameStyles}}
+            <label data-tooltip='{{tooltip}}'>
+              <input type='radio' name='frameStyle' value='{{value}}' {{#if selected}}checked{{/if}} />
+              <span>{{label}}</span>
+            </label>
+          {{/each}}
+        </div>
+
+        <label class='pf2e-tokener-creator-slider' data-frame-style='painted'>
+          <span>{{labels.borderWidth}}</span>
+          <span class='pf2e-tokener-creator-value'>{{options.borderWidth}}</span>
+          <input type='range' name='borderWidth' min='0' max='60' step='1' value='{{options.borderWidth}}' />
+        </label>
+        <div class='pf2e-tokener-creator-colors' data-frame-style='painted'>
+          <label class='pf2e-tokener-creator-swatch'>
+            <input type='color' name='borderColor' value='{{options.borderColor}}' />
+            <span>{{labels.borderColor}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='fill' {{#if options.fill}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.fill}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-swatch'>
+            <input type='color' name='fillColor' value='{{options.fillColor}}' />
+          </label>
+        </div>
+
+        <p class='pf2e-tokener-creator-hint' data-frame-style='ring'>{{labels.ringHint}}</p>
+        <div class='pf2e-tokener-creator-colors' data-frame-style='ring'>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringColors' {{#if options.ringColors}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringColors}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-swatch'>
+            <input type='color' name='ringColor' value='{{options.ringColor}}' />
+            <span>{{labels.ringColor}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-swatch'>
+            <input type='color' name='ringBackgroundColor' value='{{options.ringBackgroundColor}}' />
+            <span>{{labels.ringBackgroundColor}}</span>
+          </label>
+        </div>
+
+        <label class='pf2e-tokener-creator-check'>
+          <input type='checkbox' name='popOut' {{#if options.popOut}}checked{{/if}} />
+          <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+          <span>{{labels.popOut}}</span>
+        </label>
+        <label class='pf2e-tokener-creator-slider' data-pop-out-tools data-tooltip='{{labels.breakoutRoomTooltip}}'>
+          <span>{{labels.breakoutRoom}}</span>
+          <span class='pf2e-tokener-creator-value'>{{options.breakoutRoom}}%</span>
+          <input type='range' name='breakoutRoom' min='0' max='50' step='5' value='{{options.breakoutRoom}}' />
+        </label>
+        <label class='pf2e-tokener-creator-check' data-pop-out-tools>
+          <input type='checkbox' name='popOutShadow' {{#if options.popOutShadow}}checked{{/if}} />
+          <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+          <span>{{labels.popOutShadow}}</span>
+        </label>
+        <p class='pf2e-tokener-creator-hint' data-pop-out-tools>{{labels.maskHint}}</p>
+      </section>
+
+      <section class='pf2e-tokener-creator-card' data-token-only>
+        <h4>{{labels.output}}</h4>
+        <div class='pf2e-tokener-creator-segmented'>
+          {{#each outputSizes}}
+            <label>
+              <input type='radio' name='outputSize' value='{{value}}' {{#if selected}}checked{{/if}} />
+              <span>{{label}}</span>
+            </label>
+          {{/each}}
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer class='pf2e-tokener-creator-footer'>
+    <p class='pf2e-tokener-creator-status' aria-live='polite'></p>
+    <div class='pf2e-tokener-creator-actions'>
+      <button type='button' class='pf2e-tokener-creator-button is-secondary' data-creator-action='save'>
+        <i class='fas fa-floppy-disk'></i>
+        {{labels.save}}
+      </button>
+      {{#each applyActions}}
+        <button
+          type='button'
+          class='pf2e-tokener-creator-button'
+          data-creator-action='apply'
+          data-apply-action='{{action}}'
+          data-tooltip='{{tooltip}}'
+        >{{label}}</button>
+      {{/each}}
+    </div>
+  </footer>
+</section>

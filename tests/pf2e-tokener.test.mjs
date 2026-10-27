@@ -2304,8 +2304,11 @@ test('token scale slider previews scene token scale and reuses preview revert sn
   );
   assert.match(picker, /handleScaleResetClick/);
   assert.match(picker, /dataScaleReset/);
-  assert.match(picker, /buildTokenUpdate\(candidate, \{ scale, ringScale \}\)/);
-  assert.match(picker, /buildActorUpdate\(candidate, \{ scale, ringScale \}\)/);
+  assert.match(
+    picker,
+    /buildTokenUpdate\(candidate, \{ scale, ringScale, document: tokenDocument \}\)/,
+  );
+  assert.match(picker, /buildActorUpdate\(candidate, \{ scale, ringScale, actor \}\)/);
 });
 
 test('token scale sliders default to the current scene token scale before candidate metadata', async () => {
@@ -3220,9 +3223,7 @@ test('revert history dialog restores the selected token snapshot', async () => {
                 target: {
                   dataset: { revertIndex: '1' },
                   closest: (selector) =>
-                    selector === '[data-revert-index]'
-                      ? { dataset: { revertIndex: '1' } }
-                      : null,
+                    selector === '[data-revert-index]' ? { dataset: { revertIndex: '1' } } : null,
                 },
                 preventDefault() {},
               });
@@ -3971,7 +3972,10 @@ test('ready hook no longer skips non-PF2e systems', () => {
   const script = fs.readFileSync(new URL('../scripts/pf2e-tokener.js', import.meta.url), 'utf8');
 
   assert.doesNotMatch(script, /system\?\.id\s*!==\s*['"]pf2e['"]/);
-  assert.doesNotMatch(script, /hooks\.once\('ready', async \(\) => \{[\s\S]*?await rebuildIndex\(\)/);
+  assert.doesNotMatch(
+    script,
+    /hooks\.once\('ready', async \(\) => \{[\s\S]*?await rebuildIndex\(\)/,
+  );
   assert.match(script, /installApi\(\);/);
   assert.match(script, /'renderActorSheet'/);
   assert.match(script, /hooks\.on\(hook, renderActorSheetTokenerEntry\)/);

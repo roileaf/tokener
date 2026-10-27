@@ -179,6 +179,21 @@ Image tag overrides:
 
 Original module or datasheet tags are not changed.
 
+## Token Creator
+
+Click **Create token** in the picker sidebar to make a new token from any image. GMs and players with the Upload Files permission can use it.
+
+- Load art with **Browse files**, **Upload**, **Use portrait**, drag-and-drop onto the preview, or paste from the clipboard.
+- Drag the preview to move the art and scroll or use the zoom slider to resize it. To look closer or further away without changing the token, use the magnifier buttons in the preview corner, **-** / **=** / **0**, or Alt+wheel, and middle-drag to pan the view.
+- **Remove automatically** removes plain or gradient backdrops; tune **Tolerance** and **Edge softness** if it removes too much or too little. **AI model** handles busy backgrounds but downloads a model (~7 MB) from jsDelivr and Hugging Face the first time. AI options only appear when a GM enables **Enable AI-assisted tools** in the module settings.
+- **Auto compose** (below the preview, Token mode) frames the art and chooses what pops out for you, then offers four alternatives as thumbnails; click one to switch. With AI tools enabled it completes long popped parts such as swords and staves.
+- Auto removal will miss bits on busy art. Click **Touch up** (or press **Q**) and paint leftovers away; **Restore** (**R**) paints the original back where too much was removed, and **Fill remove** (**G**) removes a whole patch of similar colour with one click (right-click restores). Removed parts show faded red while you work, touch-ups apply to both the token and the portrait, and **Reset touch-ups** starts over.
+- **Painted border** bakes a coloured ring into the image, optionally with a fill and a pop-out effect. **Dynamic token ring** saves the transparent subject and enables Foundry's ring instead, optionally setting its colours. The preview shows the ring configured for your world in **Core Settings > Dynamic Token Ring**, at the token's size.
+- **Pop out of frame** lets parts of the cut-out break over the frame or ring. By default every part of the cut-out above a line just below the token centre pops out; with AI tools enabled, the **Select** tool (**W**) lets you click a part (a sword, a wing) to pop it out and right-click to remove it; switch on **Paint** or **Erase** and drag on the preview to edit the pop-out area (hair, weapons, wings): parts that will pop out are outlined in gold and the rest of the art is ghosted so you can see what is available, **Auto** to reset it or **Clear** to remove it. **Breakout room** (shown while pop-out is on) draws the frame smaller inside the token so popped parts can reach past its outer edge; the token is scaled up by the same amount on apply, so the frame still matches the grid. Auto compose sets the room for each layout itself. **Shadow under popped parts** adds a soft drop shadow where parts break out. Shortcuts: Shift-drag paints, Alt-drag or right-drag erases, **B** / **E** / **V** pick paint, erase or move, **[** / **]** or Ctrl+wheel change the brush size, and Ctrl+Z / Ctrl+Shift+Z undo and redo.
+- Switch to **Portrait** above the preview to edit the actor portrait from the same art: pick a shape (original, 1:1, 2:3, 3:4) and a background (original, transparent cut-out or a colour), then drag and zoom to frame it. **Actor**, **Portrait** and **Both** save that portrait; leave it untouched to keep using the original image.
+- To use different art for the token and the portrait, switch to **Portrait** and set **Image** to **Separate image**; anything you load there changes the portrait only. **From portrait** (Token mode) copies the edited portrait in as the token image to frame and experiment with.
+- **Save only** writes the file; the apply buttons also update the token or actor like any other Tokener art. Files go to `worlds/<world>/tokener` unless the **Created token folder** setting says otherwise.
+
 ## Custom Folders
 
 Use `Configure` beside the `Custom token folders` module setting to add your own world data folders as extra sources.

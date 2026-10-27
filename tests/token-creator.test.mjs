@@ -1,0 +1,869 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  getAlphaBounds,
+  getBorderPalette,
+  removeImageBackground,
+} from '../scripts/background-removal.js';
+import {
+  colorizeRingBackground,
+  colorizeRingFrame,
+  resolveRingColor,
+  selectRingFrame,
+} from '../scripts/ring-preview.js';
+import {
+  buildCreatedTokenCandidate,
+  buildCreatedTokenFileName,
+  getCreatedTokenFolder,
+  getAutoPopOutRect,
+  getTokenFrameLayout,
+  previewPointToImage,
+} from '../scripts/token-composer.js';
+
+function createImage(width, height, fill) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const [r, g, b, a = 255] = fill(x, y);
+      const offset = (y * width + x) * 4;
+      data[offset] = r;
+      data[offset + 1] = g;
+      data[offset + 2] = b;
+      data[offset + 3] = a;
+    }
+  }
+  return { data, width, height };
+}
+
+function alphaAt(image, x, y) {
+  return image.data[(y * image.width + x) * 4 + 3];
+}
+
+test('background removal clears edge-connected background and keeps the subject', () => {
+  const image = createImage(10, 10, (x, y) =>
+    x >= 3 && x <= 6 && y >= 3 && y <= 6 ? [200, 20, 20] : [20, 200, 20],
+  );
+
+  const result = removeImageBackground(image, { tolerance: 30, feather: 0 });
+
+  assert.equal(result, image);
+  assert.equal(alphaAt(image, 0, 0), 0);
+  assert.equal(alphaAt(image, 9, 9), 0);
+  assert.equal(alphaAt(image, 2, 5), 0);
+  assert.equal(alphaAt(image, 4, 4), 255);
+  assert.equal(alphaAt(image, 6, 6), 255);
+});
+
+test('background removal keeps enclosed background-coloured pixels inside the subject', () => {
+  const image = createImage(9, 9, (x, y) => {
+    if (x === 4 && y === 4) return [20, 200, 20];
+    return x >= 2 && x <= 6 && y >= 2 && y <= 6 ? [30, 30, 220] : [20, 200, 20];
+  });
+
+  removeImageBackground(image, { tolerance: 30, feather: 0 });
+
+  assert.equal(alphaAt(image, 0, 0), 0);
+  assert.equal(alphaAt(image, 4, 4), 255);
+});
+
+test('background removal handles a gradient background with several border colours', () => {
+  const image = createImage(12, 12, (x, y) =>
+    x >= 4 && x <= 7 && y >= 4 && y <= 7 ? [250, 250, 30] : [x * 4, 40, 120 + y * 4],
+  );
+
+  removeImageBackground(image, { tolerance: 28, feather: 0 });
+
+  assert.equal(alphaAt(image, 0, 0), 0);
+  assert.equal(alphaAt(image, 11, 0), 0);
+  assert.equal(alphaAt(image, 0, 11), 0);
+  assert.equal(alphaAt(image, 11, 11), 0);
+  assert.equal(alphaAt(image, 5, 5), 255);
+});
+
+test('background removal feathers subject edges next to removed pixels', () => {
+  const image = createImage(10, 10, (x, y) =>
+    x >= 3 && x <= 6 && y >= 3 && y <= 6 ? [200, 20, 20] : [20, 200, 20],
+  );
+
+  removeImageBackground(image, { tolerance: 30, feather: 1 });
+
+  const edgeAlpha = alphaAt(image, 3, 4);
+  assert.ok(edgeAlpha > 0 && edgeAlpha < 255, `edge alpha ${edgeAlpha} should be partial`);
+  assert.equal(alphaAt(image, 0, 0), 0);
+});
+
+test('background removal leaves already transparent images alone', () => {
+  const image = createImage(6, 6, (x, y) =>
+    x >= 2 && x <= 3 && y >= 2 && y <= 3 ? [200, 20, 20, 255] : [0, 0, 0, 0],
+  );
+
+  removeImageBackground(image, { tolerance: 30, feather: 0 });
+
+  assert.equal(alphaAt(image, 0, 0), 0);
+  assert.equal(alphaAt(image, 2, 2), 255);
+});
+
+test('border palette groups similar border colours', () => {
+  const image = createImage(8, 8, (x) => (x < 4 ? [10, 10, 10] : [240, 240, 240]));
+  const palette = getBorderPalette(image);
+  assert.equal(palette.length, 2);
+});
+
+test('alpha bounds trim transparent padding', () => {
+  const image = createImage(10, 8, (x, y) =>
+    x >= 2 && x <= 5 && y >= 1 && y <= 6 ? [1, 2, 3, 255] : [0, 0, 0, 0],
+  );
+  assert.deepEqual(getAlphaBounds(image), { x: 2, y: 1, width: 4, height: 6 });
+  assert.equal(getAlphaBounds(createImage(3, 3, () => [0, 0, 0, 0])), null);
+});
+
+test('token frame layout covers the frame and applies zoom and offset', () => {
+  assert.deepEqual(getTokenFrameLayout({ imageWidth: 200, imageHeight: 400, size: 100 }), {
+    x: 0,
+    y: -50,
+    width: 100,
+    height: 200,
+  });
+
+  assert.deepEqual(
+    getTokenFrameLayout({
+      imageWidth: 200,
+      imageHeight: 200,
+      size: 100,
+      zoom: 2,
+      offsetX: 10,
+      offsetY: -5,
+    }),
+    { x: -40, y: -55, width: 200, height: 200 },
+  );
+});
+
+test('created token file names are slugged and timestamped', () => {
+  const now = new Date(Date.UTC(2026, 9, 27, 13, 4, 5));
+  assert.equal(
+    buildCreatedTokenFileName('Goblin War-Chanter!', { now }),
+    'goblin-war-chanter-20261027-130405.webp',
+  );
+  assert.equal(
+    buildCreatedTokenFileName('', { now, suffix: 'subject', extension: 'png' }),
+    'token-20261027-130405-subject.png',
+  );
+});
+
+test('created token folder defaults to the current world', () => {
+  assert.equal(getCreatedTokenFolder({ worldId: 'my-world' }), 'worlds/my-world/tokener');
+  assert.equal(
+    getCreatedTokenFolder({ worldId: 'my-world', configured: '/custom/tokens/' }),
+    'custom/tokens',
+  );
+});
+
+test('created token candidate maps token, subject and portrait sources', () => {
+  assert.deepEqual(
+    buildCreatedTokenCandidate({
+      label: 'Goblin',
+      tokenSrc: 'worlds/w/tokener/goblin.webp',
+      portraitSrc: 'art/goblin.png',
+    }),
+    {
+      id: 'tokener-created:worlds/w/tokener/goblin.webp',
+      label: 'Goblin',
+      sourceId: 'tokener-created',
+      tokenSrc: 'worlds/w/tokener/goblin.webp',
+      portraitSrc: 'art/goblin.png',
+      scale: 1,
+    },
+  );
+
+  const withSubject = buildCreatedTokenCandidate({
+    label: 'Goblin',
+    tokenSrc: 't.webp',
+    subjectSrc: 's.webp',
+  });
+  assert.equal(withSubject.subjectSrc, 's.webp');
+  assert.equal(withSubject.subjectScale, 1);
+});
+
+test('token updates apply dynamic ring colours from created candidates', async () => {
+  const { buildTokenUpdate } = await import('../scripts/actions.js');
+  const candidate = buildCreatedTokenCandidate({
+    label: 'Goblin',
+    tokenSrc: 'subject.webp',
+    subjectSrc: 'subject.webp',
+    ringColors: { ring: '#aa0000', background: '#001122' },
+  });
+
+  const update = buildTokenUpdate(candidate, { profile: { supportsDynamicTokenRing: true } });
+
+  assert.equal(update['ring.enabled'], true);
+  assert.equal(update['ring.subject.texture'], 'subject.webp');
+  assert.equal(update['ring.subject.scale'], 1);
+  assert.equal(update['ring.colors.ring'], '#aa0000');
+  assert.equal(update['ring.colors.background'], '#001122');
+});
+
+test('revert snapshots restore previous dynamic ring colours', async () => {
+  const { buildRevertSnapshot, buildTokenRevertUpdate } = await import('../scripts/actions.js');
+  const tokenDocument = {
+    texture: { src: 'old.webp', scaleX: 1, scaleY: 1 },
+    ring: {
+      enabled: false,
+      subject: { texture: '', scale: 1 },
+      colors: { ring: null, background: '#123456' },
+    },
+  };
+  const snapshot = buildRevertSnapshot({
+    action: 'token',
+    candidate: { tokenSrc: 'new.webp' },
+    tokenDocument,
+    profile: { supportsDynamicTokenRing: true },
+  });
+
+  const update = buildTokenRevertUpdate(snapshot, { profile: { supportsDynamicTokenRing: true } });
+
+  assert.equal(update['ring.colors.ring'], null);
+  assert.equal(update['ring.colors.background'], '#123456');
+});
+
+test('background removal keeps subjects cropped by the bottom edge', () => {
+  const image = createImage(20, 20, (x, y) =>
+    x >= 6 && x <= 13 && y >= 8 ? [220, 220, 180] : [60, 90, 160],
+  );
+
+  removeImageBackground(image, { tolerance: 30, feather: 0 });
+
+  assert.equal(alphaAt(image, 0, 19), 0);
+  assert.equal(alphaAt(image, 10, 19), 255);
+  assert.equal(alphaAt(image, 10, 10), 255);
+});
+
+const RING_SHEET = {
+  config: { defaultColorBand: { startRadius: 0.6, endRadius: 0.7 }, defaultRingColor: '#400c07' },
+  frames: {
+    'ring-med-bkg': { frame: { x: 0, y: 0, w: 8, h: 8 } },
+    'ring-med': { frame: { x: 8, y: 0, w: 8, h: 8 } },
+    'ring-big-bkg': { frame: { x: 0, y: 8, w: 16, h: 16 } },
+    'ring-big': {
+      frame: { x: 16, y: 8, w: 16, h: 16 },
+      gridTarget: 2,
+      backgroundColor: '#112233',
+      colorBand: { startRadius: 0.5, endRadius: 0.9 },
+    },
+    'ring-big-msk': { frame: { x: 32, y: 8, w: 16, h: 16 } },
+  },
+  meta: { image: 'rings.webp' },
+};
+
+test('ring frame selection mirrors Foundry grid target matching', () => {
+  const medium = selectRingFrame(RING_SHEET, 1);
+  assert.equal(medium.ringName, 'ring-med');
+  assert.deepEqual(medium.ring, { x: 8, y: 0, w: 8, h: 8 });
+  assert.deepEqual(medium.background, { x: 0, y: 0, w: 8, h: 8 });
+  assert.equal(medium.mask, null);
+  assert.deepEqual(medium.colorBand, { startRadius: 0.6, endRadius: 0.7 });
+  assert.equal(medium.defaultRingColor, '#400c07');
+  assert.equal(medium.defaultBackgroundColor, null);
+
+  const big = selectRingFrame(RING_SHEET, 3);
+  assert.equal(big.ringName, 'ring-big');
+  assert.deepEqual(big.mask, { x: 32, y: 8, w: 16, h: 16 });
+  assert.deepEqual(big.colorBand, { startRadius: 0.5, endRadius: 0.9 });
+  assert.equal(big.defaultBackgroundColor, '#112233');
+
+  assert.equal(selectRingFrame({ frames: {} }, 1), null);
+});
+
+test('ring colours fall back to spritesheet defaults like Foundry', () => {
+  assert.equal(resolveRingColor(null, '#400c07'), '#400c07');
+  assert.equal(resolveRingColor('#ffffff', '#400c07'), '#400c07');
+  assert.equal(resolveRingColor('#aa0000', '#400c07'), '#aa0000');
+  assert.equal(resolveRingColor(null, null), '#ffffff');
+});
+
+test('ring frame colourises only the colour band using the red channel', () => {
+  const ring = createImage(10, 10, () => [200, 100, 50, 255]);
+  colorizeRingFrame(ring, null, {
+    colorBand: { startRadius: 0.55, endRadius: 0.95 },
+    ringColor: '#ff0000',
+  });
+
+  const pixel = (x, y) => [...ring.data.slice((y * 10 + x) * 4, (y * 10 + x) * 4 + 4)];
+  assert.deepEqual(pixel(5, 5), [200, 100, 50, 255]);
+  assert.deepEqual(pixel(9, 5), [200, 0, 0, 255]);
+  assert.deepEqual(pixel(0, 0), [200, 100, 50, 255]);
+});
+
+test('ring background uses overlay tint and ignores white', () => {
+  const background = createImage(2, 1, () => [64, 192, 128, 255]);
+  colorizeRingBackground(background, '#ffffff');
+  assert.deepEqual([...background.data.slice(0, 4)], [64, 192, 128, 255]);
+
+  colorizeRingBackground(background, '#808080');
+  assert.deepEqual([...background.data.slice(0, 4)], [64, 192, 128, 255]);
+});
+
+test('preview points map back into source image pixels', () => {
+  const layout = getTokenFrameLayout({ imageWidth: 200, imageHeight: 400, size: 100, zoom: 2 });
+  assert.deepEqual(layout, { x: -50, y: -150, width: 200, height: 400 });
+  assert.deepEqual(
+    previewPointToImage({ layout, imageWidth: 200, imageHeight: 400, x: 50, y: 50 }),
+    {
+      x: 100,
+      y: 200,
+      scale: 1,
+    },
+  );
+
+  const half = getTokenFrameLayout({ imageWidth: 400, imageHeight: 400, size: 100 });
+  assert.deepEqual(
+    previewPointToImage({ layout: half, imageWidth: 400, imageHeight: 400, x: 25, y: 75 }),
+    {
+      x: 100,
+      y: 300,
+      scale: 4,
+    },
+  );
+});
+
+test('automatic pop-out area spans the token width down to just below the centre', () => {
+  const layout = getTokenFrameLayout({ imageWidth: 400, imageHeight: 400, size: 100 });
+  assert.deepEqual(
+    getAutoPopOutRect({ layout, imageWidth: 400, imageHeight: 400, size: 100, radius: 40 }),
+    { x: 0, y: 0, width: 400, height: 256 },
+  );
+});
+
+test('mask shortcuts map keys to creator commands', async () => {
+  const { getMaskShortcut } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getMaskShortcut({ key: 'b' }), 'tool-paint');
+  assert.equal(getMaskShortcut({ key: 'E' }), 'tool-erase');
+  assert.equal(getMaskShortcut({ key: 'Escape' }), 'tool-move');
+  assert.equal(getMaskShortcut({ key: 'x' }), 'swap');
+  assert.equal(getMaskShortcut({ key: '[' }), 'brush-smaller');
+  assert.equal(getMaskShortcut({ key: ']' }), 'brush-larger');
+  assert.equal(getMaskShortcut({ key: 'z', ctrlKey: true }), 'undo');
+  assert.equal(getMaskShortcut({ key: 'Z', ctrlKey: true, shiftKey: true }), 'redo');
+  assert.equal(getMaskShortcut({ key: 'y', metaKey: true }), 'redo');
+  assert.equal(getMaskShortcut({ key: 'b', ctrlKey: true }), null);
+  assert.equal(getMaskShortcut({ key: 'k' }), null);
+});
+
+test('stroke mode honours modifiers, right button and the active brush', async () => {
+  const { getStrokeMode } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getStrokeMode({}), null);
+  assert.equal(getStrokeMode({ shiftKey: true }), 'paint');
+  assert.equal(getStrokeMode({ altKey: true, tool: 'paint' }), 'erase');
+  assert.equal(getStrokeMode({ tool: 'paint' }), 'paint');
+  assert.equal(getStrokeMode({ tool: 'paint', button: 2 }), 'erase');
+  assert.equal(getStrokeMode({ tool: 'erase', button: 2 }), 'paint');
+  assert.equal(getStrokeMode({ button: 2 }), 'erase');
+});
+
+test('brush size steps scale with size and stay in range', async () => {
+  const { stepBrushSize, MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } =
+    await import('../scripts/creator-shortcuts.js');
+  assert.equal(stepBrushSize(10, 1), 12);
+  assert.equal(stepBrushSize(24, -1), 20);
+  assert.equal(stepBrushSize(80, 1), 88);
+  assert.equal(stepBrushSize(MIN_BRUSH_SIZE, -1), MIN_BRUSH_SIZE);
+  assert.equal(stepBrushSize(MAX_BRUSH_SIZE, 1), MAX_BRUSH_SIZE);
+});
+
+test('preview viewport centres the token and maps screen points back', async () => {
+  const { getPreviewViewport, viewportPointToToken } = await import('../scripts/token-composer.js');
+  assert.deepEqual(getPreviewViewport({ size: 320 }), { x: 0, y: 0, scale: 1, size: 320 });
+
+  const zoomedOut = getPreviewViewport({ size: 320, scale: 0.5, panX: 10, panY: -20 });
+  assert.deepEqual(zoomedOut, { x: 90, y: 60, scale: 0.5, size: 160 });
+  assert.deepEqual(viewportPointToToken(zoomedOut, { x: 90, y: 60 }), { x: 0, y: 0 });
+  assert.deepEqual(viewportPointToToken(zoomedOut, { x: 170, y: 140 }), { x: 160, y: 160 });
+});
+
+test('view shortcuts zoom the preview without touching the art', async () => {
+  const { getMaskShortcut, stepViewScale, MIN_VIEW_SCALE, MAX_VIEW_SCALE } =
+    await import('../scripts/creator-shortcuts.js');
+  assert.equal(getMaskShortcut({ key: '-' }), 'view-out');
+  assert.equal(getMaskShortcut({ key: '=' }), 'view-in');
+  assert.equal(getMaskShortcut({ key: '+' }), 'view-in');
+  assert.equal(getMaskShortcut({ key: '0' }), 'view-reset');
+  assert.equal(stepViewScale(1, -1), 0.8);
+  assert.equal(stepViewScale(1, 1), 1.25);
+  assert.equal(stepViewScale(MIN_VIEW_SCALE, -1), MIN_VIEW_SCALE);
+  assert.equal(stepViewScale(MAX_VIEW_SCALE, 1), MAX_VIEW_SCALE);
+});
+
+test('select tool shortcut is W', async () => {
+  const { getMaskShortcut } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getMaskShortcut({ key: 'w' }), 'tool-select');
+});
+
+test('SAM helpers pick the best mask and convert it to an alpha mask', async () => {
+  const { pickBestMaskIndex, samMaskToImageData, scaleSamPoint } =
+    await import('../scripts/ai-tools.js');
+  assert.equal(pickBestMaskIndex([0.4, 0.92, 0.7]), 1);
+  assert.equal(pickBestMaskIndex(new Float32Array([0.9, 0.1, 0.2])), 0);
+
+  // three 2x2 masks back to back, choose the second
+  const data = Uint8Array.from([1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1]);
+  const rgba = samMaskToImageData(data, 2, 2, 1);
+  assert.deepEqual([...rgba.filter((_, i) => i % 4 === 3)], [0, 255, 255, 0]);
+  assert.deepEqual([...rgba.slice(4, 8)], [255, 255, 255, 255]);
+
+  assert.deepEqual(
+    scaleSamPoint({ x: 100, y: 50 }, { height: 400, width: 800 }, { height: 512, width: 1024 }),
+    [128, 64],
+  );
+});
+
+test('portrait rectangles fit the preview for each aspect', async () => {
+  const { getPortraitRect } = await import('../scripts/token-composer.js');
+  assert.deepEqual(getPortraitRect({ size: 300, aspect: '1:1', imageWidth: 10, imageHeight: 20 }), {
+    x: 0,
+    y: 0,
+    width: 300,
+    height: 300,
+  });
+  assert.deepEqual(getPortraitRect({ size: 300, aspect: '2:3', imageWidth: 10, imageHeight: 20 }), {
+    x: 50,
+    y: 0,
+    width: 200,
+    height: 300,
+  });
+  assert.deepEqual(
+    getPortraitRect({ size: 300, aspect: 'original', imageWidth: 400, imageHeight: 200 }),
+    { x: 0, y: 75, width: 300, height: 150 },
+  );
+});
+
+test('rect layouts cover the rectangle like the token layout covers the square', async () => {
+  const { getRectFrameLayout, getTokenFrameLayout } = await import('../scripts/token-composer.js');
+  assert.deepEqual(
+    getRectFrameLayout({ imageWidth: 200, imageHeight: 400, width: 100, height: 100 }),
+    getTokenFrameLayout({ imageWidth: 200, imageHeight: 400, size: 100 }),
+  );
+  assert.deepEqual(
+    getRectFrameLayout({
+      imageWidth: 400,
+      imageHeight: 400,
+      width: 200,
+      height: 300,
+      zoom: 1,
+      offsetX: 10,
+      offsetY: 0,
+    }),
+    { x: -40, y: 0, width: 300, height: 300 },
+  );
+});
+
+test('an untouched portrait reuses the original image', async () => {
+  const { isPortraitUnchanged } = await import('../scripts/token-composer.js');
+  const view = { zoom: 1, offsetX: 0, offsetY: 0 };
+  assert.equal(
+    isPortraitUnchanged({ portraitAspect: 'original', portraitBackground: 'original' }, view),
+    true,
+  );
+  assert.equal(
+    isPortraitUnchanged({ portraitAspect: '2:3', portraitBackground: 'original' }, view),
+    false,
+  );
+  assert.equal(
+    isPortraitUnchanged({ portraitAspect: 'original', portraitBackground: 'transparent' }, view),
+    false,
+  );
+  assert.equal(
+    isPortraitUnchanged(
+      { portraitAspect: 'original', portraitBackground: 'original' },
+      { ...view, zoom: 1.2 },
+    ),
+    false,
+  );
+});
+
+test('creator section is found whether it is the part root or a child of it', async () => {
+  const { getCreatorSection } = await import('../scripts/token-creator.js');
+  const section = { nodeType: 1, matches: (selector) => selector === '.pf2e-tokener-creator' };
+  assert.equal(getCreatorSection({ parts: { main: section } }), section);
+
+  const child = { id: 'child' };
+  const wrapper = { nodeType: 1, matches: () => false, querySelector: () => child };
+  assert.equal(getCreatorSection({ parts: { main: wrapper } }), child);
+});
+
+test('model download progress is combined across files', async () => {
+  const { createDownloadTracker } = await import('../scripts/ai-tools.js');
+  const updates = [];
+  const track = createDownloadTracker((percent) => updates.push(percent));
+  track({ status: 'initiate', file: 'a.onnx' });
+  track({ status: 'progress', file: 'a.onnx', loaded: 50, total: 100 });
+  track({ status: 'progress', file: 'b.onnx', loaded: 0, total: 300 });
+  track({ status: 'progress', file: 'b.onnx', loaded: 300, total: 300 });
+  track({ status: 'done', file: 'a.onnx' });
+  assert.deepEqual(updates, [50, 13, 88, 100]);
+});
+
+test('model caching needs a secure context with the Cache API', async () => {
+  const { canCacheModels } = await import('../scripts/ai-tools.js');
+  assert.equal(canCacheModels({ isSecureContext: true, caches: {} }), true);
+  assert.equal(canCacheModels({ isSecureContext: false, caches: {} }), false);
+  assert.equal(canCacheModels({ isSecureContext: true }), false);
+});
+
+test('fill region selects connected pixels similar to the clicked colour', async () => {
+  const { getFillRegion } = await import('../scripts/background-removal.js');
+  // left half dark, right half light, with a dark island inside the light half
+  const image = createImage(10, 6, (x, y) => {
+    if (x === 8 && y === 3) return [20, 20, 20];
+    return x < 5 ? [20, 20, 20] : [220, 220, 220];
+  });
+  const region = getFillRegion(image, 1, 1, { tolerance: 30 });
+  assert.equal(region[1 * 10 + 1], 1);
+  assert.equal(region[5 * 10 + 4], 1);
+  assert.equal(region[1 * 10 + 6], 0);
+  assert.equal(region[3 * 10 + 8], 0, 'disconnected island stays unselected');
+  assert.equal(
+    region.reduce((sum, value) => sum + value, 0),
+    30,
+  );
+  assert.equal(
+    getFillRegion(image, -1, 2, { tolerance: 30 }).reduce((a, b) => a + b, 0),
+    0,
+  );
+});
+
+test('cleanup tools flip between remove and restore with Alt or right button', async () => {
+  const { getStrokeMode, getMaskShortcut, isCleanupTool } =
+    await import('../scripts/creator-shortcuts.js');
+  assert.equal(getStrokeMode({ tool: 'cut' }), 'cut');
+  assert.equal(getStrokeMode({ tool: 'cut', altKey: true }), 'restore');
+  assert.equal(getStrokeMode({ tool: 'restore', button: 2 }), 'cut');
+  assert.equal(getStrokeMode({ tool: 'restore', shiftKey: true }), 'restore');
+  assert.equal(getStrokeMode({ tool: 'wand' }), null);
+  assert.equal(getMaskShortcut({ key: 'q' }), 'tool-cut');
+  assert.equal(getMaskShortcut({ key: 'r' }), 'tool-restore');
+  assert.equal(getMaskShortcut({ key: 'g' }), 'tool-wand');
+  assert.equal(isCleanupTool('wand'), true);
+  assert.equal(isCleanupTool('paint'), false);
+});
+
+test('touch-ups restore original pixels and remove leftovers on top of the auto cut-out', async () => {
+  const { createCanvas } = await import('canvas');
+  const { applyCutoutTouchUps } = await import('../scripts/token-composer.js');
+  const make = (fill) => {
+    const canvas = createCanvas(4, 1);
+    const context = canvas.getContext('2d');
+    fill(context);
+    return canvas;
+  };
+  // original: four opaque blue pixels; auto cut-out kept only the first two
+  const source = make((c) => {
+    c.fillStyle = '#0000ff';
+    c.fillRect(0, 0, 4, 1);
+  });
+  const base = make((c) => {
+    c.fillStyle = '#0000ff';
+    c.fillRect(0, 0, 2, 1);
+  });
+  const keep = make((c) => {
+    c.fillStyle = '#fff';
+    c.fillRect(3, 0, 1, 1);
+  });
+  const remove = make((c) => {
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 1, 1);
+  });
+
+  assert.equal(applyCutoutTouchUps({ base, source, keep: null, remove: null, createCanvas }), base);
+
+  const result = applyCutoutTouchUps({ base, source, keep, remove, createCanvas });
+  const alpha = [...result.getContext('2d').getImageData(0, 0, 4, 1).data].filter(
+    (_, index) => index % 4 === 3,
+  );
+  assert.deepEqual(alpha, [0, 255, 0, 255]);
+});
+
+test('portrait save plan picks render, original path or upload per action', async () => {
+  const { getPortraitSavePlan } = await import('../scripts/token-composer.js');
+  const base = { edited: false, sourcePath: 'art/a.webp', hasFile: false };
+  assert.equal(getPortraitSavePlan({ ...base, action: 'token' }), 'none');
+  assert.equal(getPortraitSavePlan({ ...base, action: 'actor' }), 'path');
+  assert.equal(getPortraitSavePlan({ ...base, action: 'portrait', edited: true }), 'render');
+  assert.equal(getPortraitSavePlan({ ...base, action: null, edited: true }), 'render');
+  assert.equal(getPortraitSavePlan({ ...base, action: null }), 'path');
+  const local = { edited: false, sourcePath: null, hasFile: true };
+  assert.equal(getPortraitSavePlan({ ...local, action: 'both' }), 'upload-source');
+  assert.equal(getPortraitSavePlan({ ...local, action: null }), 'none');
+  assert.equal(
+    getPortraitSavePlan({ edited: false, sourcePath: null, hasFile: false, action: 'actor' }),
+    'render',
+    'a generated image (e.g. from the portrait) has no file to reuse',
+  );
+});
+
+test('saving uses the token image for the token and the separate image for the portrait', async () => {
+  const { createCanvas, loadImage } = await import('canvas');
+  const { createToken, normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+
+  const solid = (color) => {
+    const canvas = createCanvas(64, 64);
+    const context = canvas.getContext('2d');
+    context.fillStyle = color;
+    context.fillRect(0, 0, 64, 64);
+    return canvas;
+  };
+  const workspace = (color, path) => {
+    const canvas = solid(color);
+    return {
+      source: { canvas, path, file: null, label: 'Hero' },
+      autoCutout: canvas,
+      cutout: canvas,
+      cleanup: { keep: null, remove: null },
+      cutoutToken: 0,
+    };
+  };
+
+  const uploads = [];
+  const previous = {
+    document: globalThis.document,
+    foundry: globalThis.foundry,
+    game: globalThis.game,
+  };
+  globalThis.document = {
+    createElement: () => {
+      const canvas = createCanvas(1, 1);
+      canvas.toBlob = (callback) => callback(new Blob([canvas.toBuffer('image/png')]));
+      return canvas;
+    },
+  };
+  globalThis.foundry = {
+    applications: {
+      apps: {
+        FilePicker: {
+          implementation: {
+            browse: async () => ({}),
+            upload: async (_source, folder, file) => {
+              uploads.push({ name: file.name, buffer: Buffer.from(await file.arrayBuffer()) });
+              return { path: `${folder}/${file.name}` };
+            },
+          },
+        },
+      },
+    },
+  };
+  globalThis.game = { world: { id: 'w' }, settings: { get: () => '' } };
+
+  try {
+    const app = {
+      creatorOptions: normalizeTokenCreatorOptions({ portraitAspect: '1:1', borderWidth: 0 }),
+      view: { zoom: 1, offsetX: 0, offsetY: 0 },
+      portraitView: { zoom: 1, offsetX: 0, offsetY: 0 },
+      editTarget: 'portrait',
+      workspaces: {
+        token: workspace('#ff0000', 'art/red.webp'),
+        portrait: workspace('#0000ff', 'art/blue.webp'),
+      },
+      popOutMask: null,
+      _maskVersion: 0,
+    };
+    const delegate = (key) => ({
+      get() {
+        return this.workspace[key];
+      },
+      set(value) {
+        this.workspace[key] = value;
+      },
+    });
+    Object.defineProperties(app, {
+      workspace: {
+        get() {
+          return this.editTarget === 'portrait' && this.workspaces.portrait
+            ? this.workspaces.portrait
+            : this.workspaces.token;
+        },
+      },
+      source: delegate('source'),
+      cutout: delegate('cutout'),
+      autoCutout: delegate('autoCutout'),
+      cleanup: delegate('cleanup'),
+    });
+
+    await createToken(app, null);
+
+    assert.equal(app.editTarget, 'portrait', 'saving restores the edited target');
+    assert.equal(uploads.length, 2);
+    const pixel = async (name) => {
+      const upload = uploads.find((entry) => entry.name.includes(name));
+      const image = await loadImage(upload.buffer);
+      const canvas = createCanvas(image.width, image.height);
+      canvas.getContext('2d').drawImage(image, 0, 0);
+      return [
+        ...canvas.getContext('2d').getImageData(image.width / 2, image.height / 2, 1, 1).data,
+      ];
+    };
+    const tokenName = uploads.find((entry) => !entry.name.includes('portrait')).name;
+    assert.deepEqual(await pixel(tokenName), [255, 0, 0, 255]);
+    assert.deepEqual(await pixel('portrait'), [0, 0, 255, 255]);
+  } finally {
+    globalThis.document = previous.document;
+    globalThis.foundry = previous.foundry;
+    globalThis.game = previous.game;
+  }
+});
+
+test('From portrait turns the edited portrait into the token image and unlinks the portrait', async () => {
+  const { createCanvas } = await import('canvas');
+  const { normalizeTokenCreatorOptions, useEditedPortraitAsToken } =
+    await import('../scripts/token-creator.js');
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement: () => createCanvas(1, 1) };
+  try {
+    // token image: red on the left half, transparent on the right half
+    const source = createCanvas(64, 64);
+    source.getContext('2d').fillStyle = '#ff0000';
+    source.getContext('2d').fillRect(0, 0, 32, 64);
+    const app = {
+      creatorOptions: normalizeTokenCreatorOptions({
+        portraitAspect: '1:1',
+        portraitBackground: 'color',
+        portraitColor: '#0000ff',
+        backgroundMode: 'none',
+      }),
+      view: { zoom: 1, offsetX: 0, offsetY: 0 },
+      portraitView: { zoom: 1, offsetX: 0, offsetY: 0 },
+      editTarget: 'portrait',
+      workspaces: {
+        token: {
+          source: { canvas: source, path: 'art/hero.webp', file: null, label: 'Hero' },
+          autoCutout: source,
+          cutout: source,
+          cleanup: { keep: null, remove: null },
+          cutoutToken: 0,
+        },
+        portrait: null,
+      },
+      popOutMask: null,
+      _maskVersion: 0,
+      _maskHistory: { undo: [], redo: [] },
+    };
+    const delegate = (key) => ({
+      get() {
+        return this.workspace[key];
+      },
+      set(value) {
+        this.workspace[key] = value;
+      },
+    });
+    Object.defineProperties(app, {
+      workspace: {
+        get() {
+          return this.editTarget === 'portrait' && this.workspaces.portrait
+            ? this.workspaces.portrait
+            : this.workspaces.token;
+        },
+      },
+      source: delegate('source'),
+      cutout: delegate('cutout'),
+      autoCutout: delegate('autoCutout'),
+      cleanup: delegate('cleanup'),
+    });
+
+    await useEditedPortraitAsToken(app);
+
+    assert.equal(app.editTarget, 'token');
+    assert.ok(app.workspaces.portrait, 'the portrait keeps its own workspace');
+    assert.equal(app.workspaces.portrait.source.canvas, source);
+    const tokenSource = app.workspaces.token.source;
+    assert.equal(tokenSource.path, null);
+    const at = (x) => [...tokenSource.canvas.getContext('2d').getImageData(x, 32, 1, 1).data];
+    assert.deepEqual(at(8), [255, 0, 0, 255]);
+    assert.deepEqual(at(56), [0, 0, 255, 255], 'the portrait colour background came along');
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test('ring inner edge is measured from where the ring art becomes solid', async () => {
+  const { measureRingInnerEdge } = await import('../scripts/ring-preview.js');
+  const size = 200;
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const radius = Math.hypot(x + 0.5 - size / 2, y + 0.5 - size / 2) / (size / 2);
+      // soft shading from 0.55, solid ring from 0.68 to 0.82
+      const alpha =
+        radius >= 0.68 && radius <= 0.82 ? 255 : radius >= 0.55 && radius < 0.68 ? 120 : 0;
+      data[(y * size + x) * 4 + 3] = alpha;
+    }
+  }
+  const edge = measureRingInnerEdge({ data, width: size, height: size });
+  assert.ok(Math.abs(edge - 0.68) <= 0.015, `edge ${edge}`);
+  assert.equal(
+    measureRingInnerEdge({
+      data: new Uint8ClampedArray(size * size * 4),
+      width: size,
+      height: size,
+    }),
+    null,
+  );
+});
+
+test('breakout room shrinks the ring inside the token and scales the token up to match', async () => {
+  const { getRingScale, getRingGeometry, buildCreatedTokenCandidate } =
+    await import('../scripts/token-composer.js');
+  assert.equal(getRingScale(0), 1);
+  assert.equal(getRingScale(25), 0.8);
+  assert.deepEqual(getRingGeometry({ size: 500, ringScale: 0.8 }), {
+    center: 250,
+    ringSize: 400,
+    offset: 50,
+    outerRadius: 199,
+  });
+  const candidate = buildCreatedTokenCandidate({
+    label: 'Knight',
+    tokenSrc: 'k.webp',
+    subjectSrc: 'k.webp',
+    breakoutScale: 1.25,
+  });
+  assert.equal(candidate.scale, 1);
+  assert.equal(candidate.breakoutScale, 1.25);
+  assert.equal(candidate.subjectScale, 1.25);
+});
+
+test('breakout art enlarges the creature scale, pauses PF2e autoscale and restores it later', async () => {
+  const { buildTokenUpdate, getBaseTokenScale } = await import('../scripts/actions.js');
+  const profile = { id: 'pf2e' };
+  const small = { _source: { flags: { pf2e: { autoscale: true } } } };
+  const update = buildTokenUpdate(
+    { tokenSrc: 'k.webp', subjectSrc: 'k.webp', subjectScale: 1.25, breakoutScale: 1.25 },
+    { scale: 0.8, profile, document: small },
+  );
+  assert.equal(update['texture.scaleX'], 1);
+  assert.equal(update['ring.subject.scale'], 1.25);
+  assert.equal(update['flags.pf2e.autoscale'], false);
+  assert.deepEqual(update['flags.pf2e-tokener.breakout'], {
+    scale: 1.25,
+    src: 'k.webp',
+    autoscale: true,
+  });
+
+  const applied = {
+    _source: {
+      texture: { src: 'k.webp', scaleX: 1, scaleY: 1 },
+      flags: {
+        pf2e: { autoscale: false },
+        'pf2e-tokener': { breakout: { scale: 1.25, src: 'k.webp', autoscale: true } },
+      },
+    },
+  };
+  assert.equal(getBaseTokenScale(applied, 1), 0.8);
+  const reverted = structuredClone(applied);
+  reverted._source.texture.src = 'old.webp';
+  assert.equal(getBaseTokenScale(reverted, 1), 1);
+  const plain = buildTokenUpdate(
+    { tokenSrc: 'p.webp' },
+    { scale: 0.8, profile, document: applied },
+  );
+  assert.equal(plain['texture.scaleX'], 0.8);
+  assert.equal(plain['flags.pf2e-tokener.breakout'], null);
+  assert.equal(plain['flags.pf2e.autoscale'], true);
+});

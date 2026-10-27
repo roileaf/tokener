@@ -8,6 +8,7 @@ import {
   buildTokenUpdate,
   getApplyActionsForCandidate,
   getApplyTargets,
+  getBaseTokenScale,
   getCandidatePreviewSrc,
   getCandidatePreviewSources,
   getLastRevertData,
@@ -48,6 +49,7 @@ import {
   getSourceFilterLabel,
 } from './sources.js';
 import { getTagFilterOptions, getTagGroupSearchState, isTagOptionSearchMatch } from './tags.js';
+import { canUseTokenCreator, openTokenCreator } from './token-creator.js';
 import {
   getDocumentActor,
   labelFromPath,
@@ -224,6 +226,7 @@ async function preparePickerContext(app) {
     favorites: prepareFavoritesView(favoriteIds, app),
     gridSize: preparePickerGridSizeView(app.gridSize),
     revert: prepareRevertView(app.tokenDocument),
+    creator: prepareCreatorView(),
     source: prepareSourceFilterView(sourceOptions, app),
     tags: prepareTagFilterView(tagOptions, app),
   };
@@ -376,6 +379,14 @@ async function handlePickerClick(app, event) {
   if (closestTarget(target, '[data-revert-action="last"]')) {
     event.preventDefault?.();
     await handleRevertControlClick(app);
+    return;
+  }
+
+  if (closestTarget(target, '[data-picker-action="create-token"]')) {
+    event.preventDefault?.();
+    openTokenCreator(app.tokenDocument, {
+      onApplied: () => renderMainPart(app, { preserveScroll: true }),
+    });
     return;
   }
 
@@ -1004,6 +1015,17 @@ function prepareRevertView(tokenDocument) {
   };
 }
 
+function prepareCreatorView() {
+  return {
+    available: canUseTokenCreator(),
+    label: localize('Creator.Open', 'Create token'),
+    tooltip: localize(
+      'Creator.OpenTooltip',
+      'Make a new token from any image, with automatic background removal.',
+    ),
+  };
+}
+
 function prepareFavoritesView(favoriteIds, app) {
   const count = favoriteIds.size;
   return {
@@ -1179,7 +1201,9 @@ function getDocumentLinkedScale(documentLike) {
   const scaleX = Number(readDocumentValue(documentLike, 'texture.scaleX'));
   const scaleY = Number(readDocumentValue(documentLike, 'texture.scaleY'));
   const scale = Number.isFinite(scaleX) && scaleX > 0 ? scaleX : scaleY;
-  return Number.isFinite(scale) && scale > 0 ? clampScaleValue(scale) : null;
+  return Number.isFinite(scale) && scale > 0
+    ? clampScaleValue(getBaseTokenScale(documentLike, scale))
+    : null;
 }
 
 function getCandidateDynamicRingScale(candidate, tokenDocument) {
@@ -1675,6 +1699,17 @@ function toggleCardActions(card) {
   card.classList.toggle('is-open');
 }
 
+export function getCreatedTokenApplyActions(tokenDocument) {
+  return getPickerApplyActionsForCandidate(
+    { tokenSrc: 'created', portraitSrc: 'created' },
+    tokenDocument,
+  );
+}
+
+export function applyCreatedTokenCandidate(action, candidate, tokenDocument) {
+  return applyCandidateAction(action, candidate, tokenDocument, null, activePicker);
+}
+
 async function applyCandidateAction(action, candidate, tokenDocument, card, app = activePicker) {
   const actor = getDocumentActor(tokenDocument);
   const availableAction = getPickerApplyActionsForCandidate(candidate, tokenDocument).some(
@@ -1686,13 +1721,18 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
   const scale = readCardScaleValue(card, candidate, SCALE_TARGET_TOKEN, tokenDocument);
   const ringScale = readCardScaleValue(card, candidate, SCALE_TARGET_RING, tokenDocument);
   const previewSnapshot = getScalePreviewSnapshot(app, card);
-  const revertSnapshot = buildApplyRevertSnapshot(action, candidate, tokenDocument, previewSnapshot);
+  const revertSnapshot = buildApplyRevertSnapshot(
+    action,
+    candidate,
+    tokenDocument,
+    previewSnapshot,
+  );
   card?.classList.add('is-applying');
 
   try {
     if (targets.token) {
       await tokenDocument.update({
-        ...buildTokenUpdate(candidate, { scale, ringScale }),
+        ...buildTokenUpdate(candidate, { scale, ringScale, document: tokenDocument }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(tokenDocument, revertSnapshot, {
           replaceSnapshot: previewSnapshot,
         }),
@@ -1702,7 +1742,7 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
     if (targets.actor && actor) {
       pruneStaleDependentTokens(actor);
       await actor.update({
-        ...buildActorUpdate(candidate, { scale, ringScale }),
+        ...buildActorUpdate(candidate, { scale, ringScale, actor }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(actor, revertSnapshot),
       });
     }
@@ -1860,7 +1900,9 @@ async function revertSnapshotDocument(tokenDocument, snapshot, { original = fals
 }
 
 function getRevertDetail(snapshot) {
-  return [normalizeLabel(snapshot?.action), getSnapshotArtLabel(snapshot)].filter(Boolean).join(': ');
+  return [normalizeLabel(snapshot?.action), getSnapshotArtLabel(snapshot)]
+    .filter(Boolean)
+    .join(': ');
 }
 
 function getSnapshotArtLabel(snapshot) {
@@ -1869,5 +1911,7 @@ function getSnapshotArtLabel(snapshot) {
 }
 
 function getSnapshotArtSrc(snapshot) {
-  return snapshot?.token?.texture?.src ?? snapshot?.actor?.texture?.src ?? snapshot?.portrait?.img ?? '';
+  return (
+    snapshot?.token?.texture?.src ?? snapshot?.actor?.texture?.src ?? snapshot?.portrait?.img ?? ''
+  );
 }
