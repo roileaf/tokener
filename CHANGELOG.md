@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- New client setting **Show Token HUD button** hides the Tokener button from the Token HUD for users who only open Tokener from the actor sheet or actor directory ([#4](https://github.com/roileaf/tokener/issues/4)).
+- Token art is now found in modules that keep it under `pictures/`, as the German PF2e modules do: `pictures/tokens` and `pictures/portraits`, and one folder deeper such as `pictures/book-of-the-dead/tokens` ([#3](https://github.com/roileaf/tokener/issues/3)).
+
 ## 2.2.0 - 2026-10-27
 
 ### Added

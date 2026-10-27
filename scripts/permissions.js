@@ -1,4 +1,8 @@
-import { MODULE_ID, PLAYER_OWNED_TOKENER_SETTING_KEY } from './constants.js';
+import {
+  MODULE_ID,
+  PLAYER_OWNED_TOKENER_SETTING_KEY,
+  TOKEN_HUD_BUTTON_SETTING_KEY,
+} from './constants.js';
 import { localize } from './utils.js';
 
 export function registerPermissionSettings(settings = globalThis.game?.settings) {
@@ -13,6 +17,25 @@ export function registerPermissionSettings(settings = globalThis.game?.settings)
     type: Boolean,
     default: false,
   });
+  settings?.register?.(MODULE_ID, TOKEN_HUD_BUTTON_SETTING_KEY, {
+    name: localize('Settings.TokenHudButton.Name', 'Show Token HUD button'),
+    hint: localize(
+      'Settings.TokenHudButton.Hint',
+      'Show the Tokener button on the Token HUD. Turn it off to keep the HUD tidy; Tokener stays available from the actor sheet and actor directory.',
+    ),
+    scope: 'client',
+    config: true,
+    type: Boolean,
+    default: true,
+  });
+}
+
+export function isTokenHudButtonEnabled(settings = globalThis.game?.settings) {
+  try {
+    return settings?.get?.(MODULE_ID, TOKEN_HUD_BUTTON_SETTING_KEY) !== false;
+  } catch {
+    return true;
+  }
 }
 
 export function canUseTokenHudDocument(tokenDocument, settings = globalThis.game?.settings) {

@@ -232,5 +232,7 @@
   "PF2ETokener.Creator.BreakoutRoom": "Breakout room",
   "PF2ETokener.Creator.BreakoutRoomTooltip": "Space around the frame for popped-out parts to reach past its edge. The token is scaled up in Foundry so the frame still fits the grid.",
   "PF2ETokener.Creator.ComposeAllPopOut": "everything breaks out",
-  "PF2ETokener.Creator.PopOutShadow": "Shadow under popped parts"
+  "PF2ETokener.Creator.PopOutShadow": "Shadow under popped parts",
+  "PF2ETokener.Settings.TokenHudButton.Name": "Show Token HUD button",
+  "PF2ETokener.Settings.TokenHudButton.Hint": "Show the Tokener button on the Token HUD. Turn it off to keep the HUD tidy; Tokener stays available from the actor sheet and actor directory."
 }

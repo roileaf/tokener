@@ -843,6 +843,68 @@ test('Foundry index folder-scans active modules by evidence instead of token-lik
   }
 });
 
+test('Foundry index finds tokens and portraits under pictures/ folders of localized modules', async () => {
+  const previousGame = globalThis.game;
+  const previousFoundry = globalThis.foundry;
+  state.index = [];
+  state.errors = [];
+  state.indexing = null;
+
+  globalThis.game = {
+    modules: new Map([['pf2e-zda', { id: 'pf2e-zda', title: 'Zeitalter der Asche', flags: {} }]]),
+  };
+  globalThis.foundry = {
+    applications: {
+      apps: {
+        FilePicker: {
+          implementation: {
+            browse: async (_source, target) =>
+              target === 'modules/pf2e-zda/pictures'
+                ? {
+                    files: [
+                      'modules/pf2e-zda/pictures/tokens/ghoul.webp',
+                      'modules/pf2e-zda/pictures/portraits/ghoul.webp',
+                      'modules/pf2e-zda/pictures/book-of-the-dead/tokens/mummy.webp',
+                      'modules/pf2e-zda/pictures/book-of-the-dead/portraits/mummy.webp',
+                      'modules/pf2e-zda/pictures/map-handout.webp',
+                    ],
+                  }
+                : { files: [] },
+          },
+        },
+      },
+    },
+  };
+
+  try {
+    const index = await rebuildIndex();
+    assert.deepEqual(
+      index.map((candidate) => ({
+        tokenSrc: candidate.tokenSrc,
+        portraitSrc: candidate.portraitSrc,
+      })),
+      [
+        {
+          tokenSrc: 'modules/pf2e-zda/pictures/tokens/ghoul.webp',
+          portraitSrc: 'modules/pf2e-zda/pictures/portraits/ghoul.webp',
+        },
+        {
+          tokenSrc: 'modules/pf2e-zda/pictures/book-of-the-dead/tokens/mummy.webp',
+          portraitSrc: 'modules/pf2e-zda/pictures/book-of-the-dead/portraits/mummy.webp',
+        },
+      ],
+    );
+  } finally {
+    if (previousGame === undefined) delete globalThis.game;
+    else globalThis.game = previousGame;
+    if (previousFoundry === undefined) delete globalThis.foundry;
+    else globalThis.foundry = previousFoundry;
+    state.index = [];
+    state.errors = [];
+    state.indexing = null;
+  }
+});
+
 test('Foundry index scans modules concurrently while preserving candidate order', async () => {
   const previousGame = globalThis.game;
   const previousFoundry = globalThis.foundry;
@@ -3467,13 +3529,51 @@ test('player Tokener access setting registers as GM-configurable world setting',
 
   registerPermissionSettings(settings);
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.equal(calls[0][0], 'pf2e-tokener');
   assert.equal(calls[0][1], 'allowPlayerOwnedTokens');
   assert.equal(calls[0][2].scope, 'world');
   assert.equal(calls[0][2].config, true);
   assert.equal(calls[0][2].type, Boolean);
   assert.equal(calls[0][2].default, false);
+  assert.equal(calls[1][1], 'showTokenHudButton');
+  assert.equal(calls[1][2].scope, 'client');
+  assert.equal(calls[1][2].default, true);
+});
+
+test('Token HUD button is removed when the user hides it', () => {
+  const previousDocument = globalThis.document;
+  const previousGame = globalThis.game;
+  const { root, target } = createFakeHudRoot();
+  const hud = { object: { document: { canUserModify: () => true } } };
+  let show = true;
+  root.querySelectorAll = (selector) =>
+    selector === '.pf2e-tokener-button'
+      ? target.children
+          .filter((child) => child.className.includes('pf2e-tokener-button'))
+          .map((child) => ({
+            remove: () => target.children.splice(target.children.indexOf(child), 1),
+          }))
+      : [];
+
+  try {
+    globalThis.document = { createElement: createFakeElement };
+    globalThis.game = {
+      user: { id: 'gm', isGM: true },
+      settings: { get: (_module, key) => (key === 'showTokenHudButton' ? show : false) },
+    };
+    renderTokenHud(hud, root);
+    const hasButton = () =>
+      target.children.some((child) => child.className.includes('pf2e-tokener-button'));
+    assert.equal(hasButton(), true);
+
+    show = false;
+    renderTokenHud(hud, root);
+    assert.equal(hasButton(), false);
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.game = previousGame;
+  }
 });
 
 test('GM Token HUD button opens ApplicationV2 picker instead of HUD child panel', async () => {

@@ -5,7 +5,7 @@ import {
   revertLastTokenerChange,
   revertTokenerChangeToOriginal,
 } from './actions.js';
-import { canUseTokenHudDocument } from './permissions.js';
+import { canUseTokenHudDocument, isTokenHudButtonEnabled } from './permissions.js';
 import {
   openRevertHistoryDialog,
   openTokenPicker,
@@ -18,9 +18,9 @@ export { updateOpenPanelsCanvasZoom } from './picker-app.js';
 export function renderTokenHud(app, html) {
   const root = normalizeHudElement(html);
   const tokenDocument = getHudTokenDocument(app);
-  if (!root || !tokenDocument || !canUseTokener(tokenDocument)) return;
-
-  root.querySelectorAll('.pf2e-tokener-button').forEach((element) => element.remove());
+  if (!root) return;
+  root.querySelectorAll?.('.pf2e-tokener-button').forEach((element) => element.remove());
+  if (!tokenDocument || !isTokenHudButtonEnabled() || !canUseTokener(tokenDocument)) return;
 
   const target = root.querySelector('.col.right') ?? root.querySelector('.right') ?? root;
   const button = document.createElement('div');

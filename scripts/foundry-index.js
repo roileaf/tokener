@@ -1,5 +1,6 @@
 import {
   MODULE_ID,
+  MIXED_ART_FOLDER_ROOTS,
   PORTRAIT_FOLDER_ROOTS,
   SUBJECT_FOLDER_ROOTS,
   TOKEN_FOLDER_ROOTS,
@@ -74,10 +75,8 @@ async function buildFoundryIndex() {
   const profile = getCurrentSystemProfile();
   const candidates = [];
 
-  const mappedCandidates = await mapWithConcurrency(
-    modules,
-    INDEX_SCAN_CONCURRENCY,
-    (module) => collectMappedModuleCandidates(module, profile),
+  const mappedCandidates = await mapWithConcurrency(modules, INDEX_SCAN_CONCURRENCY, (module) =>
+    collectMappedModuleCandidates(module, profile),
   );
   for (const moduleCandidates of mappedCandidates) candidates.push(...moduleCandidates);
 
@@ -97,15 +96,12 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   if (!items.length) return [];
   const results = new Array(items.length);
   let cursor = 0;
-  const workers = Array.from(
-    { length: Math.min(concurrency, items.length) },
-    async () => {
-      while (cursor < items.length) {
-        const index = cursor++;
-        results[index] = await mapper(items[index], index);
-      }
-    },
-  );
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await mapper(items[index], index);
+    }
+  });
   await Promise.all(workers);
   return results;
 }
@@ -195,7 +191,7 @@ async function discoverDatasheetSheets(module) {
 async function collectFolderModuleCandidates(module) {
   const candidates = [];
   const tokenFiles = [];
-  for (const root of TOKEN_FOLDER_ROOTS) {
+  for (const root of [...TOKEN_FOLDER_ROOTS, ...MIXED_ART_FOLDER_ROOTS]) {
     const target = `modules/${module.id}/${root}`;
     tokenFiles.push(...(await browseFilesCompat(target)));
   }
