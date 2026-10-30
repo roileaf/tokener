@@ -26,7 +26,7 @@ export function buildProjectFileName(tokenFileName) {
  * `{ sourcePath, view, flip, popOutMask, cleanup: { keep, remove } }` whose masks are canvases
  * (or null) and `flip` is `{ x, y }` (how the source at `sourcePath` is mirrored; the masks are
  * stored already mirrored); `portrait` is null while the portrait shares the token's image. Only regions an
- * effect still uses are kept.
+ * effect or a pin still uses are kept.
  */
 export function serializeProject({
   label,
@@ -55,7 +55,9 @@ export function serializeProject({
         }
       : null;
   const normalized = normalizeProjectAnimation(animation);
-  const used = new Set(normalized.effects.map((effect) => effect.region).filter(Boolean));
+  const used = new Set(
+    [...normalized.effects, ...normalized.pins].map((item) => item.region).filter(Boolean),
+  );
   const storedRegions = Object.create(null);
   for (const [key, canvas] of Object.entries(regions ?? {})) {
     if (used.has(key) && canvas) storedRegions[key] = toDataUrl(canvas);

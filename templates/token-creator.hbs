@@ -465,6 +465,23 @@
             data-creator-action='keyframe-remove'
           ><i class='fas fa-minus'></i> {{labels.animateRemoveKeyframe}}</button>
         </div>
+        <div class='pf2e-tokener-creator-row'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-animation-control
+            data-creator-action='pin-region'
+            aria-pressed='false'
+            data-tooltip='{{labels.pinRegionTooltip}}'
+          ><i class='fas fa-object-group'></i> {{labels.pinRegion}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-animation-control
+            data-creator-action='pin-region-clear'
+            data-tooltip='{{labels.pinRegionClearTooltip}}'
+          ><i class='fas fa-thumbtack'></i> {{labels.pinRegionClear}}</button>
+        </div>
         <div class='pf2e-tokener-creator-animate-keyframe'>
           <label
             class='pf2e-tokener-creator-slider pf2e-tokener-creator-animate-length'

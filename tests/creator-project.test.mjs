@@ -90,6 +90,18 @@ test('serialize keeps only regions an effect uses', () => {
   assert.equal(Object.getPrototypeOf(project.animation.regions), null);
 });
 
+test('serialize keeps the region a pin moves', () => {
+  const input = sampleInput();
+  input.animation.pins[0].region = 'pin-a';
+  input.regions['pin-a'] = fakeCanvas('wing');
+  const project = serializeProject(input);
+  assert.equal(project.animation.regions['pin-a'], 'data:image/png;base64,wing');
+  assert.equal(project.animation.pins[0].region, 'pin-a');
+  const parsed = parseProject(JSON.parse(JSON.stringify(project)));
+  assert.equal(parsed.animation.pins[0].region, 'pin-a');
+  assert.equal(parsed.animation.regions['pin-a'], 'data:image/png;base64,wing');
+});
+
 test('serialize → JSON → parse round-trips views, options, animation and masks', () => {
   const project = serializeProject(sampleInput());
   const parsed = parseProject(JSON.parse(JSON.stringify(project)));
