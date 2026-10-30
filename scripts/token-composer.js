@@ -402,12 +402,23 @@ export function getCreatedTokenFolder({ worldId, configured } = {}) {
   return `worlds/${worldId || 'shared'}/${CREATED_TOKEN_FOLDER_NAME}`;
 }
 
+const RING_EFFECT_BITS = Object.freeze({ pulse: 2, gradient: 4, wave: 8, spectral: 16 });
+
+/** Foundry's `ring.effects` bit mask: ENABLED (1) plus one bit per selected effect. */
+export function getRingEffectsMask({ pulse, gradient, wave, spectral } = {}) {
+  const flags = { pulse, gradient, wave, spectral };
+  let mask = 1;
+  for (const [key, bit] of Object.entries(RING_EFFECT_BITS)) if (flags[key]) mask |= bit;
+  return mask;
+}
+
 export function buildCreatedTokenCandidate({
   label,
   tokenSrc,
   portraitSrc,
   subjectSrc,
   ringColors,
+  ringEffects,
   breakoutScale = 1,
   animated = false,
 }) {
@@ -427,6 +438,7 @@ export function buildCreatedTokenCandidate({
     else candidate.subjectSrc = subjectSrc;
     candidate.subjectScale = breakoutScale;
     if (ringColors) candidate.ringColors = { ...ringColors };
+    if (ringEffects) candidate.ringEffects = getRingEffectsMask(ringEffects);
   }
   return candidate;
 }

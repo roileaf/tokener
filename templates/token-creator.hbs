@@ -344,6 +344,31 @@
           </label>
         </div>
 
+        <div class='pf2e-tokener-creator-colors' data-frame-style='ring'>
+          <span>{{labels.ringEffectsTitle}}</span>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.pulse' {{#if options.ringEffects.pulse}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectPulse}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.gradient' {{#if options.ringEffects.gradient}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectGradient}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.wave' {{#if options.ringEffects.wave}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectWave}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.spectral' {{#if options.ringEffects.spectral}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectSpectral}}</span>
+          </label>
+        </div>
+        <p class='pf2e-tokener-creator-hint' data-frame-style='ring'>{{labels.ringEffectsHint}}</p>
+
         <label class='pf2e-tokener-creator-check'>
           <input type='checkbox' name='popOut' {{#if options.popOut}}checked{{/if}} />
           <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>

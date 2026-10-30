@@ -1413,3 +1413,15 @@ test('removing an effect switched back to the whole figure still drops its regio
   assert.deepEqual(Object.keys(kept.regions), ['a', 'b']);
   assert.deepEqual(kept.removedRegions, []);
 });
+
+test('creator options default every ring effect to off and normalize them defensively', async () => {
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  const off = { pulse: false, gradient: false, wave: false, spectral: false };
+  assert.deepEqual(normalizeTokenCreatorOptions().ringEffects, off);
+  assert.deepEqual(normalizeTokenCreatorOptions({ ringEffects: 'junk' }).ringEffects, off);
+  assert.deepEqual(
+    normalizeTokenCreatorOptions({ ringEffects: { pulse: 1, wave: true, extra: true } })
+      .ringEffects,
+    { pulse: true, gradient: false, wave: true, spectral: false },
+  );
+});

@@ -241,6 +241,7 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   popOutShadow: true,
   breakoutRoom: 25,
   ringColors: false,
+  ringEffects: Object.freeze({ pulse: false, gradient: false, wave: false, spectral: false }),
   ringColor: '#d4af37',
   ringBackgroundColor: '#1b1b1b',
   outputSize: 400,
@@ -312,6 +313,7 @@ export function normalizeTokenCreatorOptions(value = {}) {
       MAX_BREAKOUT_ROOM,
     ),
     ringColors: Boolean(options.ringColors),
+    ringEffects: normalizeRingEffects(options.ringEffects),
     ringColor: normalizeColor(options.ringColor, defaults.ringColor),
     ringBackgroundColor: normalizeColor(options.ringBackgroundColor, defaults.ringBackgroundColor),
     outputSize: OUTPUT_SIZES.includes(Number(options.outputSize))
@@ -324,6 +326,16 @@ export function normalizeTokenCreatorOptions(value = {}) {
       ? options.portraitBackground
       : defaults.portraitBackground,
     portraitColor: normalizeColor(options.portraitColor, defaults.portraitColor),
+  };
+}
+
+function normalizeRingEffects(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    pulse: Boolean(source.pulse),
+    gradient: Boolean(source.gradient),
+    wave: Boolean(source.wave),
+    spectral: Boolean(source.spectral),
   };
 }
 
@@ -776,6 +788,15 @@ function prepareCreatorContext(app) {
         'Creator.RingHint',
         'Saves a transparent subject and enables the dynamic token ring. Foundry draws the ring.',
       ),
+      ringEffectsTitle: localize('Creator.RingEffects.Title', 'Ring effects'),
+      ringEffectsHint: localize(
+        'Creator.RingEffects.Hint',
+        'Foundry animates the ring itself, so these work without video.',
+      ),
+      ringEffectPulse: localize('Creator.RingEffects.Pulse', 'Pulse'),
+      ringEffectGradient: localize('Creator.RingEffects.Gradient', 'Gradient'),
+      ringEffectWave: localize('Creator.RingEffects.Wave', 'Wave'),
+      ringEffectSpectral: localize('Creator.RingEffects.Spectral', 'Spectral'),
       ringColors: localize('Creator.RingColors', 'Set ring colours'),
       ringColor: localize('Creator.RingColor', 'Ring'),
       ringBackgroundColor: localize('Creator.RingBackgroundColor', 'Background'),
@@ -4016,6 +4037,7 @@ export async function createToken(app, action) {
       portraitSrc,
       subjectSrc,
       ringColors,
+      ringEffects: ringMode ? app.creatorOptions.ringEffects : undefined,
       breakoutScale: 1 / getActiveRingScale(app),
       animated,
     });
@@ -4213,10 +4235,12 @@ function syncBackgroundControls(app) {
 
 function updateCreatorOption(app, input) {
   const value = input.type === 'checkbox' ? input.checked : input.value;
-  app.creatorOptions = normalizeTokenCreatorOptions({
-    ...app.creatorOptions,
-    [input.name]: value,
-  });
+  const [group, key] = String(input.name).split('.');
+  app.creatorOptions = normalizeTokenCreatorOptions(
+    key
+      ? { ...app.creatorOptions, [group]: { ...app.creatorOptions[group], [key]: value } }
+      : { ...app.creatorOptions, [input.name]: value },
+  );
 }
 
 function updateValueLabel(input) {

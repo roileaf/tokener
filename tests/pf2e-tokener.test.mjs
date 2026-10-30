@@ -2907,6 +2907,7 @@ test('revert snapshot captures previous token, actor, and portrait art before ap
     randomImg: true,
     ring: {
       enabled: true,
+      effects: 1,
       subject: {
         texture: 'old-subject.webp',
         scale: 1.25,
@@ -4906,4 +4907,65 @@ test('animated ring tokens keep ring colours and honour a ring scale override', 
   assert.equal(update['ring.subject.scale'], 1.6);
   assert.equal(update['ring.colors.ring'], '#ff0000');
   assert.equal(update['ring.colors.background'], '#00ff00');
+});
+
+test('getRingEffectsMask folds the ring effect toggles into Foundry bit flags', async () => {
+  const { getRingEffectsMask } = await import('../scripts/token-composer.js');
+  assert.equal(getRingEffectsMask({}), 1);
+  assert.equal(getRingEffectsMask(), 1);
+  assert.equal(getRingEffectsMask({ pulse: true }), 3);
+  assert.equal(getRingEffectsMask({ gradient: true }), 5);
+  assert.equal(getRingEffectsMask({ wave: true }), 9);
+  assert.equal(getRingEffectsMask({ spectral: true }), 17);
+  assert.equal(getRingEffectsMask({ pulse: true, gradient: true, wave: true, spectral: true }), 31);
+});
+
+test('ring effects are written for still and animated ring candidates only', async () => {
+  const { buildCreatedTokenCandidate } = await import('../scripts/token-composer.js');
+  const still = buildCreatedTokenCandidate({
+    label: 'S',
+    tokenSrc: 's.webp',
+    subjectSrc: 's.webp',
+    ringEffects: { pulse: true, wave: true },
+  });
+  assert.equal(still.ringEffects, 11);
+  assert.equal(buildTokenUpdate(still, { scale: 1 })['ring.effects'], 11);
+
+  const animated = buildCreatedTokenCandidate({
+    label: 'A',
+    tokenSrc: 'a.webm',
+    subjectSrc: 'a.webm',
+    animated: true,
+    ringEffects: { spectral: true },
+  });
+  assert.equal(animated.ringEffects, 17);
+  assert.equal(buildTokenUpdate(animated, { scale: 1 })['ring.effects'], 17);
+
+  const plain = buildCreatedTokenCandidate({
+    label: 'P',
+    tokenSrc: 'p.webp',
+    ringEffects: { pulse: true },
+  });
+  assert.equal(plain.ringEffects, undefined);
+  assert.equal('ring.effects' in buildTokenUpdate(plain, { scale: 1 }), false);
+});
+
+test('revert state captures and restores ring.effects', () => {
+  const snapshot = buildRevertSnapshot({
+    action: 'token',
+    candidate: { label: 'X', tokenSrc: 'x.webp' },
+    tokenDocument: {
+      texture: { src: 'old.webp', scaleX: 1, scaleY: 1 },
+      ring: { enabled: true, effects: 19, subject: { texture: 's.webp', scale: 1 } },
+    },
+  });
+  assert.equal(snapshot.token.ring.effects, 19);
+  assert.equal(buildTokenRevertUpdate(snapshot)['ring.effects'], 19);
+
+  const bare = buildRevertSnapshot({
+    action: 'token',
+    candidate: { label: 'X', tokenSrc: 'x.webp' },
+    tokenDocument: { texture: { src: 'old.webp' }, ring: { enabled: false } },
+  });
+  assert.equal(bare.token.ring.effects, 1);
 });
