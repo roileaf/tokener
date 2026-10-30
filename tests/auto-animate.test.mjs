@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { analyseSubject } from '../scripts/auto-compose.js';
-import { hasMotion } from '../scripts/animation.js';
-import { buildAutoRig } from '../scripts/auto-animate.js';
+import { analyseSubject, findProtrusions } from '../scripts/auto-compose.js';
+import { hasMotion, samplePinOffset } from '../scripts/animation.js';
+import { buildAutoRig, layerPresetKeyframes } from '../scripts/auto-animate.js';
+import { getTokenFrameLayout } from '../scripts/token-composer.js';
 
 const CLIP = 0.666;
 const GRID = 96;
 const VIEW = { zoom: 0.5, offsetX: 0, offsetY: 0 };
 
 /** 200x300 figure: round head, wide body down to the bottom edge, optional raised sword. */
-function figure({ sword = false } = {}) {
+function figure({ sword = false, spike = false } = {}) {
   const width = 200;
   const height = 300;
   const alpha = new Uint8Array(width * height);
@@ -19,19 +20,20 @@ function figure({ sword = false } = {}) {
       const on =
         Math.hypot(x - 100, y - 70) <= 30 ||
         (y >= 95 && x >= 55 && x <= 145) ||
-        (sword && x >= 140 && x <= 147 && y >= 6 && y <= 200);
+        (sword && x >= 140 && x <= 147 && y >= 6 && y <= 200) ||
+        (spike && x >= 50 && x <= 57 && y >= 10 && y <= 200);
       if (on) alpha[y * width + x] = 255;
     }
   }
   return { alpha, width, height, scale: 1 };
 }
 
-function rig(grid) {
+function rig(grid, view = VIEW) {
   return buildAutoRig({
     alpha: grid,
     cutoutWidth: grid.width * grid.scale,
     cutoutHeight: grid.height * grid.scale,
-    view: VIEW,
+    view,
     clipRadius: CLIP,
     gridSize: GRID,
   });
@@ -66,26 +68,119 @@ test('auto rig anchors sit on the bottom of the bounds without keyframes', () =>
   assert.ok(Math.abs(xs[1] - (bounds.x + bounds.width * 0.75)) <= 2);
 });
 
-test('auto rig moves: breathe on the head and chest, bob at 60% on the head', () => {
+test('auto rig layers bob over breathe on the head and breathes the chest', () => {
   const { pins } = rig(figure());
   assert.equal(hasMotion({ pins }), true);
   const [head, chest] = pins;
   const amplitude = 0.03 * 300;
-  const bob = head.keyframes.find((key) => key.t === 0.5);
-  assert.ok(head.keyframes.length > 0 && chest.keyframes.length > 0);
-  assert.ok(Math.abs(bob.dy) > 0 && Math.abs(bob.dy) <= amplitude * 0.6 + 12);
+  // Breathe scales the head and chest about their midpoint by 3 %.
+  const midY = (head.y + chest.y) / 2;
+  const at = (pin, t) => pin.keyframes.find((key) => key.t === t);
+  assert.ok(Math.abs(at(head, 0.5).dy - ((head.y - midY) * 0.03 - 0.6 * amplitude)) < 1e-9);
+  assert.ok(Math.abs(at(chest, 0.5).dy - (chest.y - midY) * 0.03) < 1e-9);
+  assert.equal(at(head, 0).dy, 0);
+  assert.equal(chest.keyframes.length, 2);
 });
 
-test('auto rig adds a swaying tip pin for a raised sword', () => {
+test('auto rig adds a swaying tip pin, without breathe, for a raised sword', () => {
   const grid = figure({ sword: true });
   const { pins } = rig(grid);
   const tips = pins.slice(4);
   assert.equal(tips.length, 1);
   assert.ok(Math.abs(tips[0].x - 143) <= 8, `tip x ${tips[0].x}`);
   assert.ok(tips[0].y <= 30, `tip y ${tips[0].y}`);
-  const swayed = tips[0].keyframes.find((key) => key.dx !== 0);
-  assert.ok(swayed && swayed.dy === 0);
+  const amplitude = 0.03 * 300;
+  assert.deepEqual(
+    tips[0].keyframes.map((key) => [key.t, key.dx, key.dy]),
+    [
+      [0, -amplitude, 0],
+      [0.5, amplitude, 0],
+    ],
+  );
   assert.equal(hasMotion({ pins }), true);
+});
+
+test('auto rig flaps two tips toward the body', () => {
+  const { pins } = rig(figure({ sword: true, spike: true }));
+  const tips = pins.slice(4);
+  assert.equal(tips.length, 2);
+  const amplitude = 0.03 * 300;
+  const centreX = (tips[0].x + tips[1].x) / 2;
+  for (const tip of tips) {
+    const apex = tip.keyframes.find((key) => key.t === 0.5);
+    assert.equal(apex.dy, amplitude);
+    assert.ok(Math.sign(apex.dx) === Math.sign(centreX - tip.x));
+    assert.ok(Math.abs(apex.dx) > 0);
+  }
+});
+
+test('auto rig finds the sword tip under another zoom and offsets', () => {
+  const { pins } = rig(figure({ sword: true }), { zoom: 0.55, offsetX: 0.05, offsetY: -0.08 });
+  assert.equal(pins.length, 5);
+  assert.ok(Math.abs(pins[4].x - 143) <= 10, `tip x ${pins[4].x}`);
+  assert.ok(pins[4].y <= 30, `tip y ${pins[4].y}`);
+});
+
+test('auto rig ignores a piece that belongs to the head', () => {
+  const grid = figure();
+  const view = { zoom: 1, offsetX: 0, offsetY: 0.2 };
+  const { head } = analyseSubject(grid);
+  const layout = getTokenFrameLayout({
+    imageWidth: grid.width,
+    imageHeight: grid.height,
+    size: GRID,
+    zoom: view.zoom,
+    offsetX: view.offsetX * GRID,
+    offsetY: view.offsetY * GRID,
+  });
+  const scale = layout.width / grid.width;
+  const found = findProtrusions({ alpha: grid, view, clipRadius: CLIP, gridSize: GRID })
+    .pieces.filter((piece) => !piece.inBottomArc && piece.area >= 2)
+    .filter(
+      (piece) =>
+        Math.hypot(
+          (piece.tip.x - layout.x) / scale - head.x,
+          (piece.tip.y - layout.y) / scale - head.y,
+        ) <=
+        head.radius * 1.2,
+    );
+  assert.ok(found.length > 0, 'the view should push the crown out of the opening');
+  assert.equal(rig(grid, view).pins.length, 4);
+});
+
+test('layering keyframes sums matching times and resamples the others', () => {
+  const base = [
+    { t: 0, dx: 0, dy: 0 },
+    { t: 0.5, dx: 2, dy: 4 },
+  ];
+  const summed = layerPresetKeyframes(base, [
+    { t: 0.004, dx: 1, dy: 1 },
+    { t: 0.5, dx: 3, dy: -1 },
+  ]);
+  assert.equal(summed.length, 2);
+  assert.deepEqual(summed[1], { t: 0.5, dx: 5, dy: 3 });
+  const offset = layerPresetKeyframes(base, [
+    { t: 0.25, dx: 10, dy: 0 },
+    { t: 0.75, dx: 0, dy: 0 },
+  ]);
+  assert.deepEqual(
+    offset.map((key) => key.t),
+    [0, 0.25, 0.5, 0.75],
+  );
+  for (const key of offset) {
+    const one = samplePinOffset({ keyframes: base }, key.t);
+    const two = samplePinOffset(
+      {
+        keyframes: [
+          { t: 0.25, dx: 10, dy: 0 },
+          { t: 0.75, dx: 0, dy: 0 },
+        ],
+      },
+      key.t,
+    );
+    assert.ok(Math.abs(key.dx - (one.dx + two.dx)) < 1e-9);
+    assert.ok(Math.abs(key.dy - (one.dy + two.dy)) < 1e-9);
+  }
 });
 
 test('auto rig maps tips back through the grid scale to source pixels', () => {

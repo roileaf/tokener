@@ -1,5 +1,11 @@
 import { analyseSubject, findProtrusions } from './auto-compose.js';
-import { applyPreset, createPin } from './animation.js';
+import {
+  applyPreset,
+  createPin,
+  KEYFRAME_MERGE,
+  loopDistance,
+  samplePinOffset,
+} from './animation.js';
 import { getRotationArm, getPresetAmplitude } from './token-animation.js';
 import { getTokenFrameLayout } from './token-composer.js';
 
@@ -39,23 +45,56 @@ export function buildAutoRig({ alpha, cutoutWidth, cutoutHeight, view, clipRadiu
 
   const tipPins = findTips({ alpha, view, clipRadius, gridSize, head, make, toSourceX, toSourceY });
 
-  const moving = [headPin, chestPin, ...tipPins];
-  const movingIds = moving.map((pin) => pin.id);
   const amplitude = getPresetAmplitude('bob', size);
-  let pins = [headPin, chestPin, ...anchors, ...tipPins];
-  pins = applyPreset(pins, movingIds, 'breathe');
-  pins = applyPreset(pins, [headPin.id], 'bob', { amplitude: amplitude * HEAD_BOB_SHARE });
+  const bodyIds = [headPin.id, chestPin.id];
+  let pins = applyPreset([headPin, chestPin, ...anchors, ...tipPins], bodyIds, 'breathe');
+  // Bob, Flap and Sway are layered over Breathe, not written in its place; anchors stay still.
+  pins = layerPreset(pins, [headPin.id], 'bob', amplitude * HEAD_BOB_SHARE);
   if (tipPins.length === 2) {
-    pins = applyPreset(
+    pins = layerPreset(
       pins,
       tipPins.map((pin) => pin.id),
       'flap',
-      { amplitude },
+      amplitude,
     );
   } else if (tipPins.length === 1) {
-    pins = applyPreset(pins, [tipPins[0].id], 'sway', { amplitude });
+    pins = layerPreset(pins, [tipPins[0].id], 'sway', amplitude);
   }
   return { pins, selectedPinIds: pins.map((pin) => pin.id) };
+}
+
+/**
+ * Sums two keyframe tracks. Keyframes within the merge tolerance combine; otherwise both are kept,
+ * each with the other track sampled at that time so the sum is right everywhere.
+ */
+export function layerPresetKeyframes(base, added) {
+  const times = [...base.map((key) => key.t)];
+  for (const key of added) {
+    if (!times.some((t) => loopDistance(t, key.t) < KEYFRAME_MERGE)) times.push(key.t);
+  }
+  times.sort((a, b) => a - b);
+  const baseTrack = { keyframes: base };
+  const addedTrack = { keyframes: added };
+  return times.map((t) => {
+    const one = samplePinOffset(baseTrack, t);
+    const two = samplePinOffset(addedTrack, t);
+    const key = { t, dx: one.dx + two.dx, dy: one.dy + two.dy };
+    const rot = one.rot + two.rot;
+    if (rot) key.rot = rot;
+    return key;
+  });
+}
+
+function layerPreset(pins, ids, preset, amplitude) {
+  const bare = pins.map((pin) => ({ ...pin, keyframes: [] }));
+  const added = new Map(
+    applyPreset(bare, ids, preset, { amplitude }).map((pin) => [pin.id, pin.keyframes]),
+  );
+  return pins.map((pin) =>
+    ids.includes(pin.id)
+      ? { ...pin, keyframes: layerPresetKeyframes(pin.keyframes, added.get(pin.id)) }
+      : pin,
+  );
 }
 
 function findTips({ alpha, view, clipRadius, gridSize, head, make, toSourceX, toSourceY }) {

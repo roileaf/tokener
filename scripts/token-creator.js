@@ -2649,18 +2649,18 @@ async function runAutoAnimate(app) {
 
 async function confirmAutoAnimate() {
   const title = localize('Creator.Animate.AutoAnimate', 'Auto animate');
-  const content = `<p>${localize(
+  const message = localize(
     'Creator.Animate.AutoConfirm',
     'Replace the existing pins with automatic ones?',
-  )}</p>`;
+  );
   const dialog = globalThis.foundry?.applications?.api?.DialogV2;
   if (dialog?.confirm) {
-    return Boolean(await dialog.confirm({ window: { title }, content, rejectClose: false }));
+    return Boolean(
+      await dialog.confirm({ window: { title }, content: `<p>${message}</p>`, rejectClose: false }),
+    );
   }
   return typeof globalThis.confirm === 'function'
-    ? globalThis.confirm(
-        `${title}: ${localize('Creator.Animate.AutoConfirm', 'Replace the existing pins with automatic ones?')}`,
-      )
+    ? globalThis.confirm(`${title}: ${message}`)
     : true;
 }
 
