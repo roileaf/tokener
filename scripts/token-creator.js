@@ -3406,6 +3406,8 @@ function applyAnimationPreset(app, preset) {
     targets.has(pin.id) ? ensurePinArm(pin, app.cutout) : pin,
   );
   setAnimationPins(app, applyPreset(pins, ids, preset, { amplitude, mode: app.animation.mode }));
+  // Show the pins the preset just moved; outside the pin tool they are hidden.
+  if (app.maskTool !== 'pin') selectPinTool(app);
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
@@ -3444,6 +3446,8 @@ async function runAutoAnimate(app) {
   app._regionVersion += 1;
   clearEffectCaches();
   app._previewBend = null;
+  // Straight into pin editing, where the new pins can be seen and adjusted.
+  if (app.maskTool !== 'pin') selectPinTool(app);
   syncAnimationControls(app);
   renderCreatorPreview(app);
   if (areAiToolsEnabled() && parts?.tipIds.length) await cutAutoParts(app, pins, parts);
