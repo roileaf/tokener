@@ -3970,7 +3970,12 @@ export async function createToken(app, action) {
   stopAnimationPlayback(app);
   // The project is frozen now, with playback stopped, so edits made while files upload never
   // mix into it.
-  const projectState = snapshotProjectState(app);
+  let projectState = null;
+  try {
+    projectState = snapshotProjectState(app);
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Failed to snapshot the Token Creator project`, error);
+  }
   setCreatorBusy(app, true);
   setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
   try {
@@ -4134,6 +4139,7 @@ function snapshotProjectState(app) {
  * `<stem>-portrait-source.png` for a separate portrait image) so the project can reload them.
  */
 async function saveCreatorProject(state, { folder, tokenSrc }) {
+  if (!state) throw new Error('No project snapshot.');
   const tokenFileName = String(tokenSrc).split('/').pop();
   const stem = tokenFileName.replace(/\.[^.]+$/, '');
   const uploadSource = async (source, fileName) =>
