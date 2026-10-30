@@ -4,11 +4,12 @@
 
 ### Changed
 
+- **Auto animate** and the motion presets (Hover, Breathe, Bob...) switch to the pin tool, so the pins they just moved are visible and ready to adjust.
 - **Breakout room** goes up to 150%, so breath, rays and other effects set free have space past the frame. Changing it now shrinks or grows the art with the frame, so the composition stays the same and only the space around it changes.
 
 ### Added
 
-- **Animation (JB2A / Sequencer)** effect in the Animate card, offered when Sequencer is active: pick any animation from your own Sequencer database (JB2A and any other module that registers effects there) with a search and a looping preview, and it plays in the animated token. It follows a pin (fire breath from a moving head, flames on a swaying sword) or sits on the token centre, with its size, angle, shift and opacity; breath, cones and rays start at the pin, others are centred on it. It can stay inside the frame or reach past it into the breakout room, and it is baked into the saved WebM. The picker browses your catalog by category as a grid of thumbnails that play on hover, with a search and a large preview. JB2A art keeps its own license, so tokens with it baked in are for your own games.
+- **Animation (JB2A / Sequencer)** effect in the Animate card, offered when Sequencer is active: pick any animation from your own Sequencer database (JB2A and any other module that registers effects there) with a search and a looping preview, and it plays in the animated token. It follows a pin (fire breath from a moving head, flames on a swaying sword) or sits on the token centre, with its size, angle, shift and opacity; breath, cones and rays start at the pin, others are centred on it. It can stay inside the frame or reach past it into the breakout room, and it is baked into the saved WebM. The picker browses your catalog by category as a grid of thumbnails that play on hover, with a search and a large preview. Pins are numbered on the canvas to match the **Follows** list, and while an animation is selected the pin it follows is ringed. JB2A art keeps its own license, so tokens with it baked in are for your own games.
 - **Auto animate** with AI tools on cuts out the part behind each moving tip (a wing, a head, a tail) with the selection model and makes it a region pin: the pin sits where the part joins the body and the whole part turns there, instead of only the art near the tip bending. Parts the model gets wrong (most of the figure, or the body itself) are left as plain pins, and without AI tools Auto animate works as before.
 
 ## 2.3.3 - 2026-10-30

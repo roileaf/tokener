@@ -761,19 +761,23 @@ export function getPinPreviewPoints({
   t = 0,
   mode = 'loop',
   selectedIds = [],
+  followedId = null,
 }) {
   const scale = layout.width / Math.max(1, cutoutWidth);
   const selected = new Set(selectedIds ?? []);
   const primary = selectedIds?.[0] ?? null;
-  return (pins ?? []).map((pin) => {
+  return (pins ?? []).map((pin, index) => {
     const { dx, dy } = samplePinOffset(pin, t, mode);
     return {
       id: pin.id,
+      // The pin's name in an animation's Follows choice ("Pin 2").
+      number: index + 1,
       x: layout.x + (pin.x + dx) * scale,
       y: layout.y + (pin.y + dy) * scale,
       selected: selected.has(pin.id),
       primary: pin.id === primary,
       anchor: isAnchorPin(pin),
+      followed: pin.id === followedId,
     };
   });
 }

@@ -1202,10 +1202,30 @@ test('pin dots map from source to preview space with the current layout', async 
     cutoutWidth: 100,
     t: 0.5,
     selectedIds: ['b', 'a'],
+    followedId: 'b',
   });
+  // Numbered in list order, as "Pin 1", "Pin 2" in an animation's Follows choice.
   assert.deepEqual(points, [
-    { id: 'a', x: 25, y: 30, selected: true, primary: false, anchor: true },
-    { id: 'b', x: 125, y: 90, selected: true, primary: true, anchor: false },
+    {
+      id: 'a',
+      number: 1,
+      x: 25,
+      y: 30,
+      selected: true,
+      primary: false,
+      anchor: true,
+      followed: false,
+    },
+    {
+      id: 'b',
+      number: 2,
+      x: 125,
+      y: 90,
+      selected: true,
+      primary: true,
+      anchor: false,
+      followed: true,
+    },
   ]);
   const atStart = getPinPreviewPoints({ pins, layout, cutoutWidth: 100, t: 0 });
   assert.equal(atStart[1].x, 105);
