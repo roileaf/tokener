@@ -867,3 +867,98 @@ test('breakout art enlarges the creature scale, pauses PF2e autoscale and restor
   assert.equal(plain['flags.pf2e-tokener.breakout'], null);
   assert.equal(plain['flags.pf2e.autoscale'], true);
 });
+
+test('P selects the pin tool', async () => {
+  const { getMaskShortcut } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getMaskShortcut({ key: 'p' }), 'tool-pin');
+  assert.equal(getMaskShortcut({ key: 'P' }), 'tool-pin');
+});
+
+test('a new token image clears pins but keeps the loop length', async () => {
+  const { resetAnimationForNewSource } = await import('../scripts/token-animation.js');
+  const animation = {
+    duration: 3.5,
+    fps: 30,
+    pins: [{ id: 'a', x: 1, y: 2, keyframes: [{ t: 0, dx: 1, dy: 0 }] }],
+  };
+  const reset = resetAnimationForNewSource(animation);
+  assert.deepEqual(reset, { duration: 3.5, fps: 30, pins: [] });
+  assert.equal(animation.pins.length, 1);
+  assert.deepEqual(resetAnimationForNewSource(undefined), { duration: 2, fps: 30, pins: [] });
+});
+
+test('pin dots map from source to preview space with the current layout', async () => {
+  const { getPinPreviewPoints } = await import('../scripts/token-animation.js');
+  const pins = [
+    { id: 'a', x: 10, y: 20, keyframes: [] },
+    {
+      id: 'b',
+      x: 50,
+      y: 50,
+      keyframes: [
+        { t: 0, dx: 0, dy: 0 },
+        { t: 0.5, dx: 10, dy: 0 },
+      ],
+    },
+  ];
+  const layout = { x: 5, y: -10, width: 200, height: 200 };
+  const points = getPinPreviewPoints({ pins, layout, cutoutWidth: 100, t: 0.5, selectedId: 'b' });
+  assert.deepEqual(points, [
+    { id: 'a', x: 25, y: 30, selected: false, anchor: true },
+    { id: 'b', x: 125, y: 90, selected: true, anchor: false },
+  ]);
+  const atStart = getPinPreviewPoints({ pins, layout, cutoutWidth: 100, t: 0 });
+  assert.equal(atStart[1].x, 105);
+  assert.equal(atStart[1].selected, false);
+});
+
+test('preset targets: bob and sway use the selected pin, breathe uses every pin', async () => {
+  const { getPresetTargets } = await import('../scripts/token-animation.js');
+  const pins = [
+    { id: 'a', x: 0, y: 0, keyframes: [] },
+    { id: 'b', x: 10, y: 0, keyframes: [] },
+    { id: 'c', x: 0, y: 10, keyframes: [] },
+  ];
+  assert.deepEqual(getPresetTargets(pins, 'b', 'bob'), ['b']);
+  assert.deepEqual(getPresetTargets(pins, 'b', 'sway'), ['b']);
+  assert.deepEqual(getPresetTargets(pins, null, 'bob'), []);
+  assert.deepEqual(getPresetTargets(pins, 'missing', 'sway'), []);
+  assert.deepEqual(getPresetTargets(pins, null, 'breathe'), ['a', 'b', 'c']);
+  assert.deepEqual(getPresetTargets(pins, 'b', 'breathe'), ['a', 'b', 'c']);
+});
+
+test('breathe on three pins through the creator path gives real motion', async () => {
+  const { getPresetTargets } = await import('../scripts/token-animation.js');
+  const { applyPreset, hasMotion } = await import('../scripts/animation.js');
+  const pins = [
+    { id: 'a', x: 0, y: 0, keyframes: [] },
+    { id: 'b', x: 100, y: 0, keyframes: [] },
+    { id: 'c', x: 50, y: 90, keyframes: [] },
+  ];
+  const ids = getPresetTargets(pins, 'a', 'breathe');
+  const next = applyPreset(pins, ids, 'breathe', { amplitude: 3 });
+  assert.equal(hasMotion({ pins: next }), true);
+  assert.ok(next.every((pin) => pin.keyframes.length === 2));
+});
+
+test('dragging a pin moves its rest position until it has keyframes', async () => {
+  const { getPinDragMode } = await import('../scripts/token-animation.js');
+  assert.equal(getPinDragMode({ id: 'a', x: 0, y: 0, keyframes: [] }), 'rest');
+  assert.equal(
+    getPinDragMode({ id: 'a', x: 0, y: 0, keyframes: [{ t: 0, dx: 0, dy: 0 }] }),
+    'keyframe',
+  );
+});
+
+test('anchors-only or unavailable encoding saves a still image', async () => {
+  const { getAnimatedSavePlan } = await import('../scripts/token-animation.js');
+  const { createPin, setKeyframe } = await import('../scripts/animation.js');
+  const moving = setKeyframe(createPin({ x: 1, y: 1 }), 0.5, { dx: 2, dy: 0 });
+  const animatedFixture = { duration: 2, fps: 30, pins: [moving] };
+  assert.equal(
+    getAnimatedSavePlan({ animation: { pins: [createPin({ x: 1, y: 1 })] }, canEncode: true }),
+    'still',
+  );
+  assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: false }), 'still');
+  assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: true }), 'animated');
+});

@@ -1175,7 +1175,7 @@ function prepareScaleControlView(target, scale) {
 }
 
 function hasDynamicRingScaleControl(candidate) {
-  return Boolean(candidate?.subjectSrc);
+  return Boolean(candidate?.subjectSrc || candidate?.ringFromToken);
 }
 
 function getCandidateLinkedScale(candidate, tokenDocument) {

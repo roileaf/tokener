@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Animated tokens: in the Token Creator, the new **Pin** tool (**P**) pins parts of the art and the **Animate** card keyframes them or applies the **Bob**, **Sway** and **Breathe** presets over a 1-4 s loop. Tokens with moving pins save as a transparent looping WebM (up to 512 px) instead of a still WebP, and work with the painted frame, pop-out and the dynamic token ring (Tokener also plays ring subject videos Foundry leaves paused). The preview pauses while a mask or touch-up tool is in use; **Breathe** also moves anchor pins and needs at least two pins. Needs Foundry opened over https or on localhost and a browser that can encode VP9.
+
 ## 2.2.1 - 2026-10-27
 
 ### Added

@@ -2168,7 +2168,8 @@
   cursor: none;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-selecting .pf2e-tokener-creator-preview {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-selecting .pf2e-tokener-creator-preview,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage.is-pinning .pf2e-tokener-creator-preview {
   cursor: crosshair;
 }
 
@@ -2625,6 +2626,79 @@
 .pf2e-tokener-creator-app
   .pf2e-tokener-creator-portrait:not([data-background='color'])
   [data-portrait-color] {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-transport {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-timeline {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-timeline input[type='range'] {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  accent-color: #8fb9d6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-keyframes {
+  position: relative;
+  height: 10px;
+  margin: 0 7px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: rgba(143, 185, 214, 0.75);
+  pointer-events: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-keyframe {
+  position: absolute;
+  top: 1px;
+  width: 8px;
+  height: 8px;
+  margin: 0 0 0 -4px;
+  padding: 0;
+  min-height: 0;
+  background: #cfc6b8;
+  border: 1px solid rgba(0, 0, 0, 0.7);
+  border-radius: 1px;
+  transform: rotate(45deg);
+  cursor: pointer;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-keyframe.is-current {
+  background: #ffd166;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-length select {
+  width: auto;
+  height: 22px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-animate[data-available='false']
+  [data-animation-available],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-animate:not([data-available='false'])
+  [data-animation-unavailable] {
   display: none;
 }
 

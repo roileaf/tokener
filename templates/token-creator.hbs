@@ -104,6 +104,16 @@
               data-tooltip='{{labels.maskSelectTooltip}}'
             ><i class='fas fa-hand-pointer'></i></button>
           {{/if}}
+          <span class='pf2e-tokener-creator-divider' data-token-only></span>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-token-only
+            data-animation-control
+            data-creator-action='mask-pin'
+            aria-pressed='false'
+            data-tooltip='{{labels.pinTooltip}}'
+          ><i class='fas fa-thumbtack'></i></button>
           <span class='pf2e-tokener-creator-divider'></span>
           <button
             type='button'
@@ -173,8 +183,8 @@
           <summary><i class='fas fa-keyboard'></i> {{labels.shortcutsHeading}}</summary>
           <dl class='pf2e-tokener-creator-shortcuts'>
             {{#each labels.shortcuts}}
-              <dt {{#if popOut}}data-pop-out-tools{{/if}}>{{{keys}}}</dt>
-              <dd {{#if popOut}}data-pop-out-tools{{/if}}>{{label}}</dd>
+              <dt {{#if popOut}}data-pop-out-tools{{/if}} {{#if tokenOnly}}data-token-only{{/if}}>{{{keys}}}</dt>
+              <dd {{#if popOut}}data-pop-out-tools{{/if}} {{#if tokenOnly}}data-token-only{{/if}}>{{label}}</dd>
             {{/each}}
           </dl>
         </details>
@@ -355,6 +365,75 @@
           <span>{{labels.popOutShadow}}</span>
         </label>
         <p class='pf2e-tokener-creator-hint' data-pop-out-tools>{{labels.maskHint}}</p>
+      </section>
+
+      <section
+        data-token-only
+        class='pf2e-tokener-creator-card pf2e-tokener-creator-animate'
+        data-available='{{#if animation.available}}true{{else}}false{{/if}}'
+      >
+        <h4>{{labels.animateTitle}}</h4>
+        <div class='pf2e-tokener-creator-animate-transport'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-animation-control
+            data-creator-action='animation-play'
+            aria-pressed='false'
+            aria-label='{{labels.animatePlay}}'
+            data-tooltip='{{labels.animatePlay}}'
+          ><i class='fas fa-play'></i></button>
+          <div class='pf2e-tokener-creator-timeline'>
+            <input
+              type='range'
+              name='animationTime'
+              min='0'
+              max='100'
+              step='0.1'
+              value='{{animation.timeValue}}'
+              data-animation-control
+            />
+            <div class='pf2e-tokener-creator-keyframes' data-animation-keyframes>
+              <span class='pf2e-tokener-creator-playhead' data-animation-playhead></span>
+            </div>
+          </div>
+          <span class='pf2e-tokener-creator-value' data-animation-time>{{animation.time}}</span>
+        </div>
+        <div class='pf2e-tokener-creator-row'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-animation-control
+            data-creator-action='keyframe-add'
+          ><i class='fas fa-plus'></i> {{labels.animateAddKeyframe}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-animation-control
+            data-creator-action='keyframe-remove'
+          ><i class='fas fa-minus'></i> {{labels.animateRemoveKeyframe}}</button>
+        </div>
+        <div class='pf2e-tokener-creator-row'>
+          {{#each animation.presets}}
+            <button
+              type='button'
+              class='pf2e-tokener-creator-button'
+              data-animation-control
+              data-creator-action='animation-preset'
+              data-preset='{{value}}'
+            >{{label}}</button>
+          {{/each}}
+        </div>
+        <label class='pf2e-tokener-creator-slider pf2e-tokener-creator-animate-length'>
+          <span>{{labels.animateLength}}</span>
+          <select name='animationDuration' data-animation-control>
+            {{#each animation.lengths}}
+              <option value='{{value}}' {{#if selected}}selected{{/if}}>{{label}}</option>
+            {{/each}}
+          </select>
+        </label>
+        <p class='pf2e-tokener-creator-hint' data-animation-available>{{labels.animateHint}}</p>
+        <p class='pf2e-tokener-creator-hint' data-animation-unavailable>{{labels.animateUnavailable}}</p>
       </section>
 
       <section class='pf2e-tokener-creator-card' data-token-only>

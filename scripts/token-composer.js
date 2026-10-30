@@ -384,6 +384,7 @@ export function buildCreatedTokenCandidate({
   subjectSrc,
   ringColors,
   breakoutScale = 1,
+  animated = false,
 }) {
   const candidate = {
     id: `${CREATED_TOKEN_SOURCE_ID}:${tokenSrc}`,
@@ -395,7 +396,10 @@ export function buildCreatedTokenCandidate({
   if (breakoutScale > 1) candidate.breakoutScale = breakoutScale;
   if (portraitSrc) candidate.portraitSrc = portraitSrc;
   if (subjectSrc) {
-    candidate.subjectSrc = subjectSrc;
+    // An animated token is a video: Foundry's ring then uses the token texture itself as the
+    // subject, so no separate subject image is set.
+    if (animated) candidate.ringFromToken = true;
+    else candidate.subjectSrc = subjectSrc;
     candidate.subjectScale = breakoutScale;
     if (ringColors) candidate.ringColors = { ...ringColors };
   }

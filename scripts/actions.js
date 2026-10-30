@@ -146,15 +146,24 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile, documen
     update['ring.subject.scale'] =
       ringScaleOverride ??
       numberOr(candidate.subjectScale, Math.max(Math.abs(scaleX), Math.abs(scaleY)));
-    if (isObject(candidate.ringColors)) {
-      update['ring.colors.ring'] = candidate.ringColors.ring ?? null;
-      update['ring.colors.background'] = candidate.ringColors.background ?? null;
-    }
+    applyRingColors(update, candidate);
+  } else if (candidate?.ringFromToken) {
+    // Animated ring tokens: an empty subject makes Foundry use the token video as the subject.
+    update['ring.enabled'] = true;
+    update['ring.subject.texture'] = '';
+    update['ring.subject.scale'] = ringScaleOverride ?? numberOr(candidate.subjectScale, breakout);
+    applyRingColors(update, candidate);
   } else {
     update['ring.enabled'] = false;
   }
 
   return update;
+}
+
+function applyRingColors(update, candidate) {
+  if (!isObject(candidate.ringColors)) return;
+  update['ring.colors.ring'] = candidate.ringColors.ring ?? null;
+  update['ring.colors.background'] = candidate.ringColors.background ?? null;
 }
 
 /**
@@ -235,7 +244,11 @@ export function buildTokenScalePreviewUpdate(
 }
 
 function hasDynamicRingSubjectScaleTarget(candidate, tokenDocument) {
-  return Boolean(candidate?.subjectSrc || readDocumentPath(tokenDocument, 'ring.subject.texture'));
+  return Boolean(
+    candidate?.subjectSrc ||
+    candidate?.ringFromToken ||
+    readDocumentPath(tokenDocument, 'ring.subject.texture'),
+  );
 }
 
 export function buildRevertSnapshot({ action, candidate, tokenDocument, profile } = {}) {
