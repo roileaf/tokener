@@ -273,7 +273,11 @@ test('regions follow the art when the view changes', () => {
     duration: 2,
     fps: 30,
     pins: [],
-    effects: [{ id: 'fx', type: 'flicker', region: 'eyes', amount: 0, kind: 'opacity', speed: 3 }],
+    // Wobble forces the warp path, so region and art must share the same grid.
+    effects: [
+      { id: 'fx', type: 'flicker', region: 'eyes', amount: 0, kind: 'opacity', speed: 3 },
+      { id: 'wb', type: 'wobble', region: null, strength: 3, scale: 40 },
+    ],
   };
   for (const view of [
     { zoom: 1, offsetX: 0, offsetY: 0 },
@@ -392,7 +396,7 @@ test('a whole-figure glow is drawn behind the art, a region glow over it', () =>
     });
     return pixels(target);
   };
-  const glow = { id: 'g', type: 'glow', color: '#0000ff', size: 6, pulse: 0 };
+  const glow = { id: 'g', type: 'glow', color: '#0000ff', size: 40, pulse: 0 };
   const layout = getTokenFrameLayout({ imageWidth: 40, imageHeight: 20, size });
   const scale = layout.width / 40;
   const at = (data, x, y) => {
@@ -408,4 +412,118 @@ test('a whole-figure glow is drawn behind the art, a region glow over it', () =>
   const eye = at(over, 17, 15);
   assert.ok(eye[2] > 0x40, `region glow brightens the eye (${eye})`);
   assert.deepEqual(at(over, 8.5, 8.5).slice(0, 3), [0xc0, 0x30, 0x20]);
+});
+
+test('a whole-figure glow stays inside the frame opening, between the fill and the art', () => {
+  const size = 128;
+  const glow = { id: 'g', type: 'glow', region: null, color: '#0000ff', size: 12, pulse: 0 };
+  const render = (cutout, fill) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0,
+      art: { cutout, popOutImage: null, regions: {} },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, pins: [], effects: [glow] },
+      createCanvas,
+      drawFrame: (ctx, bent) =>
+        drawTokenFrame(ctx, bent.art, { size, borderWidth: 4, fill, fillColor: '#000000' }),
+    });
+    return pixels(target);
+  };
+  const cover = createCanvas(200, 200);
+  cover.getContext('2d').fillStyle = '#c03020';
+  cover.getContext('2d').fillRect(0, 0, 200, 200);
+  for (const fill of [false, true]) {
+    const data = render(cover, fill);
+    for (const [x, y] of [
+      [0, 0],
+      [size - 1, 0],
+      [0, size - 1],
+      [size - 1, size - 1],
+    ])
+      assert.equal(data[(y * size + x) * 4 + 3], 0, `corner ${x},${y} stays transparent`);
+  }
+  // Art with an edge inside the opening: the aura shows just outside it, over the fill.
+  const figure = createCanvas(200, 200);
+  figure.getContext('2d').fillStyle = '#c03020';
+  figure.getContext('2d').fillRect(60, 60, 80, 80);
+  const data = render(figure, true);
+  const edge = Math.floor((56 / 200) * size);
+  const o = (Math.floor(size / 2) * size + edge) * 4;
+  assert.ok(
+    data[o + 2] > 10 && data[o + 2] > data[o],
+    `glow just outside the art (${data.slice(o, o + 4)})`,
+  );
+});
+
+test('no-op effects on the bent path still match the plain still frame', () => {
+  const cutout = makeCutout();
+  const size = 48;
+  const view = { zoom: 1.3, offsetX: 0.1, offsetY: -0.05 };
+  const frame = { size, borderWidth: 3, fill: true, fillColor: '#203040' };
+  const expected = createCanvas(size, size);
+  drawTokenFrame(expected.getContext('2d'), cutout, {
+    ...frame,
+    zoom: view.zoom,
+    offsetX: view.offsetX * size,
+    offsetY: view.offsetY * size,
+  });
+  const actual = createCanvas(size, size);
+  const bent = renderAnimationFrame({
+    context: actual.getContext('2d'),
+    size,
+    t: 0.4,
+    art: { cutout, popOutImage: null, regions: {} },
+    view,
+    animation: {
+      duration: 2,
+      fps: 30,
+      pins: [],
+      effects: [{ id: 'f', type: 'flicker', region: null, amount: 0, kind: 'opacity', speed: 3 }],
+    },
+    createCanvas,
+    drawFrame: (ctx, b) => drawTokenFrame(ctx, b.art, frame),
+  });
+  assert.ok(bent, 'the bent path ran');
+  const a = pixels(actual);
+  const e = pixels(expected);
+  for (let i = 0; i < a.length; i += 1)
+    assert.ok(Math.abs(a[i] - e[i]) <= 1, `channel ${i}: ${a[i]} vs ${e[i]}`);
+});
+
+test('glow size is given at the 480 px reference token', () => {
+  // A small dot in the middle of a square cut-out, so the aura never reaches the canvas edge.
+  const cutout = createCanvas(100, 100);
+  cutout.getContext('2d').fillStyle = '#c03020';
+  cutout.getContext('2d').fillRect(45, 45, 10, 10);
+  const reach = (size) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0,
+      art: { cutout, popOutImage: null, regions: {} },
+      view: VIEW,
+      animation: {
+        duration: 2,
+        fps: 30,
+        pins: [],
+        effects: [{ id: 'g', type: 'glow', region: null, color: '#0000ff', size: 40, pulse: 0 }],
+      },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    const data = pixels(target);
+    const y = Math.floor(size / 2);
+    let x = Math.ceil(size * 0.55);
+    while (x < size && data[(y * size + x) * 4 + 3] > 0) x += 1;
+    return (x - size * 0.55) / size;
+  };
+  // A size-40 glow reaches about 40/480 of the token, whatever the token size.
+  const small = reach(96);
+  const large = reach(480);
+  assert.ok(Math.abs(small - large) < 0.02, `${small} vs ${large}`);
+  assert.ok(large > 0.06 && large < 0.11, `reach ${large}`);
 });

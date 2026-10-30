@@ -88,6 +88,34 @@ export function getBendMargin(pins, scale, size) {
   return Math.ceil(Math.max(size * MIN_BEND_MARGIN, largest));
 }
 
+/** A glow effect with its `size` (px at `EFFECT_REFERENCE_SIZE`) converted to px at `size`. */
+function atReferenceSize(effect, size) {
+  return { ...effect, size: (Number(effect.size) * size) / EFFECT_REFERENCE_SIZE };
+}
+
+/**
+ * The art with every whole-figure glow (region null) drawn under it. The aura is part of the
+ * art, so the frame's clip applies and it sits between the frame fill and the figure.
+ */
+function drawAuras(art, effects, { t, size, createCanvas }) {
+  const auras = effects.filter((effect) => effect.type === 'glow' && !effect.region);
+  if (!auras.length) return art;
+  const out = createCanvas(size, size);
+  const context = out.getContext('2d');
+  for (const effect of auras)
+    drawGlow(context, {
+      effect: atReferenceSize(effect, size),
+      art,
+      region: null,
+      t,
+      size,
+      createCanvas,
+      phase: 'behind',
+    });
+  context.drawImage(art, 0, 0);
+  return out;
+}
+
 let paddedCache = new WeakMap();
 let emitterCache = new WeakMap();
 
@@ -244,6 +272,7 @@ function bendLayers({ cutout, popOutImage, regions, view, size, animation, t, cr
     if (canvas && !regionCanvases.has(effect.region)) regionCanvases.set(effect.region, canvas);
   }
 
+  let displaced = false;
   if (displacementEffects.length) {
     const displacements = [];
     for (const effect of displacementEffects) {
@@ -251,11 +280,21 @@ function bendLayers({ cutout, popOutImage, regions, view, size, animation, t, cr
       else if (regionCanvases.has(effect.region))
         displacements.push({ effect, alpha: paddedData(regionCanvases.get(effect.region)) });
     }
-    if (displacements.length) grid = displaceGrid(grid, displacements, { margin, size, t });
+    if (displacements.length) {
+      grid = displaceGrid(grid, displacements, { margin, size, t });
+      displaced = true;
+    }
   }
 
-  const visible = cropGrid(grid, margin, size);
-  const bend = (image) => warpData(paddedData(image), visible, size, createCanvas);
+  // Nothing moves this frame (e.g. only flicker / glow / particles): skip the warp, which would
+  // only cost time and an ImageData round trip.
+  const still =
+    !displaced && rest.every((point, i) => point.x === moved[i].x && point.y === moved[i].y);
+  const visible = still ? null : cropGrid(grid, margin, size);
+  const bend = (image) =>
+    still
+      ? drawStill(image, layout, size, createCanvas)
+      : warpData(paddedData(image), visible, size, createCanvas);
   // Regions are bent on first read: only some effects (region glow) draw them.
   const bentRegions = {};
   for (const [key, canvas] of regionCanvases) {
@@ -362,9 +401,9 @@ function getEmitter({ effect, source, isRegion, layout, size, createCanvas }) {
 /**
  * Draws one animation frame of the token at loop time `t` into `context` (size x size):
  * the art, pop-out image and effect regions (source-image px canvases keyed by `effect.region`)
- * bent with one warp (pins + wind / wobble, weighted by their regions) -> flicker ->
- * `drawFrame(context, bent)` (the caller's frame or ring, which clears the canvas) -> glow
- * behind (composited under everything drawn) and over -> particles on top. With no pin motion
+ * bent with one warp (pins + wind / wobble, weighted by their regions) -> flicker -> whole-figure
+ * glow drawn under the art (inside it, so the frame clips it) -> `drawFrame(context, bent)` (the
+ * caller's frame or ring) -> region glow over -> particles on top. With no pin motion
  * and no effects, `drawFrame(context, null)` draws the plain still token. Returns `bent`
  * (`{ art, popOut, regions }` or null), which callers may pass back as `bent` to skip bending
  * an identical pose again.
@@ -399,37 +438,30 @@ export function renderAnimationFrame({
     });
     const flicker = getFlicker(effects, t);
     bent = {
-      art: applyFlicker(layers.art, flicker, size, createCanvas),
+      art: drawAuras(applyFlicker(layers.art, flicker, size, createCanvas), effects, {
+        t,
+        size,
+        createCanvas,
+      }),
       popOut: applyFlicker(layers.popOut, flicker, size, createCanvas),
       regions: layers.regions,
     };
   }
   drawFrame(context, bent);
 
-  const auras = effects.filter((effect) => effect.type === 'glow' && !effect.region);
-  if (auras.length) {
-    const layer = createCanvas(size, size);
-    const layerContext = layer.getContext('2d');
-    for (const effect of auras)
-      drawGlow(layerContext, {
-        effect,
-        art: bent.art,
-        region: null,
-        t,
-        size,
-        createCanvas,
-        phase: 'behind',
-      });
-    context.save();
-    context.globalCompositeOperation = 'destination-over';
-    context.drawImage(layer, 0, 0);
-    context.restore();
-  }
   for (const effect of effects) {
     if (effect.type !== 'glow' || !effect.region) continue;
     const region = bent.regions[effect.region];
     if (region)
-      drawGlow(context, { effect, art: bent.art, region, t, size, createCanvas, phase: 'over' });
+      drawGlow(context, {
+        effect: atReferenceSize(effect, size),
+        art: bent.art,
+        region,
+        t,
+        size,
+        createCanvas,
+        phase: 'over',
+      });
   }
 
   let layout = null;

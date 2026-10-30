@@ -98,6 +98,8 @@ import { clamp, getDocumentActor, localize, normalizeHudElement, numberOr } from
 
 const CREATOR_TEMPLATE = 'modules/pf2e-tokener/templates/token-creator.hbs';
 const WORKING_MAX_SIZE = 1024;
+/** Stable stand-in for missing effect regions, so the preview bend cache key can match. */
+const EMPTY_REGIONS = Object.freeze({});
 const PREVIEW_SIZE = 480;
 // Painted border widths are expressed in pixels of a 320px token so saved tokens keep the same
 // proportions no matter how large the editor preview is.
@@ -1836,7 +1838,7 @@ function drawPreviewToken(context, app, size) {
     return;
   }
   const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
-  const regions = app.effectRegions ?? {};
+  const regions = app.effectRegions ?? EMPTY_REGIONS;
   const key = {
     animation: app.animation,
     t: app.animationTime,
