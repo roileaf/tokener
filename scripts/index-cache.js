@@ -5,7 +5,9 @@
 const DB_NAME = 'pf2e-tokener';
 const DB_VERSION = 1;
 const STORE_NAME = 'index';
-const SIGNATURE_VERSION = 1;
+// Bump whenever the candidate shape or how candidates are built changes, so caches written by an
+// older build (even one with the same Tokener version) are never reused.
+const SIGNATURE_VERSION = 2;
 
 export function getIndexSignature({
   systemId,

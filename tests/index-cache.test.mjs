@@ -70,9 +70,15 @@ function createFakeIndexedDB() {
 }
 
 function resetIndexState() {
-  state.index = [];
-  state.errors = [];
-  state.indexing = null;
+  Object.assign(state, {
+    index: [],
+    errors: [],
+    indexing: null,
+    builtIndex: null,
+    rescanning: false,
+    generation: 0,
+    failed: false,
+  });
 }
 
 function flush() {
@@ -519,4 +525,133 @@ test('picker template and language file expose the loading and rescan strings', 
   assert.equal(en['PF2ETokener.HUD.IndexLoading'], 'Finding token art…');
   assert.equal(typeof en['PF2ETokener.HUD.Rescan'], 'string');
   assert.equal(typeof en['PF2ETokener.HUD.RescanTooltip'], 'string');
+});
+
+test('the cache signature carries the candidate-building version', () => {
+  assert.equal(JSON.parse(getIndexSignature({ systemId: 'pf2e' })).v, 2);
+});
+
+/** Makes the next index builds throw (reading the installed modules fails). */
+function breakModules() {
+  globalThis.game.modules = {
+    get: () => undefined,
+    values() {
+      throw new Error('modules unavailable');
+    },
+  };
+}
+
+test('a failed build shows "No token art found" once and the next open retries', async () => {
+  const saved = saveGlobals();
+  const previousError = console.error;
+  console.error = () => {};
+  delete globalThis.indexedDB;
+  resetIndexState();
+
+  try {
+    installFakeFoundry();
+    breakModules();
+    class FakeApplicationV2 {}
+    const fakeMixin = (Base) => class FakeHandlebarsApplication extends Base {};
+    const PickerApplication = getTokenPickerApplicationClass(FakeApplicationV2, fakeMixin);
+    const first = new PickerApplication({ tokenDocument: {} });
+    const renders = [];
+    first.rendered = true;
+    first.render = (options) => renders.push(options);
+
+    assert.equal((await first._prepareContext({})).loading, true);
+    await state.indexing;
+    await flush();
+    assert.equal(state.builtIndex, null, 'a failed build loads nothing');
+    assert.equal(renders.length, 1, 'the window re-renders once the build settles');
+    const failed = await first._prepareContext({});
+    assert.equal(failed.loading, false, 'no permanent loading state');
+    assert.equal(failed.hasResults, false);
+    assert.equal(failed.emptyMessage, 'No token art found.');
+    assert.equal(state.indexing, null, 'showing the failure does not start another build');
+
+    // The next open builds again, and now it works.
+    installFakeFoundry();
+    const second = new PickerApplication({ tokenDocument: {} });
+    second.rendered = true;
+    second.render = () => {};
+    assert.equal((await second._prepareContext({})).loading, true);
+    assert.ok(state.indexing, 'the next open retries the build');
+    await state.indexing;
+    await flush();
+    assert.equal(isIndexReady(), true);
+    assert.equal((await second._prepareContext({})).hasResults, true);
+  } finally {
+    console.error = previousError;
+    restoreGlobals(saved);
+    resetIndexState();
+  }
+});
+
+test('an older, slower build never replaces the newer index or its cache', async () => {
+  const saved = saveGlobals();
+  const idb = createFakeIndexedDB();
+  globalThis.indexedDB = idb;
+  resetIndexState();
+
+  try {
+    let openGate;
+    const browseGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    // The first (older) build hangs in browsing until released.
+    installFakeFoundry({ browseGate });
+    const older = rebuildIndex({ force: true });
+    await flush();
+
+    // Settings change meanwhile: a newer build with a different module version, not gated.
+    installFakeFoundry({ moduleVersion: '2.0.0' });
+    const newer = await rebuildIndex();
+    const newerSignature = [...idb.stores.get('index').values()][0]?.signature;
+    assert.equal(newer.length, 1);
+    assert.equal(state.index, newer);
+    assert.equal(state.builtIndex, newer);
+    assert.ok(newerSignature, 'the newer build wrote the cache');
+
+    openGate();
+    await older;
+    await flush();
+    assert.equal(state.index, newer, 'the newer index stays');
+    assert.equal(state.builtIndex, newer);
+    assert.equal(state.rescanning, false);
+    const records = [...idb.stores.get('index').values()];
+    assert.equal(records.length, 1);
+    assert.equal(records[0].signature, newerSignature, 'the cache keeps the newer result');
+  } finally {
+    restoreGlobals(saved);
+    resetIndexState();
+  }
+});
+
+test('a rebuild started during a rescan does not read the cache', async () => {
+  const saved = saveGlobals();
+  const idb = createFakeIndexedDB();
+  globalThis.indexedDB = idb;
+  resetIndexState();
+
+  try {
+    installFakeFoundry();
+    await rebuildIndex();
+    let openGate;
+    const browseGate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+    installFakeFoundry({ browseGate });
+    const rescan = rebuildIndex({ force: true });
+    const browseCalls = installFakeFoundry();
+    const getsBefore = idb.calls.get;
+    await rebuildIndex();
+    assert.equal(idb.calls.get, getsBefore, 'the cache is not read while rescanning');
+    assert.ok(browseCalls.length > 0, 'the rebuild browses instead');
+    openGate();
+    await rescan;
+  } finally {
+    restoreGlobals(saved);
+    resetIndexState();
+  }
 });

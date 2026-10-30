@@ -38,6 +38,8 @@ export const state = {
   rescanning: false,
   builtIndex: null,
   generation: 0,
+  // The latest build threw: nothing is loaded (`builtIndex` stays null), so the next open retries.
+  failed: false,
 };
 
 const WARM_UP_DELAY_MS = 3000;
@@ -48,9 +50,13 @@ const WARM_UP_DELAY_MS = 3000;
  */
 export async function rebuildIndex({ force = false } = {}) {
   const generation = ++state.generation;
+  // A rescan (or a rebuild started during one) never trusts the cache.
+  const skipCache = force || state.rescanning;
   if (force) state.rescanning = true;
-  const indexing = loadIndex({ force })
+  let failed = false;
+  const indexing = loadIndex({ skipCache, generation })
     .catch((error) => {
+      failed = true;
       state.errors.push(error);
       console.error(`${MODULE_ID} | Failed to build token index`, error);
       return [];
@@ -59,7 +65,9 @@ export async function rebuildIndex({ force = false } = {}) {
       // A newer rebuild started meanwhile: let it own the result.
       if (generation !== state.generation) return state.indexing ?? state.index;
       state.index = index;
-      state.builtIndex = index;
+      // A failed build loads nothing, so the next open builds again.
+      state.builtIndex = failed ? null : index;
+      state.failed = failed;
       state.rescanning = false;
       state.indexing = null;
       return index;
@@ -77,6 +85,11 @@ export async function ensureIndex() {
 /** True when an index is available to show and no forced rescan is replacing it. */
 export function isIndexReady() {
   return !state.rescanning && hasLoadedIndex() && !(state.indexing && !state.index.length);
+}
+
+/** True when the latest build threw and no build is running: there is nothing to wait for. */
+export function hasIndexFailed() {
+  return state.failed && !state.indexing;
 }
 
 /** Builds (or loads) the index once the world is idle so the first picker open is instant. */
@@ -97,10 +110,10 @@ function hasLoadedIndex() {
   return state.index.length > 0 || (state.builtIndex !== null && state.index === state.builtIndex);
 }
 
-async function loadIndex({ force }) {
+async function loadIndex({ skipCache, generation }) {
   const modules = getIndexedModules();
   const signature = getCurrentIndexSignature(modules);
-  if (!force) {
+  if (!skipCache) {
     const cached = await readIndexCache(signature);
     if (cached) {
       console.info(`${MODULE_ID} | art index loaded from cache (${cached.length} candidates)`);
@@ -113,7 +126,8 @@ async function loadIndex({ force }) {
   console.info(
     `${MODULE_ID} | art index built in ${Math.round(now() - started)} ms (${index.length} candidates, ${modules.length} modules)`,
   );
-  await writeIndexCache(signature, index);
+  // A newer rebuild owns the result (and the cache): an older, slower one never overwrites it.
+  if (generation === state.generation) await writeIndexCache(signature, index);
   return index;
 }
 

@@ -112,6 +112,17 @@ function createFakeHudRoot() {
   return { root, target };
 }
 
+/** Clears every index build field, so one test's build never leaks into the next. */
+function resetIndexBuildState() {
+  Object.assign(state, {
+    indexing: null,
+    builtIndex: null,
+    rescanning: false,
+    generation: 0,
+    failed: false,
+  });
+}
+
 test('native compendiumArtMappings become searchable token candidates', () => {
   const mapping = {
     'pf2e.pathfinder-bestiary': {
@@ -617,7 +628,7 @@ test('Foundry index discovers datasheet tags from token module datasheet folders
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   const browseCalls = [];
   globalThis.game = {
@@ -693,7 +704,7 @@ test('Foundry index discovers datasheet tags from token module datasheet folders
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -702,7 +713,7 @@ test('Foundry index reads native compendium art mappings for the active system',
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   globalThis.game = {
     system: { id: 'dnd5e' },
@@ -762,7 +773,7 @@ test('Foundry index reads native compendium art mappings for the active system',
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -771,7 +782,7 @@ test('Foundry index folder-scans active modules by evidence instead of token-lik
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   const browseCalls = [];
   globalThis.game = {
@@ -839,7 +850,7 @@ test('Foundry index folder-scans active modules by evidence instead of token-lik
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -848,7 +859,7 @@ test('Foundry index finds tokens and portraits under pictures/ folders of locali
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   globalThis.game = {
     modules: new Map([['pf2e-zda', { id: 'pf2e-zda', title: 'Zeitalter der Asche', flags: {} }]]),
@@ -901,7 +912,7 @@ test('Foundry index finds tokens and portraits under pictures/ folders of locali
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -910,7 +921,7 @@ test('Foundry index scans modules concurrently while preserving candidate order'
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
   let active = 0;
   let maxActive = 0;
   const modules = Array.from({ length: 8 }, (_, index) => ({
@@ -954,7 +965,7 @@ test('Foundry index scans modules concurrently while preserving candidate order'
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -963,7 +974,7 @@ test('Foundry index discovers datasheets from monster and adventure modules', as
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   globalThis.game = {
     modules: new Map([
@@ -1026,7 +1037,7 @@ test('Foundry index discovers datasheets from monster and adventure modules', as
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -1035,7 +1046,7 @@ test('Foundry index adds custom folders as source-scoped token art', async () =>
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   const browseCalls = [];
   globalThis.game = {
@@ -1112,7 +1123,7 @@ test('Foundry index adds custom folders as source-scoped token art', async () =>
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 

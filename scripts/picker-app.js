@@ -26,7 +26,13 @@ import {
   isFavoriteCandidate,
   toggleFavoriteCandidate,
 } from './favorites.js';
-import { ensureIndex, isIndexReady, rebuildIndex, state as indexState } from './foundry-index.js';
+import {
+  ensureIndex,
+  hasIndexFailed,
+  isIndexReady,
+  rebuildIndex,
+  state as indexState,
+} from './foundry-index.js';
 import {
   getPickerGridMinSize,
   getPickerGridSize,
@@ -201,8 +207,16 @@ export function getTokenPickerApplicationClass(
   return TokenPickerApplicationClass;
 }
 
+/**
+ * The index can be shown: it is ready, or this window waited for a build that failed (shown as
+ * "No token art found" rather than loading forever; the next window builds again).
+ */
+function canShowIndex(app) {
+  return isIndexReady() || (app._indexFailed === true && hasIndexFailed());
+}
+
 async function preparePickerContext(app) {
-  if (!isIndexReady()) {
+  if (!canShowIndex(app)) {
     renderWhenIndexSettles(app);
     return prepareLoadingPickerContext(app);
   }
@@ -282,6 +296,7 @@ function renderWhenIndexSettles(app) {
   void pending.then(() => {
     if (app._indexWait !== pending) return;
     app._indexWait = null;
+    app._indexFailed = hasIndexFailed();
     if (app.rendered) renderMainPart(app, { preserveScroll: true });
   });
 }
@@ -445,7 +460,7 @@ async function handlePickerClick(app, event) {
   if (closestTarget(target, '[data-picker-action="rescan-index"]')) {
     event.preventDefault?.();
     event.stopPropagation?.();
-    if (isIndexReady()) await rescanIndex(app);
+    if (canShowIndex(app)) await rescanIndex(app);
     return;
   }
 
