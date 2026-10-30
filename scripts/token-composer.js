@@ -278,10 +278,19 @@ function drawPopOut(context, image, layout, { center, radius, popOut, popOutImag
   if (!popOut) return;
   if (popOutShadow) drawPopOutShadow(context, image, layout, { center, radius, popOutImage });
   context.save();
-  clipToPopOutArea(context, { center, radius, popOutImage });
+  // The framed art fades out over the opening's anti-aliased edge; ending the popped parts exactly
+  // there would leave a see-through line on it, so they reach a little way inside.
+  clipToPopOutArea(context, {
+    center,
+    radius: Math.max(0, radius - POP_OUT_SEAM_OVERLAP),
+    popOutImage,
+  });
   context.drawImage(popOutImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
 }
+
+/** Px the popped parts overlap the framed art across the opening's edge (see drawPopOut). */
+const POP_OUT_SEAM_OVERLAP = 1.5;
 
 /**
  * Where popped parts are drawn: outside the opening only, and above the automatic cutoff line when

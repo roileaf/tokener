@@ -1349,6 +1349,41 @@ test('pop-out never draws semi-transparent art twice inside the frame opening', 
   }
 });
 
+test('pop-out art meets the framed art without a see-through seam on the opening', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawRingSubject, drawTokenFrame } = await import('../scripts/token-composer.js');
+  const size = 100;
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = '#3366cc';
+  artContext.fillRect(0, 0, size, size);
+  const alphaAt = (canvas, x, y) => canvas.getContext('2d').getImageData(x, y, 1, 1).data[3];
+
+  const ring = createCanvas(size, size);
+  drawRingSubject(ring.getContext('2d'), art, { size, clipRadius: 0.6, popOut: true });
+  // The opening's edge crosses the top of the token at y = 20; opaque art stays opaque across it.
+  for (let y = 17; y <= 23; y += 1) assert.equal(alphaAt(ring, 50, y), 255, `ring y ${y}`);
+  for (let x = 25; x <= 75; x += 5) {
+    const y = Math.round(50 - Math.sqrt(30 * 30 - (x - 50) ** 2));
+    for (let dy = -2; dy <= 2; dy += 1)
+      assert.equal(alphaAt(ring, x, y + dy), 255, `ring ${x},${y + dy}`);
+  }
+
+  // Over a border the pop-out covers the border's inner edge instead of letting it show through.
+  const frame = createCanvas(size, size);
+  drawTokenFrame(frame.getContext('2d'), art, {
+    size,
+    borderWidth: 6,
+    borderColor: '#ffffff',
+    popOut: true,
+  });
+  const inner = 49 - 6;
+  for (let y = 50 - inner - 2; y <= 50 - inner + 2; y += 1) {
+    const [r, g, b] = frame.getContext('2d').getImageData(50, y, 1, 1).data;
+    assert.ok(r < 0x40 && g < 0x80 && b > 0xa0, `frame y ${y}: ${r},${g},${b}`);
+  }
+});
+
 test('the frame opening maps from token space onto the source image', async () => {
   const { getOpeningInImage } = await import('../scripts/token-composer.js');
   // 200x100 image drawn at twice its size, shifted 10px right: a 400x200 layout at (10, 0).

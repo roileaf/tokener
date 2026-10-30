@@ -3358,6 +3358,7 @@ function drawPreviewToken(context, app, size) {
     drawFrame: (frameContext, frameBent) =>
       drawCreatedToken(frameContext, app, size, { preview: true, bent: frameBent }),
     bent: reuse,
+    effectClip: getEffectClip(app, size),
   });
   app._previewBend = { key, bent };
 }
@@ -4043,6 +4044,11 @@ function getPopOutRadius(app, size) {
     getRingGeometry({ size, ringScale }).outerRadius -
       app.creatorOptions.borderWidth * (size / BORDER_REFERENCE_SIZE) * ringScale,
   );
+}
+
+/** Effects drawn over the token (particles, region glow) stay inside the frame's opening. */
+function getEffectClip(app, size) {
+  return { x: size / 2, y: size / 2, radius: getPopOutRadius(app, size) };
 }
 
 function getPreviewLayout(app, size = PREVIEW_SIZE) {
@@ -4915,6 +4921,7 @@ async function encodeTokenAnimation(app, size) {
       animation,
       createCanvas,
       drawFrame: (frameContext, bent) => drawCreatedToken(frameContext, snapshot, size, { bent }),
+      effectClip: getEffectClip(snapshot, size),
     });
     frames.push(context.getImageData(0, 0, size, size));
     if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();

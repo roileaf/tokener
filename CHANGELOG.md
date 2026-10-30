@@ -23,6 +23,8 @@
 
 ### Fixed
 
+- **Effects stay inside the ring**: particles and region glow no longer drift outside the token's ring or frame into the empty space around it.
+- **No ring line through popped-out parts**: a wing or horn breaking out of the ring no longer shows a faint outline of the ring's inner edge across it.
 - **Auto animate** gives each part its own motion instead of one shared move: raised parts (horns, a held weapon) sway side to side, wings flap together, and tails swing across their length. Parts trail the body by different amounts and the head bobs a beat after the chest breathes, so the figure no longer moves in lockstep. Farther tips move more.
 - **Auto animate** no longer leaves every pin selected, so the next preset you click only moves the pins you pick, and it no longer puts both tip pins on one part when the frame cuts that part twice (two wings now flap as a pair).
 
