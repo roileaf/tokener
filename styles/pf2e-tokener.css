@@ -2378,6 +2378,13 @@
   pointer-events: none;
 }
 
+/* The preset that made the selected pin's motion. */
+.pf2e-tokener-creator-app .pf2e-tokener-creator-button.is-active {
+  color: #11181c;
+  background: #d6b56d;
+  border-color: #d6b56d;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-slider {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -96,9 +96,11 @@ export function buildAutoRig({
     HEAD_LAG,
     mode,
   );
+  // The head breathes and bobs; its button is Bob, the motion it shows most.
   const headBobbing = {
     ...breathing[0],
     keyframes: layerPresetKeyframes(breathing[0].keyframes, bob, mode),
+    preset: 'bob',
   };
   const reachUnit = (Math.max(bounds.width * toSourceX, bounds.height * toSourceY) || 1) / 2;
   const tips = animateTips(tipPins, chestPin, { amplitude, reachUnit, mode });
@@ -152,7 +154,10 @@ function animateTips(tips, chest, { amplitude, reachUnit, mode }) {
     }
     const lag = ROLE_LAG[role] + (role === 'wing' ? 0 : seen[role] * SAME_ROLE_LAG);
     seen[role] += 1;
-    return { ...tip, keyframes: delayedKeyframes(from, to, lag, mode) };
+    const moved = { ...tip, keyframes: delayedKeyframes(from, to, lag, mode) };
+    // A crest sways and a wing flaps like those presets; a tail's swing is no preset of its own.
+    const preset = { crest: 'sway', wing: 'flap' }[role];
+    return preset ? { ...moved, preset } : moved;
   });
 }
 

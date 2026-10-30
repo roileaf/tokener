@@ -316,3 +316,19 @@ test('layering in ping-pong holds the last key instead of wrapping', () => {
   assert.equal(late.t, 0.75);
   assert.ok(Math.abs(late.dx - 6) < 1e-9);
 });
+
+test('auto rig records the motion each pin got, for the preset buttons', () => {
+  const crest = rig(figure({ sword: true })).pins;
+  assert.deepEqual(
+    crest.map((pin) => pin.preset ?? null),
+    ['bob', 'breathe', null, null, 'sway'],
+  );
+  assert.deepEqual(
+    rig(figure({ wings: true }), WIDE)
+      .pins.slice(4)
+      .map((pin) => pin.preset),
+    ['flap', 'flap'],
+  );
+  // A tail swings across its length, which no preset does.
+  assert.equal(rig(figure({ tail: true }), WIDE).pins[4].preset, undefined);
+});

@@ -3747,12 +3747,17 @@ function syncAnimationControls(app) {
       disabled ||= !pin;
     if (action === 'keyframe-remove') disabled ||= !atKeyframe;
     if (action === 'pin-region-clear') disabled ||= !pin?.region;
-    if (action === 'animation-preset')
+    if (action === 'animation-preset') {
       disabled ||= !isPresetAvailable(
         app.animation.pins,
         app.selectedPinIds,
         control.dataset.preset,
       );
+      // The selected pin's own motion lights up its preset.
+      const current = Boolean(pin?.preset) && pin.preset === control.dataset.preset;
+      control.classList.toggle('is-active', current);
+      control.setAttribute('aria-pressed', String(current));
+    }
     if (control.dataset.keyframeControl !== undefined) disabled ||= !pin;
     if (action === 'animation-play') disabled ||= !moving && !app.animationPlaying;
     control.disabled = disabled;

@@ -99,6 +99,8 @@ export function normalizeAnimation(value) {
       if (Number.isFinite(arm) && arm > 0) out.arm = arm;
       if (typeof pin.region === 'string' && SAFE_REGION_KEY.test(pin.region))
         out.region = pin.region;
+      // The preset that wrote the pin's motion, shown on its button; dropped once edited by hand.
+      if (ANIMATION_PRESETS.includes(pin.preset)) out.preset = pin.preset;
       return out;
     });
   return {
@@ -117,21 +119,26 @@ export function createPin({ x, y, arm = 0 }) {
   return pin;
 }
 
-/** Returns a new pin with a keyframe at t, replacing any keyframe within 1/120 of t. */
+/**
+ * Returns a new pin with a keyframe at t, replacing any keyframe within 1/120 of t. The motion is
+ * then the user's own, so the pin no longer records a preset.
+ */
 export function setKeyframe(pin, t, { dx, dy, rot = 0, ease = 'smooth' }) {
   const time = wrapTime(t);
   const kept = pin.keyframes.filter((k) => loopDistance(k.t, time) >= KEYFRAME_MERGE);
+  const { preset: _preset, ...rest } = pin;
   return {
-    ...pin,
+    ...rest,
     keyframes: sortKeyframes([...kept, makeKeyframe(time, { dx, dy, rot, ease })]),
   };
 }
 
-/** Returns a new pin without the keyframe nearest to t (within 1/120). */
+/** Returns a new pin without the keyframe nearest to t (within 1/120), and without its preset. */
 export function removeKeyframe(pin, t) {
   const time = wrapTime(t);
+  const { preset: _preset, ...rest } = pin;
   return {
-    ...pin,
+    ...rest,
     keyframes: pin.keyframes.filter((k) => loopDistance(k.t, time) >= KEYFRAME_MERGE),
   };
 }
@@ -284,7 +291,7 @@ export function applyPreset(pins, ids, preset, { amplitude = 0, mode = 'loop' } 
         makeKeyframe(peak, { dx: amplitude * LOOK_SWING, dy: 0, rot: LOOK_ANGLE }),
       ];
     } else return pin;
-    return { ...pin, keyframes };
+    return { ...pin, keyframes, preset };
   });
 }
 
