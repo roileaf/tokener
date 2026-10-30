@@ -197,6 +197,22 @@ export function getRingScale(room = 0) {
   return 1 / (1 + Math.max(0, Number.isFinite(value) ? value : 0) / 100);
 }
 
+/**
+ * The view that keeps the art matched to the frame when breakout room goes from `fromRoom` to
+ * `toRoom`: zoom and offset scale about the token's centre as the frame does, so only the space
+ * around the frame changes.
+ */
+export function scaleViewForRoom(view, fromRoom, toRoom) {
+  const ratio = getRingScale(toRoom) / getRingScale(fromRoom);
+  if (ratio === 1) return view;
+  return {
+    ...view,
+    zoom: view.zoom * ratio,
+    offsetX: view.offsetX * ratio,
+    offsetY: view.offsetY * ratio,
+  };
+}
+
 export function getRingGeometry({ size, ringScale = 1 }) {
   const ringSize = size * ringScale;
   return {

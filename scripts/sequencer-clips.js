@@ -57,6 +57,47 @@ export function getSequencerEntryName(path) {
 }
 
 /**
+ * The catalog's categories: module and first word of each path ('jb2a.flames'), labelled by that
+ * word (with the module named for any module but the biggest), with their entry counts.
+ */
+export function getSequencerCategories(paths) {
+  const counts = new Map();
+  const modules = new Map();
+  for (const path of paths) {
+    const [module, group] = String(path).split('.');
+    if (!group) continue;
+    const key = `${module}.${group}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    modules.set(module, (modules.get(module) ?? 0) + 1);
+  }
+  const main = [...modules].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return [...counts]
+    .map(([key, count]) => {
+      const [module, group] = key.split('.');
+      const word = group.replace(/_/g, ' ');
+      return { key, label: module === main ? word : `${word} (${module})`, count };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+}
+
+/**
+ * Likely thumbnails of a JB2A clip, most likely first: its name with the size swapped for
+ * '_Thumb.webp', then also without a last phase word ('_Loop', '_Intro'), which JB2A drops for
+ * clips that come in phases. None for files that are not videos.
+ */
+export function getClipThumbnails(file) {
+  const match = /^(.*?)(?:_\d+x\d+)?\.(?:webm|mp4)$/i.exec(String(file ?? ''));
+  if (!match) return [];
+  const base = match[1];
+  const thumbnails = [`${base}_Thumb.webp`];
+  const name = base.slice(base.lastIndexOf('/') + 1);
+  const phase = /_[a-z]+$/i.exec(name);
+  if (phase && name.split('_').length > 2)
+    thumbnails.push(`${base.slice(0, base.length - phase[0].length)}_Thumb.webp`);
+  return thumbnails;
+}
+
+/**
  * Where a clip sits on its pin: 'start' (its left edge at the pin, pointing along its angle) for
  * cones, rays, breath and the like, 'centre' for everything else.
  */

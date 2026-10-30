@@ -6,6 +6,8 @@ import {
   clipFrameIndex,
   drawClipFrame,
   getClipTiming,
+  getClipThumbnails,
+  getSequencerCategories,
   getSequencerEntryName,
   guessClipOrigin,
   resolveSequencerFile,
@@ -191,4 +193,31 @@ test('cones, rays and breath start at their pin; other clips centre on it', () =
   assert.equal(alpha(51, 50), 255, 'it begins at the anchor');
   assert.equal(alpha(88, 50), 255, 'and runs its width ahead');
   assert.equal(alpha(48, 50), 0, 'nothing behind the anchor');
+});
+
+test('the catalog groups into categories by module and first word, with counts', () => {
+  const paths = [
+    'jb2a.flames.01.orange',
+    'jb2a.flames.02.blue',
+    'jb2a.breath_weapons.fire.cone.orange.02',
+    'other.flames.01',
+  ];
+  assert.deepEqual(getSequencerCategories(paths), [
+    { key: 'jb2a.breath_weapons', label: 'breath weapons', count: 1 },
+    { key: 'jb2a.flames', label: 'flames', count: 2 },
+    { key: 'other.flames', label: 'flames (other)', count: 1 },
+  ]);
+});
+
+test('a clip offers its likely JB2A thumbnails, most likely first', () => {
+  assert.deepEqual(
+    getClipThumbnails('modules/j/Library/Bless/Bless_01_Regular_Blue_Loop_400x400.webm'),
+    [
+      'modules/j/Library/Bless/Bless_01_Regular_Blue_Loop_Thumb.webp',
+      'modules/j/Library/Bless/Bless_01_Regular_Blue_Thumb.webp',
+    ],
+  );
+  assert.deepEqual(getClipThumbnails('modules/j/Fire_600x600.webm'), ['modules/j/Fire_Thumb.webp']);
+  assert.deepEqual(getClipThumbnails('modules/j/still.webp'), []);
+  assert.deepEqual(getClipThumbnails(null), []);
 });

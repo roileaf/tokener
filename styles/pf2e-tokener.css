@@ -2991,38 +2991,125 @@
 }
 
 /* Token Creator: picking an animation from the Sequencer database. */
-.pf2e-tokener-sequencer-picker {
+.pf2e-tokener-sequencer-dialog .window-content {
+  overflow: hidden;
+}
+
+.pf2e-tokener-sequencer-dialog form,
+.pf2e-tokener-sequencer-dialog .dialog-content {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  flex: 1;
+  min-height: 0;
 }
 
-.pf2e-tokener-sequencer-body {
+.pf2e-tokener-sequencer-picker {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: 200px minmax(0, 1fr) 260px;
   gap: 10px;
-  height: 360px;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 
-.pf2e-tokener-sequencer-results {
+.pf2e-tokener-sequencer-categories {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--color-border-light-tertiary, rgba(255, 255, 255, 0.12));
+  padding-right: 6px;
+}
+
+.pf2e-tokener-sequencer-categories ul {
   margin: 0;
   padding: 0;
-  overflow-y: auto;
   list-style: none;
 }
 
-.pf2e-tokener-sequencer-results button {
+.pf2e-tokener-sequencer-categories button {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
   width: 100%;
-  margin: 0 0 2px;
+  margin: 0 0 1px;
   padding: 3px 6px;
-  text-align: left;
+  border: none;
+  background: transparent;
   font-size: var(--font-size-12, 12px);
   line-height: 1.3;
+  text-align: left;
+  text-transform: capitalize;
 }
 
-.pf2e-tokener-sequencer-results button[aria-pressed='true'] {
+.pf2e-tokener-sequencer-categories button small {
+  opacity: 0.6;
+}
+
+.pf2e-tokener-sequencer-categories button[aria-pressed='true'],
+.pf2e-tokener-sequencer-card[aria-pressed='true'] {
   background: rgba(31, 77, 101, 0.95);
   color: var(--color-text-light-highlight, #f5f2e8);
+}
+
+.pf2e-tokener-sequencer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pf2e-tokener-sequencer-main .hint {
+  margin: 0;
+}
+
+.pf2e-tokener-sequencer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  grid-auto-rows: max-content;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.pf2e-tokener-sequencer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 4px;
+  height: auto;
+  line-height: 1.2;
+}
+
+.pf2e-tokener-sequencer-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 3px;
+  background: repeating-conic-gradient(#3a3a3a 0% 25%, #2c2c2c 0% 50%) 50% / 16px 16px;
+}
+
+.pf2e-tokener-sequencer-thumb img,
+.pf2e-tokener-sequencer-thumb video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pf2e-tokener-sequencer-label {
+  font-size: var(--font-size-11, 11px);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.pf2e-tokener-sequencer-more {
+  grid-column: 1 / -1;
 }
 
 .pf2e-tokener-sequencer-preview {
@@ -3040,8 +3127,7 @@
   border-radius: 4px;
 }
 
-.pf2e-tokener-sequencer-preview p {
-  margin: 0;
-  font-size: var(--font-size-11, 11px);
+.pf2e-tokener-sequencer-preview small {
+  opacity: 0.7;
   overflow-wrap: anywhere;
 }

@@ -135,6 +135,7 @@ import {
   PORTRAIT_BACKGROUNDS,
   getRingGeometry,
   getRingScale,
+  scaleViewForRoom,
   getTokenFrameLayout,
   previewPointToImage,
   viewportPointToToken,
@@ -290,7 +291,10 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   animatePortrait: false,
 });
 
-const MAX_BREAKOUT_ROOM = 50;
+// Up to 150% so a breath or a ray set free has space past the frame; Auto compose still plans
+// with at most COMPOSE_BREAKOUT_ROOM, so its layouts stay close to the frame.
+const MAX_BREAKOUT_ROOM = 150;
+const COMPOSE_BREAKOUT_ROOM = 50;
 
 let activeCreator = null;
 let TokenCreatorApplicationClass = null;
@@ -1279,8 +1283,14 @@ export function handleCreatorInput(app, event) {
   }
   if (!getCreatorOptionKey(name, app.creatorOptions)) return;
 
+  const room = app.creatorOptions.breakoutRoom;
   updateCreatorOption(app, target);
   updateValueLabel(target);
+  // The art shrinks or grows with the frame, so more room only adds space around it.
+  if (name === 'breakoutRoom' && isPopOutEnabled(app)) {
+    app.view = scaleViewForRoom(app.view, room, app.creatorOptions.breakoutRoom);
+    syncZoomInput(app);
+  }
   if (name === 'tolerance' || name === 'feather') scheduleCutout(app);
   else renderCreatorPreview(app);
 }
@@ -2640,7 +2650,10 @@ export function getEffectParamControls(effect, { pins = [] } = {}) {
             label:
               value === 'frame'
                 ? localize('Creator.Animate.Sequencer.InFrame', 'Inside the frame')
-                : localize('Creator.Animate.Sequencer.Free', 'Past the frame (breakout room)'),
+                : localize(
+                    'Creator.Animate.Sequencer.Free',
+                    'Past the frame (space: Breakout room)',
+                  ),
           })),
         ),
       ];
@@ -4611,15 +4624,15 @@ async function runAutoCompose(app) {
   }
   // Layouts are planned with the frame at its smallest, then each gets just the breakout room
   // its popped parts need.
-  const ringScale = getRingScale(MAX_BREAKOUT_ROOM);
-  const clipRadius = withComposeOptions(app, { breakoutRoom: MAX_BREAKOUT_ROOM }, () =>
+  const ringScale = getRingScale(COMPOSE_BREAKOUT_ROOM);
+  const clipRadius = withComposeOptions(app, { breakoutRoom: COMPOSE_BREAKOUT_ROOM }, () =>
     getComposeClipRadius(app),
   );
   let ranked = composeCandidates({
     alpha,
     clipRadius,
     ringScale,
-    maxRoom: MAX_BREAKOUT_ROOM,
+    maxRoom: COMPOSE_BREAKOUT_ROOM,
     gridSize: DEFAULT_COMPOSE_GRID,
     limit: 40,
   });
