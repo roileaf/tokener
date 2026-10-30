@@ -1,10 +1,39 @@
-import { AI_TOOLS_SETTING_KEY, MODULE_ID } from './constants.js';
+import {
+  AI_CUSTOM_MODEL_SETTING_KEY,
+  AI_MODEL_SETTING_KEY,
+  AI_TOOLS_SETTING_KEY,
+  MODULE_ID,
+} from './constants.js';
 import { localize } from './utils.js';
 
 // Optional, opt-in AI helpers for the Token Creator. Models are segmentation models (they decide
 // which existing pixels belong to what and never generate new pixels) and run in the browser.
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1';
 const SAM_MODEL_ID = 'Xenova/slimsam-77-uniform';
+
+/**
+ * Background removal models, from small and fast to larger and cleaner on illustrated art. All run
+ * in the browser (WASM). RMBG-1.4 needs its own loader: its config names no standard model type.
+ */
+export const BACKGROUND_MODELS = Object.freeze({
+  fast: Object.freeze({ id: 'Xenova/modnet' }),
+  better: Object.freeze({ id: 'onnx-community/ISNet-ONNX', dtype: 'q8' }),
+  best: Object.freeze({ id: 'briaai/RMBG-1.4', dtype: 'q8', loader: 'rmbg' }),
+});
+/** A Hugging Face model id: "owner/name", letters, digits, `.`, `_` and `-` only. */
+const MODEL_ID_PATTERN = /^[\w-][\w.-]*\/[\w-][\w.-]*$/;
+const RMBG_PROCESSOR = Object.freeze({
+  do_normalize: true,
+  do_pad: false,
+  do_rescale: true,
+  do_resize: true,
+  image_mean: [0.5, 0.5, 0.5],
+  feature_extractor_type: 'ImageFeatureExtractor',
+  image_std: [1, 1, 1],
+  resample: 2,
+  rescale_factor: 1 / 255,
+  size: { width: 1024, height: 1024 },
+});
 let transformersPromise = null;
 let samPromise = null;
 
@@ -20,6 +49,104 @@ export function registerAiToolsSetting(settings = globalThis.game?.settings) {
     type: Boolean,
     default: false,
   });
+  // Per browser: the download and the memory are the device's.
+  settings?.register?.(MODULE_ID, AI_MODEL_SETTING_KEY, {
+    name: localize('Settings.AiModel.Name', 'AI background removal model'),
+    hint: localize(
+      'Settings.AiModel.Hint',
+      "Larger models cut out illustrated art more cleanly but download more on first use and take a few seconds per image. Check a model's license before using it for commercial work.",
+    ),
+    scope: 'client',
+    config: true,
+    type: String,
+    choices: {
+      fast: localize('Settings.AiModel.Fast', 'Fast: MODNet (~7 MB)'),
+      better: localize('Settings.AiModel.Better', 'Better: ISNet (~44 MB, AGPL-3.0)'),
+      best: localize('Settings.AiModel.Best', 'Best: RMBG-1.4 (~44 MB, non-commercial license)'),
+      custom: localize('Settings.AiModel.Custom', 'Custom: the Hugging Face model below'),
+    },
+    default: 'fast',
+  });
+  settings?.register?.(MODULE_ID, AI_CUSTOM_MODEL_SETTING_KEY, {
+    name: localize('Settings.AiCustomModel.Name', 'Custom AI background model'),
+    hint: localize(
+      'Settings.AiCustomModel.Hint',
+      'A Hugging Face model id (owner/name) with a transformers.js background-removal build, used when the model above is Custom.',
+    ),
+    scope: 'client',
+    config: true,
+    type: String,
+    default: '',
+  });
+}
+
+/**
+ * The background removal model chosen in the settings: `{ key, id, dtype?, loader? }`. A custom
+ * choice without a valid "owner/name" id, or anything unknown, falls back to the fast model.
+ */
+export function getBackgroundModel(settings = globalThis.game?.settings) {
+  const read = (key) => {
+    try {
+      return settings?.get?.(MODULE_ID, key);
+    } catch {
+      return undefined;
+    }
+  };
+  const choice = read(AI_MODEL_SETTING_KEY);
+  if (choice === 'custom') {
+    const id = String(read(AI_CUSTOM_MODEL_SETTING_KEY) ?? '').trim();
+    if (MODEL_ID_PATTERN.test(id)) return { key: 'custom', id };
+  }
+  const key = Object.hasOwn(BACKGROUND_MODELS, choice) ? choice : 'fast';
+  return { key, ...BACKGROUND_MODELS[key] };
+}
+
+/**
+ * Loads `model` and returns `remove(url)`, which resolves to the image at `url` as RGBA
+ * `{ data, width, height }` with the background made transparent.
+ */
+export async function loadBackgroundRemover(model, { progress_callback } = {}) {
+  const transformers = await loadTransformers();
+  const options = { progress_callback, ...(model.dtype ? { dtype: model.dtype } : {}) };
+  if (model.loader === 'rmbg') {
+    const [network, processor] = await Promise.all([
+      transformers.AutoModel.from_pretrained(model.id, {
+        ...options,
+        config: { model_type: 'custom' },
+      }),
+      transformers.AutoProcessor.from_pretrained(model.id, { config: RMBG_PROCESSOR }),
+    ]);
+    return async (url) => {
+      const image = await transformers.RawImage.read(url);
+      const { pixel_values: pixelValues } = await processor(image);
+      const { output } = await network({ input: pixelValues });
+      const mask = await transformers.RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(
+        image.width,
+        image.height,
+      );
+      const rgba = image.rgba();
+      return {
+        data: applyAlphaMask(rgba.data, mask.data, mask.channels),
+        width: rgba.width,
+        height: rgba.height,
+      };
+    };
+  }
+  const segmenter = await transformers.pipeline('background-removal', model.id, options);
+  return async (url) => {
+    const output = await segmenter(url);
+    const result = Array.isArray(output) ? output[0] : output;
+    const rgba = result.channels === 4 ? result : result.rgba();
+    return { data: rgba.data, width: rgba.width, height: rgba.height };
+  };
+}
+
+/** A copy of RGBA pixels whose alpha is a separate mask's first channel. */
+export function applyAlphaMask(rgba, mask, channels = 1) {
+  const out = new Uint8ClampedArray(rgba);
+  for (let pixel = 0; pixel * 4 < out.length; pixel += 1)
+    out[pixel * 4 + 3] = mask[pixel * channels];
+  return out;
 }
 
 export function areAiToolsEnabled(settings = globalThis.game?.settings) {

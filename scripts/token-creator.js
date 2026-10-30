@@ -12,6 +12,8 @@ import {
   canCacheModels,
   createDownloadTracker,
   createSamSelector,
+  getBackgroundModel,
+  loadBackgroundRemover,
   loadTransformers,
   registerAiToolsSetting,
 } from './ai-tools.js';
@@ -154,7 +156,6 @@ const EDIT_TARGETS = [
   { value: 'token', icon: 'fas fa-circle-user' },
   { value: 'portrait', icon: 'fas fa-image-portrait' },
 ];
-const AI_MODEL_ID = 'Xenova/modnet';
 const DEFAULT_BRUSH_SIZE = 24;
 const MASK_GHOST_ALPHA = 0.38;
 const MASK_TINT_ALPHA = 0.18;
@@ -277,7 +278,7 @@ const MAX_BREAKOUT_ROOM = 50;
 
 let activeCreator = null;
 let TokenCreatorApplicationClass = null;
-let aiSegmenterPromise = null;
+let aiRemover = null;
 let worldRingAssets = null;
 
 export function registerTokenCreatorSettings(settings = globalThis.game?.settings) {
@@ -2008,26 +2009,26 @@ export async function useEditedPortraitAsToken(app) {
 }
 
 async function removeBackgroundWithModel(sourceCanvas) {
-  aiSegmenterPromise ??= loadTransformers()
-    .then(({ pipeline }) =>
-      pipeline('background-removal', AI_MODEL_ID, {
-        progress_callback: createDownloadTracker((percent) => {
-          if (activeCreator)
-            setCreatorStatus(activeCreator, formatDownloadStatus('AiDownloading', percent));
-        }),
+  // Reloaded when the model setting changes; the last loaded model is kept for later images.
+  const model = getBackgroundModel();
+  const key = `${model.id}:${model.dtype ?? ''}`;
+  if (aiRemover?.key !== key) {
+    const promise = loadBackgroundRemover(model, {
+      progress_callback: createDownloadTracker((percent) => {
+        if (activeCreator)
+          setCreatorStatus(activeCreator, formatDownloadStatus('AiDownloading', percent));
       }),
-    )
-    .catch((error) => {
-      aiSegmenterPromise = null;
+    }).catch((error) => {
+      if (aiRemover?.promise === promise) aiRemover = null;
       throw error;
     });
-  const segmenter = await aiSegmenterPromise;
+    aiRemover = { key, promise };
+  }
+  const remove = await aiRemover.promise;
   const blob = await canvasToBlob(sourceCanvas, 'image/png');
   const url = URL.createObjectURL(blob);
   try {
-    const output = await segmenter(url);
-    const result = Array.isArray(output) ? output[0] : output;
-    const rgba = result.channels === 4 ? result : result.rgba();
+    const rgba = await remove(url);
     const canvas = createCanvas(rgba.width, rgba.height);
     canvas
       .getContext('2d')

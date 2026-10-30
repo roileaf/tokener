@@ -22,3 +22,5 @@ export const IMAGE_EXTENSIONS = /\.(avif|webp|png|jpe?g|gif)$/i;
 export const CREATED_TOKEN_FOLDER_SETTING_KEY = 'createdTokenFolder';
 export const TOKEN_CREATOR_DEFAULTS_SETTING_KEY = 'tokenCreatorDefaults';
 export const AI_TOOLS_SETTING_KEY = 'enableAiTools';
+export const AI_MODEL_SETTING_KEY = 'aiBackgroundModel';
+export const AI_CUSTOM_MODEL_SETTING_KEY = 'aiBackgroundCustomModel';

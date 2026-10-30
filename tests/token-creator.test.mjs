@@ -398,6 +398,75 @@ test('select tool shortcut is W', async () => {
   assert.equal(getMaskShortcut({ key: 'w' }), 'tool-select');
 });
 
+test('the background model setting picks a preset or a custom Hugging Face model', async () => {
+  const { getBackgroundModel, BACKGROUND_MODELS } = await import('../scripts/ai-tools.js');
+  const settingsWith = (values) => ({
+    get: (_module, key) => {
+      if (!(key in values)) throw new Error(`unregistered ${key}`);
+      return values[key];
+    },
+  });
+  assert.deepEqual(getBackgroundModel(settingsWith({})), {
+    key: 'fast',
+    ...BACKGROUND_MODELS.fast,
+  });
+  assert.equal(BACKGROUND_MODELS.fast.id, 'Xenova/modnet');
+  assert.equal(
+    getBackgroundModel(settingsWith({ aiBackgroundModel: 'better' })).id,
+    'onnx-community/ISNet-ONNX',
+  );
+  const best = getBackgroundModel(settingsWith({ aiBackgroundModel: 'best' }));
+  assert.equal(best.id, 'briaai/RMBG-1.4');
+  assert.equal(best.loader, 'rmbg');
+  assert.deepEqual(
+    getBackgroundModel(
+      settingsWith({
+        aiBackgroundModel: 'custom',
+        aiBackgroundCustomModel: ' someone/my-model.v2 ',
+      }),
+    ),
+    { key: 'custom', id: 'someone/my-model.v2' },
+  );
+  // A custom choice without a valid "owner/name" id falls back to the fast model.
+  for (const id of ['', 'no-owner', 'a/b/c', 'https://evil.example/x', '../x/y'])
+    assert.equal(
+      getBackgroundModel(settingsWith({ aiBackgroundModel: 'custom', aiBackgroundCustomModel: id }))
+        .key,
+      'fast',
+      id,
+    );
+  assert.equal(getBackgroundModel(settingsWith({ aiBackgroundModel: 'nonsense' })).key, 'fast');
+  assert.equal(getBackgroundModel(undefined).key, 'fast');
+});
+
+test('the AI settings register the model choice per browser', async () => {
+  const { registerAiToolsSetting } = await import('../scripts/ai-tools.js');
+  const registered = new Map();
+  registerAiToolsSetting({ register: (_module, key, config) => registered.set(key, config) });
+  assert.deepEqual(
+    [...registered.keys()],
+    ['enableAiTools', 'aiBackgroundModel', 'aiBackgroundCustomModel'],
+  );
+  const choice = registered.get('aiBackgroundModel');
+  assert.equal(choice.scope, 'client');
+  assert.equal(choice.default, 'fast');
+  assert.deepEqual(Object.keys(choice.choices), ['fast', 'better', 'best', 'custom']);
+  assert.equal(registered.get('aiBackgroundCustomModel').type, String);
+});
+
+test('a separate model mask becomes the alpha of the image', async () => {
+  const { applyAlphaMask } = await import('../scripts/ai-tools.js');
+  const rgba = Uint8ClampedArray.from([10, 20, 30, 255, 40, 50, 60, 255]);
+  const out = applyAlphaMask(rgba, Uint8Array.from([0, 200]), 1);
+  assert.deepEqual([...out], [10, 20, 30, 0, 40, 50, 60, 200]);
+  assert.deepEqual([...rgba.slice(0, 4)], [10, 20, 30, 255], 'the input is left alone');
+  // A 3-channel mask reads its first channel.
+  assert.deepEqual(
+    [...applyAlphaMask(rgba, Uint8Array.from([7, 0, 0, 9, 0, 0]), 3)].filter((_, i) => i % 4 === 3),
+    [7, 9],
+  );
+});
+
 test('SAM helpers pick the best mask and convert it to an alpha mask', async () => {
   const { pickBestMaskIndex, samMaskToImageData, scaleSamPoint } =
     await import('../scripts/ai-tools.js');
