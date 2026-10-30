@@ -84,6 +84,7 @@ import {
   updateKeyframeAt,
 } from './token-animation.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
+import { encodeAnimatedWebp } from './webp-anim.js';
 import {
   buildProjectFileName,
   parseProject,
@@ -266,6 +267,7 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   portraitAspect: 'original',
   portraitBackground: 'original',
   portraitColor: '#1b1b1b',
+  animatePortrait: false,
 });
 
 const MAX_BREAKOUT_ROOM = 50;
@@ -344,6 +346,7 @@ export function normalizeTokenCreatorOptions(value = {}) {
       ? options.portraitBackground
       : defaults.portraitBackground,
     portraitColor: normalizeColor(options.portraitColor, defaults.portraitColor),
+    animatePortrait: Boolean(options.animatePortrait),
   };
 }
 
@@ -866,6 +869,11 @@ function prepareCreatorContext(app) {
       ),
       portraitAspect: localize('Creator.PortraitAspectLabel', 'Shape'),
       portraitBackground: localize('Creator.PortraitBackgroundLabel', 'Background'),
+      animatePortrait: localize('Creator.AnimatePortrait', 'Animate portrait'),
+      animatePortraitTooltip: localize(
+        'Creator.AnimatePortraitTooltip',
+        'Save the portrait as an animated WebP that plays the token animation (15 fps, up to 512 px).',
+      ),
       portraitHint: localize(
         'Creator.PortraitHint',
         'Actor, Portrait and Both save this portrait. Left untouched, the original image is used.',
@@ -2119,6 +2127,32 @@ function syncPortraitControls(app) {
   getCreatorRoot(app)
     ?.querySelector('.pf2e-tokener-creator-portrait')
     ?.setAttribute('data-background', app.creatorOptions.portraitBackground);
+  syncPortraitAnimateControl(app);
+}
+
+/**
+ * Animate portrait shows only while the token animation can be made and moves; a separate
+ * portrait image cannot follow it (its pins and effects belong to the token image).
+ */
+function syncPortraitAnimateControl(app) {
+  const label = getCreatorRoot(app)?.querySelector?.('[data-portrait-animate]');
+  if (!label) return;
+  label.hidden = !(app.animationSupported && hasActiveMotion(app.animation, app.effectRegions));
+  const shared = isPortraitShared(app);
+  const input = label.querySelector('input[name="animatePortrait"]');
+  if (input) {
+    input.disabled = !shared;
+    input.checked = Boolean(app.creatorOptions.animatePortrait);
+  }
+  label.dataset.tooltip = shared
+    ? localize(
+        'Creator.AnimatePortraitTooltip',
+        'Save the portrait as an animated WebP that plays the token animation (15 fps, up to 512 px).',
+      )
+    : localize(
+        'Creator.AnimatePortraitSeparate',
+        'Only a portrait that uses the token image can be animated. Switch the portrait image back to the token image to animate it.',
+      );
 }
 
 function getViewport(app, size = PREVIEW_SIZE) {
@@ -3204,6 +3238,7 @@ function syncAnimationControls(app) {
   const enabled = available && Boolean(app.cutout) && !app.busy;
   syncFlipControls(app);
   syncEffectControls(app);
+  syncPortraitAnimateControl(app);
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
     let disabled = !enabled;
@@ -4400,9 +4435,29 @@ export async function createToken(app, action) {
       sourcePath: portraitWorkspace.source?.path,
       hasFile: Boolean(portraitWorkspace.source?.file),
     });
-    const portraitEdited = portraitPlan === 'render';
+    let portraitEdited = portraitPlan === 'render';
     let portraitSrc;
-    if (portraitPlan === 'render') {
+    // Animate portrait: the shared image, bent like the token, saved as an animated WebP.
+    let portraitNote = '';
+    if (action !== 'token' && wantsPortraitAnimation(app)) {
+      const blob = (await canEncodeWebp()) ? await encodePortraitAnimation(app) : null;
+      if (blob) {
+        portraitSrc = await uploadBlob(
+          blob,
+          folder,
+          buildCreatedTokenFileName(label, { now, suffix: 'portrait' }),
+        );
+        portraitEdited = true;
+      } else
+        portraitNote = localize(
+          'Creator.AnimatePortraitUnsupported',
+          'This browser cannot save animated WebP, so the portrait was saved as a still image.',
+        );
+      setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
+    }
+    if (portraitSrc) {
+      // Already saved as an animated portrait.
+    } else if (portraitPlan === 'render') {
       portraitSrc = await uploadCanvas(
         withEditTarget(app, 'portrait', () => renderPortraitCanvas(app)),
         folder,
@@ -4458,9 +4513,10 @@ export async function createToken(app, action) {
             ),
       );
     }
+    const notes = [portraitNote, projectNote].filter(Boolean);
     setCreatorStatus(
       app,
-      projectNote ? `${tokenSrc} — ${projectNote}` : tokenSrc,
+      notes.length ? `${tokenSrc} — ${notes.join(' ')}` : tokenSrc,
       Boolean(projectNote),
     );
   } catch (error) {
@@ -4642,6 +4698,189 @@ async function encodeTokenAnimation(app, size) {
     durationMs: animation.duration * 1000,
     bitrate: size * size * 8,
   });
+}
+
+/** Frame rate of animated portraits (animated WebP); lower than the token's to keep files small. */
+const PORTRAIT_ANIMATION_FPS = 15;
+const PORTRAIT_ANIMATION_QUALITY = 0.85;
+/** Longest side of an animated portrait, in pixels. */
+const MAX_ANIMATED_PORTRAIT_SIZE = 512;
+
+/**
+ * Whether the saved portrait is an animated WebP: only when asked for, when the portrait shares
+ * the token's image (pins and effects live in that image's pixel space), when the token animation
+ * moves, and when this browser can encode WebP.
+ */
+export function getPortraitAnimationPlan({
+  options,
+  sharedSource,
+  hasActiveMotion: moving,
+  canEncodeWebp: canEncode,
+} = {}) {
+  return options?.animatePortrait && sharedSource && moving && canEncode ? 'animated' : 'still';
+}
+
+/** Everything but WebP support: what the Animate portrait checkbox asks for applies now. */
+function wantsPortraitAnimation(app) {
+  return (
+    getPortraitAnimationPlan({
+      options: app.creatorOptions,
+      sharedSource: isPortraitShared(app),
+      hasActiveMotion: hasActiveMotion(app.animation, app.effectRegions),
+      canEncodeWebp: true,
+    }) === 'animated'
+  );
+}
+
+/** The portrait size `width` x `height` scaled down (never up) to `MAX_ANIMATED_PORTRAIT_SIZE`. */
+export function getAnimatedPortraitSize(width, height) {
+  const scale = Math.min(1, MAX_ANIMATED_PORTRAIT_SIZE / Math.max(1, width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+/** The portrait has no image of its own (or the same one), so it can follow the token animation. */
+function isPortraitShared(app) {
+  const portrait = app.workspaces?.portrait;
+  return !portrait || portrait.source === app.workspaces?.token?.source;
+}
+
+/** Whether `canvas.toBlob('image/webp')` really gives WebP here (some browsers fall back to PNG). */
+async function canEncodeWebp() {
+  try {
+    const blob = await canvasToBlob(createCanvas(1, 1), 'image/webp', PORTRAIT_ANIMATION_QUALITY);
+    if (blob.type && blob.type !== 'image/webp') return false;
+    const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+    return String.fromCharCode(...head.subarray(0, 4), ...head.subarray(8, 12)) === 'RIFFWEBP';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Renders the animation loop through the portrait layout (`drawPortrait` geometry: aspect, zoom,
+ * offset, background; no frame or ring) at the portrait size capped to 512 px, 15 fps, and encodes
+ * it as an animated WebP. Null when WebP cannot be encoded.
+ */
+async function encodePortraitAnimation(app) {
+  const { image, background, color, regions, animation, view } = withEditTarget(
+    app,
+    'portrait',
+    () => ({
+      image: copyCanvas(
+        app.creatorOptions.portraitBackground === 'original' ? app.source.canvas : app.cutout,
+      ),
+      background: app.creatorOptions.portraitBackground,
+      color: app.creatorOptions.portraitColor,
+      regions: Object.fromEntries(
+        Object.entries(app.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+      ),
+      animation: structuredClone(app.animation),
+      view: { ...app.portraitView },
+    }),
+  );
+  const ratio = getPortraitAspectRatio(
+    app.creatorOptions.portraitAspect,
+    image.width,
+    image.height,
+  );
+  const longSide = Math.max(image.width, image.height);
+  const { width, height } = getAnimatedPortraitSize(
+    Math.round(ratio >= 1 ? longSide : longSide * ratio),
+    Math.round(ratio >= 1 ? longSide / ratio : longSide),
+  );
+  const times = getFrameTimes({ ...animation, fps: PORTRAIT_ANIMATION_FPS });
+  const output = createCanvas(width, height);
+  // One canvas redrawn per frame: each frame is encoded before the next is drawn.
+  const frames = (function* () {
+    for (const t of times) {
+      renderPortraitAnimationFrame(output, {
+        image,
+        regions,
+        animation,
+        view,
+        background,
+        color,
+        t,
+      });
+      yield output;
+    }
+  })();
+  return encodeAnimatedWebp(
+    frames,
+    { fps: PORTRAIT_ANIMATION_FPS, quality: PORTRAIT_ANIMATION_QUALITY },
+    {
+      total: times.length,
+      onFrame: (done, total) =>
+        setCreatorStatus(
+          app,
+          localize('Creator.AnimatePortraitEncoding', 'Encoding animated portrait… {n}/{total}')
+            .replace('{n}', String(done))
+            .replace('{total}', String(total)),
+        ),
+      yield: yieldToBrowser,
+      yieldEvery: ANIMATION_FRAMES_PER_YIELD,
+    },
+  );
+}
+
+/**
+ * One portrait frame at loop time `t` into `output` (the portrait size). The animation renderer
+ * works on a square, so the frame is rendered on a square as large as the portrait's long side,
+ * with the art laid out so the centred portrait rect matches `drawPortrait` exactly, then cropped.
+ * The portrait `background` is 'original' (`image` is the source), 'transparent' or 'color'.
+ */
+export function renderPortraitAnimationFrame(
+  output,
+  { image, regions, animation, view, background, color, t },
+) {
+  const { width, height } = output;
+  const size = Math.max(width, height);
+  const left = (size - width) / 2;
+  const top = (size - height) / 2;
+  const portraitScale =
+    Math.max(width / Math.max(1, image.width), height / Math.max(1, image.height)) *
+    (Number(view?.zoom) || 1);
+  const squareCover = size / Math.max(1, Math.min(image.width, image.height));
+  const squareView = {
+    zoom: portraitScale / squareCover,
+    offsetX: ((Number(view?.offsetX) || 0) * width) / size,
+    offsetY: ((Number(view?.offsetY) || 0) * height) / size,
+  };
+  const square = createCanvas(size, size);
+  renderAnimationFrame({
+    context: square.getContext('2d'),
+    size,
+    t,
+    art: { cutout: image, popOutImage: null, regions },
+    view: squareView,
+    animation,
+    createCanvas,
+    drawFrame: (frameContext, bent) => {
+      if (background === 'color') {
+        frameContext.fillStyle = color;
+        frameContext.fillRect(left, top, width, height);
+      }
+      if (bent) {
+        frameContext.drawImage(bent.art, 0, 0, size, size);
+        return;
+      }
+      const layout = getTokenFrameLayout({
+        imageWidth: image.width,
+        imageHeight: image.height,
+        size,
+        zoom: squareView.zoom,
+        offsetX: squareView.offsetX * size,
+        offsetY: squareView.offsetY * size,
+      });
+      frameContext.drawImage(image, layout.x, layout.y, layout.width, layout.height);
+    },
+  });
+  const outputContext = output.getContext('2d');
+  outputContext.clearRect(0, 0, width, height);
+  outputContext.drawImage(square, -left, -top);
 }
 
 function getEncodingStatus(done, total) {

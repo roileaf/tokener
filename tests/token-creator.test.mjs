@@ -721,13 +721,35 @@ test('saving uses the token image for the token and the separate image for the p
   }
 });
 
-async function runCreatorSave({ sourcePath, failJson = false, effects = [], regions = {} }) {
+/** A tiny lossless WebP still (fake bitstream) of `width` x `height`, as a WebP-capable browser exports. */
+function fakeWebpStill(width, height) {
+  const bits = ((width - 1) | ((height - 1) << 14) | (1 << 28)) >>> 0;
+  const payload = [0x2f, bits & 0xff, (bits >> 8) & 0xff, (bits >> 16) & 0xff, bits >>> 24, 1];
+  const chunk = [...Buffer.from('VP8L'), payload.length, 0, 0, 0, ...payload];
+  const body = [...Buffer.from('WEBP'), ...chunk];
+  const size = body.length;
+  return new Uint8Array([...Buffer.from('RIFF'), size & 0xff, (size >> 8) & 0xff, 0, 0, ...body]);
+}
+
+async function runCreatorSave({
+  sourcePath,
+  failJson = false,
+  effects = [],
+  regions = {},
+  options = {},
+  webp = false,
+}) {
   const { createCanvas } = await import('canvas');
   const { createToken, normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  const toBlobFor = (element) => (callback, type) =>
+    callback(
+      webp && type === 'image/webp'
+        ? new Blob([fakeWebpStill(element.width, element.height)], { type: 'image/webp' })
+        : new Blob([element.toBuffer('image/png')], { type: type ?? 'image/png' }),
+    );
   const canvas = createCanvas(32, 32);
   canvas.getContext('2d').fillRect(0, 0, 32, 32);
-  canvas.toBlob = (callback, type) =>
-    callback(new Blob([canvas.toBuffer('image/png')], { type: type ?? 'image/png' }));
+  canvas.toBlob = toBlobFor(canvas);
   const uploads = [];
   const notices = { info: [], error: [] };
   const previous = {
@@ -739,8 +761,7 @@ async function runCreatorSave({ sourcePath, failJson = false, effects = [], regi
   globalThis.document = {
     createElement: () => {
       const element = createCanvas(1, 1);
-      element.toBlob = (callback, type) =>
-        callback(new Blob([element.toBuffer('image/png')], { type: type ?? 'image/png' }));
+      element.toBlob = toBlobFor(element);
       return element;
     },
   };
@@ -782,7 +803,7 @@ async function runCreatorSave({ sourcePath, failJson = false, effects = [], regi
       cutoutToken: 0,
     };
     const app = {
-      creatorOptions: normalizeTokenCreatorOptions({ borderWidth: 0 }),
+      creatorOptions: normalizeTokenCreatorOptions({ borderWidth: 0, ...options }),
       view: { zoom: 1, offsetX: 0, offsetY: 0 },
       portraitView: { zoom: 1, offsetX: 0, offsetY: 0 },
       editTarget: 'token',
@@ -1625,5 +1646,129 @@ test('ring effect checkboxes update creator options through the real handlers', 
     await handler(app, { target });
     assert.equal(app.creatorOptions.ringEffects.pulse, true);
     assert.equal(app.creatorOptions.ringEffects.wave, false);
+  }
+});
+
+test('animatePortrait defaults off and is normalized to a boolean', async () => {
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  assert.equal(normalizeTokenCreatorOptions().animatePortrait, false);
+  assert.equal(normalizeTokenCreatorOptions({ animatePortrait: 1 }).animatePortrait, true);
+  assert.equal(normalizeTokenCreatorOptions({ animatePortrait: '' }).animatePortrait, false);
+});
+
+test('the portrait is animated only when asked, shared, moving and WebP can be encoded', async () => {
+  const { getPortraitAnimationPlan } = await import('../scripts/token-creator.js');
+  const base = {
+    options: { animatePortrait: true },
+    sharedSource: true,
+    hasActiveMotion: true,
+    canEncodeWebp: true,
+  };
+  assert.equal(getPortraitAnimationPlan(base), 'animated');
+  assert.equal(getPortraitAnimationPlan({ ...base, options: { animatePortrait: false } }), 'still');
+  assert.equal(getPortraitAnimationPlan({ ...base, sharedSource: false }), 'still');
+  assert.equal(getPortraitAnimationPlan({ ...base, hasActiveMotion: false }), 'still');
+  assert.equal(getPortraitAnimationPlan({ ...base, canEncodeWebp: false }), 'still');
+  assert.equal(getPortraitAnimationPlan({}), 'still');
+});
+
+test('animated portraits are capped to 512 px on the long side, keeping the shape', async () => {
+  const { getAnimatedPortraitSize } = await import('../scripts/token-creator.js');
+  assert.deepEqual(getAnimatedPortraitSize(1024, 768), { width: 512, height: 384 });
+  assert.deepEqual(getAnimatedPortraitSize(300, 900), { width: 171, height: 512 });
+  assert.deepEqual(getAnimatedPortraitSize(200, 100), { width: 200, height: 100 });
+});
+
+test('saving with Animate portrait uploads an animated <stem>-portrait.webp at 15 fps', async () => {
+  const { createEffect } = await import('../scripts/animation-effects.js');
+  const { uploads } = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    effects: [createEffect('wind')],
+    options: { animatePortrait: true },
+    webp: true,
+  });
+  const token = uploads.find(
+    (entry) => entry.name.endsWith('.webp') && !entry.name.includes('portrait'),
+  );
+  const stem = token.name.replace(/\.webp$/, '');
+  const portrait = uploads.find((entry) => entry.name === `${stem}-portrait.webp`);
+  assert.ok(portrait, 'animated portrait uploaded');
+  assert.equal(portrait.type, 'image/webp');
+  const bytes = portrait.buffer;
+  assert.equal(bytes.toString('latin1', 0, 4), 'RIFF');
+  assert.equal(bytes.readUInt32LE(4), bytes.length - 8);
+  assert.equal(bytes.toString('latin1', 12, 16), 'VP8X');
+  // 2 s loop at 15 fps
+  const anmf = bytes.toString('latin1').split('ANMF').length - 1;
+  assert.equal(anmf, 30);
+});
+
+test('Animate portrait falls back to the still portrait when WebP cannot be encoded', async () => {
+  const { createEffect } = await import('../scripts/animation-effects.js');
+  const { uploads, notices } = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    effects: [createEffect('wind')],
+    options: { animatePortrait: true },
+    webp: false,
+  });
+  assert.equal(
+    uploads.some((entry) => entry.name.includes('portrait')),
+    false,
+    'the untouched portrait keeps its original path',
+  );
+  assert.equal(notices.error.length, 0);
+});
+
+test('portrait animation frames line up with the still portrait layout', async () => {
+  const { createCanvas } = await import('canvas');
+  const { renderPortraitAnimationFrame } = await import('../scripts/token-creator.js');
+  const { drawPortrait } = await import('../scripts/token-composer.js');
+  const previous = globalThis.document;
+  globalThis.document = { createElement: () => createCanvas(1, 1) };
+  try {
+    const image = createCanvas(40, 20);
+    const imageContext = image.getContext('2d');
+    for (let x = 0; x < 40; x += 1) {
+      imageContext.fillStyle = `rgb(${x * 6}, ${255 - x * 6}, ${(x * 37) % 255})`;
+      imageContext.fillRect(x, 0, 1, 20);
+    }
+    const view = { zoom: 1.3, offsetX: 0.1, offsetY: -0.05 };
+    const expected = createCanvas(30, 40);
+    drawPortrait(expected.getContext('2d'), {
+      source: image,
+      cutout: image,
+      width: 30,
+      height: 40,
+      ...view,
+      background: 'transparent',
+    });
+    const pixels = (canvas) => canvas.getContext('2d').getImageData(0, 0, 30, 40).data;
+    const want = pixels(expected);
+    for (const effects of [[], [{ id: 'still', type: 'wind', strength: 0, scale: 24 }]]) {
+      const output = createCanvas(30, 40);
+      renderPortraitAnimationFrame(output, {
+        image,
+        regions: {},
+        animation: { duration: 1, fps: 15, mode: 'loop', pins: [], effects },
+        view,
+        background: 'transparent',
+        t: 0,
+      });
+      const got = pixels(output);
+      let worst = 0;
+      // Compare away from the edges, where resampling differs by a pixel.
+      for (let y = 2; y < 38; y += 1)
+        for (let x = 2; x < 28; x += 1)
+          for (let c = 0; c < 4; c += 1) {
+            const i = (y * 30 + x) * 4 + c;
+            worst = Math.max(worst, Math.abs(got[i] - want[i]));
+          }
+      assert.ok(
+        worst <= 2,
+        `frame matches the portrait (effects: ${effects.length}, worst ${worst})`,
+      );
+    }
+  } finally {
+    globalThis.document = previous;
   }
 });

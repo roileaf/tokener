@@ -2439,6 +2439,11 @@
   cursor: pointer;
 }
 
+.pf2e-tokener-creator-app .pf2e-tokener-creator-check:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-check input {
   position: absolute;
   width: 1px;
@@ -2748,6 +2753,7 @@
   display: none;
 }
 
+.pf2e-tokener-creator-app [data-portrait-animate][hidden],
 .pf2e-tokener-creator-app [data-creator-action='mask-region'][hidden],
 .pf2e-tokener-creator-app .pf2e-tokener-creator-effects [hidden] {
   display: none !important;

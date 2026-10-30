@@ -311,6 +311,16 @@
           <input type='color' name='portraitColor' value='{{options.portraitColor}}' />
           <span>{{labels.portraitBackground}}</span>
         </label>
+        <label
+          class='pf2e-tokener-creator-check'
+          data-portrait-animate
+          data-tooltip='{{labels.animatePortraitTooltip}}'
+          hidden
+        >
+          <input type='checkbox' name='animatePortrait' {{#if options.animatePortrait}}checked{{/if}} />
+          <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+          <span>{{labels.animatePortrait}}</span>
+        </label>
         <p class='pf2e-tokener-creator-hint'>{{labels.portraitHint}}</p>
       </section>
 
