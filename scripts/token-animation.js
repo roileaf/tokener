@@ -17,6 +17,7 @@ import {
   isEffectActive,
 } from './animation-effects.js';
 import { buildWarpGrid, sampleGrid, warpImageData } from './puppet-warp.js';
+import { clipFrameIndex, drawClipFrame } from './sequencer-clips.js';
 import { buildRegionField, moveGridByRegions } from './region-motion.js';
 import { getTokenFrameLayout } from './token-composer.js';
 
@@ -464,7 +465,8 @@ function getEmitter({ effect, source, isRegion, layout, size, createCanvas }) {
  * the plain still token. Returns `bent` (`{ art, popOut, background, regions }` or null), which
  * callers may pass back as `bent` to skip bending an identical pose again. `effectClip`
  * (`{ x, y, radius }` in context px, e.g. the token ring's opening) keeps the effects drawn over
- * the frame (region glow and particles) inside that circle.
+ * the frame (region glow, particles and clips not set free) inside that circle. `clips` maps a
+ * Sequencer clip's file to its decoded `{ duration, frames }`; clips not loaded yet are skipped.
  */
 export function renderAnimationFrame({
   context,
@@ -477,6 +479,7 @@ export function renderAnimationFrame({
   drawFrame,
   bent: prepared,
   effectClip = null,
+  clips = null,
 }) {
   if (!hasMotion(animation)) {
     drawFrame(context, null);
@@ -547,8 +550,44 @@ export function renderAnimationFrame({
     });
     drawParticles(context, { effect, emitter, t, size });
   }
+  drawClips(context, { effects, clips, placement: 'frame', cutout, view, size, animation, t });
   context.restore();
+  drawClips(context, { effects, clips, placement: 'free', cutout, view, size, animation, t });
   return bent;
+}
+
+/**
+ * Draws the Sequencer clips placed `placement` ('frame' or 'free'): each centred on its pin as
+ * the pin moves (or on the token's centre), offset and sized by the token size, turned by its
+ * angle plus the pin's own turn.
+ */
+function drawClips(context, { effects, clips, placement, cutout, view, size, animation, t }) {
+  let layout = null;
+  for (const effect of effects) {
+    if (effect.type !== 'sequencer' || effect.clip !== placement || !effect.file) continue;
+    const clip = clips?.get?.(effect.file);
+    const index = clipFrameIndex(clip, t, Number(animation.duration) || 1);
+    if (index < 0) continue;
+    let x = size / 2;
+    let y = size / 2;
+    let turn = 0;
+    const pin = effect.pin ? (animation.pins ?? []).find((item) => item.id === effect.pin) : null;
+    if (pin) {
+      layout ??= getArtLayout(cutout, view, size);
+      const offset = samplePinOffset(pin, t, animation.mode);
+      x = layout.x + ((pin.x + offset.dx) * layout.width) / cutout.width;
+      y = layout.y + ((pin.y + offset.dy) * layout.height) / cutout.height;
+      turn = offset.rot || 0;
+    }
+    drawClipFrame(context, clip.frames[index], {
+      x: x + effect.offsetX * size,
+      y: y + effect.offsetY * size,
+      width: effect.size * size,
+      rotation: (effect.angle * Math.PI) / 180 + turn,
+      opacity: effect.opacity,
+      origin: effect.origin,
+    });
+  }
 }
 
 /** The edge of the saved WebM: the chosen output size, capped at `MAX_ANIMATED_SIZE`. */

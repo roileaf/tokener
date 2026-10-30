@@ -2288,3 +2288,35 @@ test('keeping the original inside the frame is a saved creator option', async ()
   assert.equal(normalizeTokenCreatorOptions({ originalInside: 1 }).originalInside, true);
   assert.equal(normalizeTokenCreatorOptions({}).originalInside, false);
 });
+
+test('breakout room reaches 150% so effects set free have space past the frame', async () => {
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  assert.equal(normalizeTokenCreatorOptions({ breakoutRoom: 150 }).breakoutRoom, 150);
+  assert.equal(normalizeTokenCreatorOptions({ breakoutRoom: 400 }).breakoutRoom, 150);
+  assert.equal(normalizeTokenCreatorOptions({ breakoutRoom: 72 }).breakoutRoom, 70);
+});
+
+test('more breakout room shrinks the art with the frame, so only the space around it grows', async () => {
+  const { getRingScale, getTokenFrameLayout, scaleViewForRoom } =
+    await import('../scripts/token-composer.js');
+  const view = { zoom: 1.2, offsetX: 0.1, offsetY: -0.05 };
+  const scaled = scaleViewForRoom(view, 25, 120);
+  const ratio = getRingScale(120) / getRingScale(25);
+  assert.ok(Math.abs(scaled.zoom - 1.2 * ratio) < 1e-9);
+  // The art keeps its place and size relative to the frame's centre.
+  const layout = (v) =>
+    getTokenFrameLayout({
+      imageWidth: 300,
+      imageHeight: 200,
+      size: 400,
+      zoom: v.zoom,
+      offsetX: v.offsetX * 400,
+      offsetY: v.offsetY * 400,
+    });
+  const before = layout(view);
+  const after = layout(scaled);
+  assert.ok(Math.abs(after.width - before.width * ratio) < 1e-6);
+  assert.ok(Math.abs(after.x - 200 - (before.x - 200) * ratio) < 1e-6);
+  assert.ok(Math.abs(after.y - 200 - (before.y - 200) * ratio) < 1e-6);
+  assert.deepEqual(scaleViewForRoom(view, 40, 40), view);
+});
