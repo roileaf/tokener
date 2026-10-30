@@ -1128,7 +1128,7 @@ function refreshPointerMode(app, event) {
   renderCreatorPreview(app);
 }
 
-function handleCreatorInput(app, event) {
+export function handleCreatorInput(app, event) {
   const target = event.target;
   const name = target?.name;
   if (target?.dataset?.effectParam) {
@@ -1156,7 +1156,7 @@ function handleCreatorInput(app, event) {
     setPrimaryKeyframe(app, { rot: (degrees * Math.PI) / 180 });
     return;
   }
-  if (!name || !(name in app.creatorOptions)) return;
+  if (!getCreatorOptionKey(name, app.creatorOptions)) return;
 
   updateCreatorOption(app, target);
   updateValueLabel(target);
@@ -1164,7 +1164,7 @@ function handleCreatorInput(app, event) {
   else renderCreatorPreview(app);
 }
 
-async function handleCreatorChange(app, event) {
+export async function handleCreatorChange(app, event) {
   const target = event.target;
   if (target?.name === 'upload') {
     const file = target.files?.[0];
@@ -1205,7 +1205,7 @@ async function handleCreatorChange(app, event) {
     if (KEYFRAME_EASES.includes(target.value)) setPrimaryKeyframe(app, { ease: target.value });
     return;
   }
-  if (!target?.name || !(target.name in app.creatorOptions)) return;
+  if (!getCreatorOptionKey(target?.name, app.creatorOptions)) return;
   updateCreatorOption(app, target);
   saveCreatorDefaults(app.creatorOptions);
   if (target.name === 'portraitBackground') syncPortraitControls(app);
@@ -4235,12 +4235,32 @@ function syncBackgroundControls(app) {
 
 function updateCreatorOption(app, input) {
   const value = input.type === 'checkbox' ? input.checked : input.value;
-  const [group, key] = String(input.name).split('.');
+  const path = getCreatorOptionKey(input.name, app.creatorOptions);
+  if (!path) return;
   app.creatorOptions = normalizeTokenCreatorOptions(
-    key
-      ? { ...app.creatorOptions, [group]: { ...app.creatorOptions[group], [key]: value } }
-      : { ...app.creatorOptions, [input.name]: value },
+    path.key
+      ? {
+          ...app.creatorOptions,
+          [path.group]: { ...app.creatorOptions[path.group], [path.key]: value },
+        }
+      : { ...app.creatorOptions, [path.group]: value },
   );
+}
+
+const NESTED_OPTION_GROUPS = Object.freeze(['ringEffects']);
+
+/**
+ * Maps an input name to the creator option it edits: a flat option name, or `group.key` for a
+ * whitelisted nested group such as `ringEffects.pulse`. Anything else is not an option.
+ */
+export function getCreatorOptionKey(name, options = {}) {
+  if (typeof name !== 'string' || !name) return null;
+  if (!name.includes('.')) return name in options ? { group: name, key: null } : null;
+  const [group, key, ...rest] = name.split('.');
+  if (rest.length || !NESTED_OPTION_GROUPS.includes(group)) return null;
+  const nested = options[group];
+  if (!nested || typeof nested !== 'object' || !(key in nested)) return null;
+  return { group, key };
 }
 
 function updateValueLabel(input) {

@@ -1425,3 +1425,31 @@ test('creator options default every ring effect to off and normalize them defens
     { pulse: true, gradient: false, wave: true, spectral: false },
   );
 });
+
+test('getCreatorOptionKey accepts flat and whitelisted nested option names only', async () => {
+  const { getCreatorOptionKey, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  const options = normalizeTokenCreatorOptions();
+  assert.deepEqual(getCreatorOptionKey('ringEffects.pulse', options), {
+    group: 'ringEffects',
+    key: 'pulse',
+  });
+  assert.deepEqual(getCreatorOptionKey('popOut', options), { group: 'popOut', key: null });
+  assert.equal(getCreatorOptionKey('ringEffects.bogus', options), null);
+  assert.equal(getCreatorOptionKey('borderWidth.x', options), null);
+  assert.equal(getCreatorOptionKey('ringEffects.pulse.x', options), null);
+  assert.equal(getCreatorOptionKey('nope', options), null);
+  assert.equal(getCreatorOptionKey('', options), null);
+});
+
+test('ring effect checkboxes update creator options through the real handlers', async () => {
+  const { handleCreatorInput, handleCreatorChange, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  for (const handler of [handleCreatorInput, handleCreatorChange]) {
+    const app = { creatorOptions: normalizeTokenCreatorOptions(), parts: {}, element: null };
+    const target = { name: 'ringEffects.pulse', type: 'checkbox', checked: true };
+    await handler(app, { target });
+    assert.equal(app.creatorOptions.ringEffects.pulse, true);
+    assert.equal(app.creatorOptions.ringEffects.wave, false);
+  }
+});
