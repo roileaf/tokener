@@ -32,7 +32,24 @@ import {
   stepBrushSize,
   stepViewScale,
 } from './creator-shortcuts.js';
+import {
+  ANIMATION_PRESETS,
+  applyPreset,
+  createPin,
+  hasMotion,
+  normalizeAnimation,
+  removeKeyframe,
+  samplePinOffset,
+  setKeyframe,
+} from './animation.js';
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
+import {
+  bendTokenArt,
+  getPinPreviewPoints,
+  isAnchorPin,
+  resetAnimationForNewSource,
+} from './token-animation.js';
+import { canEncodeAnimation } from './webm-alpha.js';
 import {
   colorizeRingBackground,
   colorizeRingFrame,
@@ -104,6 +121,14 @@ const COMPOSE_THUMBNAIL_SIZE = 104;
 // picked the whole character instead of a part.
 const COMPOSE_MAX_PART_SHARE = 0.25;
 const VIEW_CONTEXT_ALPHA = 0.28;
+const PIN_RADIUS = 5;
+const PIN_HIT_RADIUS = 10;
+const PIN_COLOR = '#8fb9d6';
+const PIN_SELECTED_COLOR = '#ffd166';
+const PRESET_AMPLITUDE = 0.03;
+const LOOP_LENGTHS = [1, 1.5, 2, 2.5, 3, 3.5, 4];
+// Keyframes closer than this to the current time count as "at" it (matches animation.js merging).
+const KEYFRAME_TOLERANCE = 1 / 120;
 const TEXT_ENTRY_SELECTOR =
   'input:not([type]), input[type="text"], input[type="search"], input[type="number"], textarea, select, [contenteditable="true"]';
 
@@ -270,6 +295,12 @@ export function getTokenCreatorApplicationClass() {
       this._maskHistory = { undo: [], redo: [] };
       this._pointer = null;
       this.viewport = { scale: 1, panX: 0, panY: 0 };
+      // Token animation: pins in source-image pixels, time as a fraction of the loop.
+      this.animation = normalizeAnimation(null);
+      this.animationTime = 0;
+      this.selectedPinId = null;
+      this.animationPlaying = false;
+      this._animationFrame = null;
       this._onPaste = (event) => void handleCreatorPaste(this, event);
       this._onKeyDown = (event) => handleCreatorKeyDown(this, event);
       this._onKeyUp = (event) => {
@@ -339,6 +370,7 @@ export function getTokenCreatorApplicationClass() {
     }
 
     async _onClose(options) {
+      stopAnimationPlayback(this);
       globalThis.removeEventListener?.('paste', this._onPaste);
       globalThis.removeEventListener?.('keydown', this._onKeyDown, true);
       globalThis.removeEventListener?.('keyup', this._onKeyUp, true);
@@ -406,7 +438,42 @@ function prepareCreatorContext(app) {
       selected: options.outputSize === size,
     })),
     applyActions: actions,
+    animation: {
+      available: canEncodeAnimation(),
+      time: formatLoopPercent(app.animationTime),
+      timeValue: Math.round(app.animationTime * 1000) / 10,
+      lengths: LOOP_LENGTHS.map((seconds) => ({
+        value: seconds,
+        label: `${seconds} s`,
+        selected: app.animation.duration === seconds,
+      })),
+      presets: ANIMATION_PRESETS.map((preset) => ({
+        value: preset,
+        label: localize(
+          `Creator.Animate.${preset[0].toUpperCase()}${preset.slice(1)}`,
+          `${preset[0].toUpperCase()}${preset.slice(1)}`,
+        ),
+      })),
+    },
     labels: {
+      animateTitle: localize('Creator.Animate.Title', 'Animate'),
+      animatePlay: localize('Creator.Animate.Play', 'Play'),
+      animatePause: localize('Creator.Animate.Pause', 'Pause'),
+      animateAddKeyframe: localize('Creator.Animate.AddKeyframe', 'Add keyframe'),
+      animateRemoveKeyframe: localize('Creator.Animate.RemoveKeyframe', 'Remove keyframe'),
+      animateLength: localize('Creator.Animate.Length', 'Loop length'),
+      animateHint: localize(
+        'Creator.Animate.Hint',
+        "Keep moves small: parts can't reveal what is behind them.",
+      ),
+      animateUnavailable: localize(
+        'Creator.Animate.Unavailable',
+        'Animated tokens need Foundry opened over https or localhost.',
+      ),
+      pinTooltip: localize(
+        'Creator.Animate.PinTooltip',
+        'Pins: click to add, drag to move or keyframe at the current time, right-click to remove (P)',
+      ),
       source: localize('Creator.Source', 'Image'),
       browse: localize('Creator.Browse', 'Browse files'),
       upload: localize('Creator.Upload', 'Upload'),
@@ -580,6 +647,7 @@ function activateCreatorListeners(app) {
   const canvas = root.querySelector('.pf2e-tokener-creator-preview');
   if (canvas) bindPreviewInteractions(app, canvas);
   syncMaskControls(app);
+  syncAnimationControls(app);
 }
 
 function bindPreviewInteractions(app, canvas) {
@@ -587,11 +655,7 @@ function bindPreviewInteractions(app, canvas) {
   const updatePointer = (event) => {
     app._pointer = {
       ...getTokenPoint(app, canvas, event),
-      mode: getStrokeMode({
-        tool: app.maskTool,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-      }),
+      mode: getPointerMode(app, event),
     };
   };
 
@@ -612,6 +676,13 @@ function bindPreviewInteractions(app, canvas) {
         panY: app.viewport.panY,
       };
       canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
+    if (app.maskTool === 'pin') {
+      event.preventDefault();
+      if (!canEditPins(app)) return;
+      drag = startPinDrag(app, getTokenPoint(app, canvas, event), event.button);
+      if (drag) canvas.setPointerCapture?.(event.pointerId);
       return;
     }
     if (isCleanupTool(app.maskTool) && app.cutout) {
@@ -681,6 +752,10 @@ function bindPreviewInteractions(app, canvas) {
       renderCreatorPreview(app);
       return;
     }
+    if (drag.pinId) {
+      dragPin(app, drag, getTokenPoint(app, canvas, event));
+      return;
+    }
     if (drag.mode) {
       const point = getTokenPoint(app, canvas, event);
       if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
@@ -696,8 +771,10 @@ function bindPreviewInteractions(app, canvas) {
     renderCreatorPreview(app);
   });
   const endDrag = () => {
+    const wasPin = Boolean(drag?.pinId);
     drag = null;
     syncMaskControls(app);
+    if (wasPin) syncAnimationControls(app);
   };
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
@@ -758,6 +835,9 @@ function handleCreatorKeyDown(app, event) {
     case 'tool-move':
       setMaskTool(app, null);
       return;
+    case 'tool-pin':
+      selectPinTool(app);
+      return;
     case 'swap':
       if (isCleanupTool(app.maskTool))
         selectMaskTool(app, app.maskTool === 'cut' ? 'restore' : 'cut');
@@ -797,11 +877,7 @@ function isCreatorKeyboardTarget(app, event) {
 
 function refreshPointerMode(app, event) {
   if (!app._pointer) return;
-  app._pointer.mode = getStrokeMode({
-    tool: app.maskTool,
-    shiftKey: event.shiftKey,
-    altKey: event.altKey,
-  });
+  app._pointer.mode = getPointerMode(app, event);
   syncBrushCursor(app);
   renderCreatorPreview(app);
 }
@@ -815,6 +891,11 @@ function handleCreatorInput(app, event) {
   }
   if (name === 'brushSize') {
     setBrushSize(app, Number(target.value));
+    return;
+  }
+  if (name === 'animationTime') {
+    stopAnimationPlayback(app);
+    setAnimationTime(app, Number(target.value) / 100);
     return;
   }
   if (!name || !(name in app.creatorOptions)) return;
@@ -839,6 +920,11 @@ async function handleCreatorChange(app, event) {
   }
   if (target?.name === 'portraitImage') {
     setPortraitImageMode(app, target.value);
+    return;
+  }
+  if (target?.name === 'animationDuration') {
+    app.animation = normalizeAnimation({ ...app.animation, duration: Number(target.value) });
+    syncAnimationControls(app);
     return;
   }
   if (!target?.name || !(target.name in app.creatorOptions)) return;
@@ -886,6 +972,26 @@ async function handleCreatorClick(app, event) {
     }
     case 'mask-move':
       setMaskTool(app, null);
+      return;
+    case 'mask-pin':
+      selectPinTool(app);
+      return;
+    case 'animation-play':
+      if (app.animationPlaying) stopAnimationPlayback(app);
+      else startAnimationPlayback(app);
+      return;
+    case 'keyframe-add':
+      addKeyframeAtTime(app);
+      return;
+    case 'keyframe-remove':
+      removeKeyframeAtTime(app);
+      return;
+    case 'keyframe-seek':
+      stopAnimationPlayback(app);
+      setAnimationTime(app, Number(button.dataset.time));
+      return;
+    case 'animation-preset':
+      applyAnimationPreset(app, button.dataset.preset);
       return;
     case 'mask-paint':
     case 'mask-erase':
@@ -1019,6 +1125,7 @@ async function loadCreatorSource(app, { path, file }) {
       app.popOutMask = null;
       app._maskVersion += 1;
       app.view = { zoom: 1, offsetX: 0, offsetY: 0 };
+      clearAnimationPins(app);
     }
     syncZoomInput(app);
     await updateCutout(app);
@@ -1184,6 +1291,7 @@ export async function useEditedPortraitAsToken(app) {
   app._maskVersion += 1;
   app._maskHistory = { undo: [], redo: [] };
   app.view = { zoom: 1, offsetX: 0, offsetY: 0 };
+  clearAnimationPins(app);
 
   const radio = getCreatorRoot(app)?.querySelector('input[name="editTarget"][value="token"]');
   if (radio) radio.checked = true;
@@ -1242,7 +1350,8 @@ function renderCreatorPreview(app) {
   const tokenContext = token.getContext('2d');
   const portraitMode = app.editTarget === 'portrait';
   if (portraitMode) drawPortraitPreview(tokenContext, app, size);
-  else drawCreatedToken(tokenContext, app, size, { preview: true });
+  else
+    drawCreatedToken(tokenContext, app, size, { preview: true, bent: getPreviewBend(app, size) });
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
   if (!portraitMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
 
@@ -1252,6 +1361,7 @@ function renderCreatorPreview(app) {
   if (isFramed) drawViewContext(context, app, viewport, size);
   context.drawImage(token, viewport.x, viewport.y, viewport.size, viewport.size);
   if (isFramed) drawTokenBounds(context, viewport);
+  drawPins(context, app, viewport, size);
   drawBrushCursor(context, app, viewport);
 }
 
@@ -1343,6 +1453,7 @@ function renderPortraitCanvas(app) {
 
 function setEditTarget(app, target) {
   app.editTarget = target === 'portrait' ? 'portrait' : 'token';
+  if (app.editTarget === 'portrait') stopAnimationPlayback(app);
   if (app.editTarget === 'portrait' && !isCleanupTool(app.maskTool)) setMaskTool(app, null);
   getCreatorSection(app)?.setAttribute('data-edit-target', app.editTarget);
   syncZoomInput(app);
@@ -1467,6 +1578,353 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
   });
 }
 
+/** Pointer mode for the brush cursor; the pin tool never paints. */
+function getPointerMode(app, event) {
+  if (app.maskTool === 'pin') return null;
+  return getStrokeMode({ tool: app.maskTool, shiftKey: event.shiftKey, altKey: event.altKey });
+}
+
+/** Pins and playback work on the token art only, and only where the loop can be encoded. */
+function canEditPins(app) {
+  return Boolean(app.cutout && app.editTarget !== 'portrait' && canEncodeAnimation());
+}
+
+function selectPinTool(app) {
+  if (canEditPins(app)) setMaskTool(app, 'pin');
+}
+
+function isAtTime(keyTime, t) {
+  return Math.abs(keyTime - t) < KEYFRAME_TOLERANCE;
+}
+
+function formatLoopPercent(t) {
+  return `${Math.round(t * 100)}%`;
+}
+
+function getSelectedPin(app) {
+  return app.animation.pins.find((pin) => pin.id === app.selectedPinId) ?? null;
+}
+
+/** Presets go on the selected pin, or else on every pin that already moves. */
+function getPresetTargets(app) {
+  const selected = getSelectedPin(app);
+  if (selected) return [selected.id];
+  return app.animation.pins.filter((pin) => !isAnchorPin(pin)).map((pin) => pin.id);
+}
+
+function setAnimationPins(app, pins) {
+  app.animation = { ...app.animation, pins };
+  if (!pins.some((pin) => pin.id === app.selectedPinId)) app.selectedPinId = null;
+  if (!pins.length) stopAnimationPlayback(app);
+}
+
+function updateAnimationPin(app, id, change) {
+  setAnimationPins(
+    app,
+    app.animation.pins.map((pin) => (pin.id === id ? change(pin) : pin)),
+  );
+}
+
+/** Pins belong to the token image they were placed on, so a new image starts without any. */
+function clearAnimationPins(app) {
+  stopAnimationPlayback(app);
+  app.animation = resetAnimationForNewSource(app.animation);
+  app.selectedPinId = null;
+  app._previewBend = null;
+  syncAnimationControls(app);
+}
+
+function setAnimationTime(app, t) {
+  const value = Number(t);
+  app.animationTime = Number.isFinite(value) ? Math.min(0.999, Math.max(0, value)) : 0;
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+function previewPointToSource(app, point) {
+  return previewPointToImage({
+    layout: getPreviewLayout(app),
+    imageWidth: app.cutout.width,
+    imageHeight: app.cutout.height,
+    x: point.x,
+    y: point.y,
+  });
+}
+
+/** The pin dot nearest to a token-space preview point, within the hit radius on screen. */
+function findPinAt(app, point) {
+  const points = getPinPreviewPoints({
+    pins: app.animation.pins,
+    layout: getPreviewLayout(app),
+    cutoutWidth: app.cutout.width,
+    t: app.animationTime,
+  });
+  let best = null;
+  let bestDistance = PIN_HIT_RADIUS / (app.viewport.scale || 1);
+  for (const candidate of points) {
+    const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
+    if (distance <= bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * Pin tool press: right-click removes the pin under the pointer; a left press selects that pin or
+ * adds one, and returns the drag that follows. Dragging places the pin (new pins, or while the
+ * animation has no keyframes yet) or keyframes its offset at the current time.
+ */
+function startPinDrag(app, point, button) {
+  const hit = findPinAt(app, point);
+  if (button === 2) {
+    if (hit) {
+      setAnimationPins(
+        app,
+        app.animation.pins.filter((pin) => pin.id !== hit.id),
+      );
+      syncAnimationControls(app);
+      renderCreatorPreview(app);
+    }
+    return null;
+  }
+  if (button !== 0) return null;
+  stopAnimationPlayback(app);
+  const source = previewPointToSource(app, point);
+  let pin = hit ? app.animation.pins.find((entry) => entry.id === hit.id) : null;
+  const placing = !pin;
+  if (!pin) {
+    const { width, height } = app.cutout;
+    if (source.x < 0 || source.y < 0 || source.x >= width || source.y >= height) return null;
+    pin = createPin({ x: source.x, y: source.y });
+    setAnimationPins(app, [...app.animation.pins, pin]);
+  }
+  app.selectedPinId = pin.id;
+  const offset = samplePinOffset(pin, app.animationTime);
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+  return {
+    pinId: pin.id,
+    moveRest: placing || !app.animation.pins.some((entry) => entry.keyframes.length),
+    grabX: source.x - (pin.x + offset.dx),
+    grabY: source.y - (pin.y + offset.dy),
+  };
+}
+
+function dragPin(app, drag, point) {
+  const source = previewPointToSource(app, point);
+  const x = source.x - drag.grabX;
+  const y = source.y - drag.grabY;
+  updateAnimationPin(app, drag.pinId, (pin) =>
+    drag.moveRest
+      ? { ...pin, x, y }
+      : setKeyframe(pin, app.animationTime, { dx: x - pin.x, dy: y - pin.y }),
+  );
+  renderCreatorPreview(app);
+}
+
+function addKeyframeAtTime(app) {
+  const pin = getSelectedPin(app);
+  if (!pin || !canEditPins(app)) return;
+  stopAnimationPlayback(app);
+  const t = app.animationTime;
+  updateAnimationPin(app, pin.id, (entry) => setKeyframe(entry, t, samplePinOffset(entry, t)));
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+function removeKeyframeAtTime(app) {
+  const pin = getSelectedPin(app);
+  if (!pin || !canEditPins(app)) return;
+  stopAnimationPlayback(app);
+  updateAnimationPin(app, pin.id, (entry) => removeKeyframe(entry, app.animationTime));
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+function applyAnimationPreset(app, preset) {
+  if (!ANIMATION_PRESETS.includes(preset) || !canEditPins(app)) return;
+  const ids = getPresetTargets(app);
+  if (!ids.length) return;
+  const amplitude = PRESET_AMPLITUDE * Math.max(app.cutout.width, app.cutout.height);
+  setAnimationPins(app, applyPreset(app.animation.pins, ids, preset, { amplitude }));
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+function startAnimationPlayback(app) {
+  const requestFrame = globalThis.requestAnimationFrame;
+  if (app.animationPlaying || !canEditPins(app) || typeof requestFrame !== 'function') return;
+  app.animationPlaying = true;
+  let last = null;
+  const step = (now) => {
+    app._animationFrame = null;
+    if (!app.animationPlaying) return;
+    if (!app.rendered || !canEditPins(app)) {
+      stopAnimationPlayback(app);
+      return;
+    }
+    if (last !== null) {
+      const t = app.animationTime + (now - last) / 1000 / app.animation.duration;
+      app.animationTime = t - Math.floor(t);
+    }
+    last = now;
+    renderCreatorPreview(app);
+    syncAnimationTime(app);
+    app._animationFrame = requestFrame(step);
+  };
+  app._animationFrame = requestFrame(step);
+  syncAnimationControls(app);
+}
+
+function stopAnimationPlayback(app) {
+  const wasPlaying = app.animationPlaying;
+  app.animationPlaying = false;
+  if (app._animationFrame !== null && app._animationFrame !== undefined)
+    globalThis.cancelAnimationFrame?.(app._animationFrame);
+  app._animationFrame = null;
+  if (wasPlaying) syncAnimationControls(app);
+}
+
+/**
+ * The token art bent to the current loop time, or null to draw it still: in the portrait, with
+ * no motion, or while a mask or touch-up tool edits the unbent art. Cached per pose.
+ */
+function getPreviewBend(app, size) {
+  if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return null;
+  if (app.maskTool && app.maskTool !== 'pin') return null;
+  const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
+  const key = {
+    animation: app.animation,
+    t: app.animationTime,
+    zoom: app.view.zoom,
+    offsetX: app.view.offsetX,
+    offsetY: app.view.offsetY,
+    cutout: app.cutout,
+    popOutImage,
+    size,
+  };
+  const cached = app._previewBend;
+  if (cached && Object.keys(key).every((name) => cached.key[name] === key[name]))
+    return cached.bent;
+  const bent = bendTokenArt({
+    cutout: app.cutout,
+    popOutImage,
+    view: app.view,
+    size,
+    animation: app.animation,
+    t: app.animationTime,
+    createCanvas,
+  });
+  app._previewBend = { key, bent };
+  return bent;
+}
+
+/** Pin dots while the pin tool is active: selected pins get a gold ring, anchors are hollow. */
+function drawPins(context, app, viewport, size) {
+  if (app.maskTool !== 'pin' || !canEditPins(app) || !app.animation.pins.length) return;
+  const points = getPinPreviewPoints({
+    pins: app.animation.pins,
+    layout: getPreviewLayout(app, size),
+    cutoutWidth: app.cutout.width,
+    t: app.animationTime,
+    selectedId: app.selectedPinId,
+  });
+  for (const point of points) {
+    const x = viewport.x + point.x * viewport.scale;
+    const y = viewport.y + point.y * viewport.scale;
+    context.save();
+    context.beginPath();
+    context.arc(x, y, PIN_RADIUS, 0, Math.PI * 2);
+    context.lineWidth = 3.5;
+    context.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    context.stroke();
+    if (!point.anchor) {
+      context.fillStyle = PIN_COLOR;
+      context.fill();
+    }
+    context.lineWidth = 1.5;
+    context.strokeStyle = PIN_COLOR;
+    context.stroke();
+    if (point.selected) {
+      context.beginPath();
+      context.arc(x, y, PIN_RADIUS + 3.5, 0, Math.PI * 2);
+      context.lineWidth = 2;
+      context.strokeStyle = PIN_SELECTED_COLOR;
+      context.stroke();
+    }
+    context.restore();
+  }
+}
+
+function syncAnimationControls(app) {
+  const root = getCreatorRoot(app);
+  if (!root?.querySelectorAll) return;
+  const available = canEncodeAnimation();
+  getAnimationSection(app)?.setAttribute('data-available', available ? 'true' : 'false');
+  const pin = getSelectedPin(app);
+  const atKeyframe = Boolean(pin?.keyframes.some((key) => isAtTime(key.t, app.animationTime)));
+  const hasPresetTargets = getPresetTargets(app).length > 0;
+  const enabled = available && Boolean(app.cutout) && !app.busy;
+  root.querySelectorAll('[data-animation-control]').forEach((control) => {
+    const action = control.dataset.creatorAction;
+    let disabled = !enabled;
+    if (action === 'keyframe-add') disabled ||= !pin;
+    if (action === 'keyframe-remove') disabled ||= !atKeyframe;
+    if (action === 'animation-preset') disabled ||= !hasPresetTargets;
+    control.disabled = disabled;
+  });
+
+  const play = root.querySelector('[data-creator-action="animation-play"]');
+  if (play) {
+    const label = app.animationPlaying
+      ? localize('Creator.Animate.Pause', 'Pause')
+      : localize('Creator.Animate.Play', 'Play');
+    play.classList.toggle('is-active', app.animationPlaying);
+    play.setAttribute('aria-pressed', app.animationPlaying ? 'true' : 'false');
+    play.setAttribute('aria-label', label);
+    play.dataset.tooltip = label;
+    const icon = play.querySelector('i');
+    if (icon) icon.className = `fas fa-${app.animationPlaying ? 'pause' : 'play'}`;
+  }
+  const duration = root.querySelector('select[name="animationDuration"]');
+  if (duration) duration.value = String(app.animation.duration);
+
+  const row = root.querySelector('[data-animation-keyframes]');
+  if (row) {
+    row.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => marker.remove());
+    for (const key of pin?.keyframes ?? []) {
+      const marker = row.ownerDocument.createElement('button');
+      marker.type = 'button';
+      marker.className = 'pf2e-tokener-creator-keyframe';
+      marker.dataset.creatorAction = 'keyframe-seek';
+      marker.dataset.time = String(key.t);
+      marker.style.left = `${key.t * 100}%`;
+      marker.setAttribute('aria-label', formatLoopPercent(key.t));
+      marker.disabled = !enabled;
+      row.append(marker);
+    }
+  }
+  syncAnimationTime(app);
+}
+
+/** Cheap per-frame update of the scrub slider, time label, playhead and current-keyframe marks. */
+function syncAnimationTime(app) {
+  const root = getCreatorRoot(app);
+  if (!root?.querySelector) return;
+  const t = app.animationTime;
+  const slider = root.querySelector('input[name="animationTime"]');
+  if (slider) slider.value = String(Math.round(t * 1000) / 10);
+  const label = root.querySelector('[data-animation-time]');
+  if (label) label.textContent = formatLoopPercent(t);
+  const playhead = root.querySelector('[data-animation-playhead]');
+  if (playhead) playhead.style.left = `${t * 100}%`;
+  root.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => {
+    marker.classList.toggle('is-current', isAtTime(Number(marker.dataset.time), t));
+  });
+}
+
 function isPopOutEnabled(app) {
   return app.creatorOptions.popOut && app.creatorOptions.backgroundMode !== 'none';
 }
@@ -1481,15 +1939,17 @@ function canMask(app) {
 }
 
 function shouldShowMaskOverlay(app) {
-  if (isCleanupTool(app.maskTool)) return false;
+  if (isCleanupTool(app.maskTool) || app.maskTool === 'pin') return false;
   return canMask(app) && Boolean(app.maskTool || app._pointer?.mode);
 }
 
 function setMaskTool(app, tool) {
+  // Mask and touch-up tools edit the still art, so playback stops when one is picked.
+  if (tool !== 'pin') stopAnimationPlayback(app);
   app.maskTool = tool;
-  if (tool && !isCleanupTool(tool)) ensurePopOutMask(app);
+  if (tool && tool !== 'pin' && !isCleanupTool(tool)) ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
-  if (app._pointer) app._pointer.mode = tool;
+  if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool;
   syncMaskControls(app);
   syncBrushCursor(app);
   renderCreatorPreview(app);
@@ -1751,7 +2211,7 @@ function syncMaskControls(app) {
   const root = getCreatorRoot(app);
   if (!root) return;
   const tool = app.maskTool ?? 'move';
-  const tools = ['move', 'paint', 'erase', 'select', 'cut', 'restore', 'wand'];
+  const tools = ['move', 'paint', 'erase', 'select', 'cut', 'restore', 'wand', 'pin'];
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
@@ -1771,6 +2231,7 @@ function syncBrushCursor(app) {
     'is-selecting',
     Boolean(app.cutout && (app.maskTool === 'wand' || (canMask(app) && app.maskTool === 'select'))),
   );
+  stage?.classList.toggle('is-pinning', app.maskTool === 'pin' && canEditPins(app));
 }
 
 /**
@@ -2645,10 +3106,16 @@ function setCreatorBusy(app, busy) {
   getCreatorRoot(app)
     ?.querySelectorAll('[data-creator-action]')
     .forEach((button) => (button.disabled = busy));
+  if (!busy) syncAnimationControls(app);
 }
 
 function getCreatorRoot(app) {
   return normalizeHudElement(app?.parts?.main) ?? normalizeHudElement(app?.element);
+}
+
+/** The Animate card, which holds playback, the timeline and the presets. */
+export function getAnimationSection(app) {
+  return getCreatorRoot(app)?.querySelector?.('.pf2e-tokener-creator-animate') ?? null;
 }
 
 /** The template's top-level section, which may be the part element itself rather than a child. */

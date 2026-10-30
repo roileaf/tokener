@@ -1,4 +1,4 @@
-import { hasMotion, samplePins } from './animation.js';
+import { DEFAULT_ANIMATION, hasMotion, samplePinOffset, samplePins } from './animation.js';
 import { buildWarpGrid, warpImageData } from './puppet-warp.js';
 import { getTokenFrameLayout } from './token-composer.js';
 
@@ -52,4 +52,32 @@ export function bendTokenArt({ cutout, popOutImage, view, size, animation, t, cr
   art = warpCanvas(art, grid, size, createCanvas);
   if (popOut) popOut = warpCanvas(popOut, grid, size, createCanvas);
   return { art, popOut };
+}
+
+/** A fresh animation for a newly loaded token image: pins belong to the old art, the loop length stays. */
+export function resetAnimationForNewSource(animation) {
+  return { ...DEFAULT_ANIMATION, ...(animation ?? {}), pins: [] };
+}
+
+/** True when a pin never moves, so it holds the art still around it. */
+export function isAnchorPin(pin) {
+  return !pin.keyframes?.some((k) => k.dx !== 0 || k.dy !== 0);
+}
+
+/**
+ * Maps pins (source-image pixels) to preview points at loop time `t`, using the preview `layout`
+ * of the cut-out (`getPreviewLayout`). Each point says whether it is selected or an anchor.
+ */
+export function getPinPreviewPoints({ pins, layout, cutoutWidth, t = 0, selectedId = null }) {
+  const scale = layout.width / Math.max(1, cutoutWidth);
+  return (pins ?? []).map((pin) => {
+    const { dx, dy } = samplePinOffset(pin, t);
+    return {
+      id: pin.id,
+      x: layout.x + (pin.x + dx) * scale,
+      y: layout.y + (pin.y + dy) * scale,
+      selected: pin.id === selectedId,
+      anchor: isAnchorPin(pin),
+    };
+  });
 }

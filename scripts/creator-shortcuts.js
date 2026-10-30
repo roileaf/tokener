@@ -11,6 +11,7 @@ const KEY_COMMANDS = {
   q: 'tool-cut',
   r: 'tool-restore',
   g: 'tool-wand',
+  p: 'tool-pin',
   v: 'tool-move',
   escape: 'tool-move',
   x: 'swap',
