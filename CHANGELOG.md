@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **AI background removal model** setting (per browser): **Fast** (MODNet, ~7 MB, the default), **Better** (ISNet, ~44 MB) or **Best** (RMBG-1.4, ~44 MB), or **Custom** with any Hugging Face model id that has a transformers.js background-removal build. The larger models cut illustrated art and soft gradient backgrounds more cleanly and take a few seconds per image. ISNet is AGPL-3.0 and RMBG-1.4 is non-commercial, so check the license before commercial use.
+
 ## 2.3.2 - 2026-10-30
 
 ### Changed
