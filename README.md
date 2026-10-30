@@ -90,6 +90,10 @@ Reload after enabling or disabling token art modules so the index can be rebuilt
 
 Right-click a result card to open fullscreen preview.
 
+### Art Index And Rescan
+
+Tokener builds an index of all token art once, in the background after the world loads, so the picker opens instantly; while it is being built the picker shows a loading state. The index is cached in the browser (IndexedDB) and reused until the installed modules or their versions, the custom folder settings, the image tag overrides, or Tokener itself change. Art added in any other way, for example new files copied into an existing module or custom folder, stays hidden until you click **Rescan** in the picker sidebar, which scans every source again. If building the index fails, the picker shows no art and tries again the next time it opens.
+
 ## Apply Actions
 
 | Button     | What It Changes                                                                                                 |
@@ -184,6 +188,7 @@ Original module or datasheet tags are not changed.
 Click **Create token** in the picker sidebar to make a new token from any image. GMs and players with the Upload Files permission can use it.
 
 - Load art with **Browse files**, **Upload**, **Use portrait**, drag-and-drop onto the preview, or paste from the clipboard.
+- **Flip horizontal** and **Flip vertical** (Image card) mirror the image being edited together with its cut-out, touch-ups, pop-out mask, effect regions and pins, so nothing has to be redone. In Portrait mode a portrait linked to the token image flips the token too, while a **Separate image** portrait flips on its own. A flipped image is always saved as a rendered portrait, since the original file is not mirrored. Projects remember the flips.
 - Drag the preview to move the art and scroll or use the zoom slider to resize it. To look closer or further away without changing the token, use the magnifier buttons in the preview corner, **-** / **=** / **0**, or Alt+wheel, and middle-drag to pan the view.
 - **Remove automatically** removes plain or gradient backdrops; tune **Tolerance** and **Edge softness** if it removes too much or too little. **AI model** handles busy backgrounds but downloads a model (~7 MB) from jsDelivr and Hugging Face the first time. AI options only appear when a GM enables **Enable AI-assisted tools** in the module settings.
 - **Auto compose** (below the preview, Token mode) frames the art and chooses what pops out for you, then offers four alternatives as thumbnails; click one to switch. With AI tools enabled it completes long popped parts such as swords and staves.
@@ -198,7 +203,7 @@ Click **Create token** in the picker sidebar to make a new token from any image.
 - **Projects**: every save also writes `<token>.tokener.json` next to the token (sources added by upload or paste are saved as `<token>-source.png`), and the token or prototype remembers it. Opening the creator on that token reloads the whole project (images, framing, options, masks, touch-ups, pins, effects and regions) as long as the token still shows that art. **Open project** in the Image card loads any project file, for example after **Save only**. If a project cannot be loaded the creator stays as it was and shows why. A failed project save never blocks the token save.
 - Switch to **Portrait** above the preview to edit the actor portrait from the same art: pick a shape (original, 1:1, 2:3, 3:4) and a background (original, transparent cut-out or a colour), then drag and zoom to frame it. **Actor**, **Portrait** and **Both** save that portrait; leave it untouched to keep using the original image.
 - To use different art for the token and the portrait, switch to **Portrait** and set **Image** to **Separate image**; anything you load there changes the portrait only. **From portrait** (Token mode) copies the edited portrait in as the token image to frame and experiment with.
-- **Animate portrait** (Portrait card, shown when the token animation moves) saves the portrait as an animated WebP (`<token>-portrait.webp`, 15 fps, up to 512 px on the long side) that plays the token's pins and effects in the portrait's shape, framing and background. Foundry's actor image only accepts images, and browsers animate WebP in character sheets. It needs the portrait to use the token image (not **Separate image**) and a browser that can encode WebP; otherwise the still portrait is saved and the status line says why.
+- **Animate portrait** (Portrait card, shown when the token animation moves) saves the portrait as an animated WebP (`<token>-portrait.webp`, 15 fps, up to 512 px on the long side) that plays the token's pins and effects in the portrait's shape, framing and background. Foundry's actor image only accepts images, and browsers animate WebP in character sheets. It needs a portrait that shows the token's image (the portrait linked to the token, or a separate portrait still showing the token image without its own flip), the token animation to be available, and a browser that can encode WebP; otherwise the still portrait is saved and the status line says why. With the **original** background the uncut image bends with the figure behind it, while glow and particles follow the figure itself.
 - **Save only** writes the file; the apply buttons also update the token or actor like any other Tokener art. Files go to `worlds/<world>/tokener` unless the **Created token folder** setting says otherwise.
 
 ## Custom Folders
@@ -281,6 +286,10 @@ Subject art is only applied when the source provides matching subject art throug
 ### I Enabled A New Token Module But Do Not See It
 
 Reload the Foundry world after enabling or disabling token art modules.
+
+### I Added New Images But Do Not See Them
+
+The art index is cached until installed modules, their versions, folder settings, image tag overrides or Tokener change. Click **Rescan** in the picker sidebar to scan every source again.
 
 ### The Wrong Pack Appears First
 
