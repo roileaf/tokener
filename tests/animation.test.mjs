@@ -368,3 +368,28 @@ test('normalizeAnimation keeps a safe pin region key and drops an unsafe one', (
   assert.equal('region' in out.pins[1], false);
   assert.equal('region' in out.pins[2], false);
 });
+
+test('a preset records itself on the pins it writes; editing a keyframe clears it', () => {
+  const a = { ...createPin({ x: 0, y: 0 }), id: 'a' };
+  const b = { ...createPin({ x: 10, y: 0 }), id: 'b' };
+  const bobbed = applyPreset([a, b], ['a'], 'bob', { amplitude: 4 });
+  assert.equal(bobbed[0].preset, 'bob');
+  assert.equal(bobbed[1].preset, undefined, 'an unselected pin is left alone');
+  // Hover writes every pin.
+  assert.deepEqual(
+    applyPreset([a, b], [], 'hover', { amplitude: 4 }).map((pin) => pin.preset),
+    ['hover', 'hover'],
+  );
+  // A hand edit makes the motion the user's own.
+  assert.equal(setKeyframe(bobbed[0], 0.25, { dx: 1, dy: 0 }).preset, undefined);
+  assert.equal(removeKeyframe(bobbed[0], 0.5).preset, undefined);
+  // Saved with the project, when it names a preset.
+  const [kept, dropped] = normalizeAnimation({
+    pins: [
+      { ...bobbed[0], preset: 'bob' },
+      { ...b, preset: 'nonsense' },
+    ],
+  }).pins;
+  assert.equal(kept.preset, 'bob');
+  assert.equal(dropped.preset, undefined);
+});

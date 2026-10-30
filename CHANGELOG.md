@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The motion preset that made the selected pin's motion (Bob, Breathe, Flap...) is highlighted, including the ones Auto animate picked. Editing that pin's keyframes by hand makes the motion its own and clears the highlight.
 - **Auto animate** and the motion presets (Hover, Breathe, Bob...) switch to the pin tool, so the pins they just moved are visible and ready to adjust.
 - **Breakout room** goes up to 150%, so breath, rays and other effects set free have space past the frame. Changing it now shrinks or grows the art with the frame, so the composition stays the same and only the space around it changes.
 
