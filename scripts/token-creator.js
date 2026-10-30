@@ -1,3 +1,4 @@
+import { buildAutoRig } from './auto-animate.js';
 import {
   composeCandidates,
   DEFAULT_COMPOSE_GRID,
@@ -600,6 +601,11 @@ function prepareCreatorContext(app) {
       animatePause: localize('Creator.Animate.Pause', 'Pause'),
       animateAddKeyframe: localize('Creator.Animate.AddKeyframe', 'Add keyframe'),
       animateRemoveKeyframe: localize('Creator.Animate.RemoveKeyframe', 'Remove keyframe'),
+      animateAuto: localize('Creator.Animate.AutoAnimate', 'Auto animate'),
+      animateAutoTooltip: localize(
+        'Creator.Animate.AutoAnimateTooltip',
+        'Place pins on the head, chest, base and any protruding parts, with a gentle idle loop',
+      ),
       animateLength: localize('Creator.Animate.Length', 'Loop length'),
       animateMode: localize('Creator.Animate.Mode', 'Playback'),
       animateEase: localize('Creator.Animate.Ease', 'Easing'),
@@ -1255,6 +1261,9 @@ async function handleCreatorClick(app, event) {
       return;
     case 'animation-preset':
       applyAnimationPreset(app, button.dataset.preset);
+      return;
+    case 'animation-auto':
+      await runAutoAnimate(app);
       return;
     case 'mask-paint':
     case 'mask-select':
@@ -2605,6 +2614,54 @@ function applyAnimationPreset(app, preset) {
   setAnimationPins(app, applyPreset(pins, ids, preset, { amplitude }));
   syncAnimationControls(app);
   renderCreatorPreview(app);
+}
+
+/** Auto animate: pins and an idle loop from the cut-out's silhouette, after a confirm if pins exist. */
+async function runAutoAnimate(app) {
+  if (!canEditPins(app) || app.busy) return;
+  const cutout = app.cutout;
+  if (app.animation.pins.length) {
+    const confirmed = await confirmAutoAnimate();
+    if (!confirmed || app.cutout !== cutout) return;
+  }
+  const alpha = getAlphaGrid(
+    cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
+  );
+  const { pins, selectedPinIds } = buildAutoRig({
+    alpha,
+    cutoutWidth: cutout.width,
+    cutoutHeight: cutout.height,
+    view: app.view,
+    clipRadius: getComposeClipRadius(app),
+    gridSize: DEFAULT_COMPOSE_GRID,
+  });
+  if (!pins.length) {
+    setCreatorStatus(app, localize('Creator.Animate.AutoEmpty', 'Nothing to animate yet.'), true);
+    return;
+  }
+  stopAnimationPlayback(app);
+  app.animation = { ...app.animation, pins };
+  app.selectedPinIds = selectedPinIds;
+  app._previewBend = null;
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+async function confirmAutoAnimate() {
+  const title = localize('Creator.Animate.AutoAnimate', 'Auto animate');
+  const content = `<p>${localize(
+    'Creator.Animate.AutoConfirm',
+    'Replace the existing pins with automatic ones?',
+  )}</p>`;
+  const dialog = globalThis.foundry?.applications?.api?.DialogV2;
+  if (dialog?.confirm) {
+    return Boolean(await dialog.confirm({ window: { title }, content, rejectClose: false }));
+  }
+  return typeof globalThis.confirm === 'function'
+    ? globalThis.confirm(
+        `${title}: ${localize('Creator.Animate.AutoConfirm', 'Replace the existing pins with automatic ones?')}`,
+      )
+    : true;
 }
 
 function startAnimationPlayback(app) {
