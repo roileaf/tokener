@@ -61,6 +61,26 @@ export function canEncodeAnimation(scope = globalThis) {
 }
 
 /**
+ * Resolves true only when WebCodecs exists here and the browser says it can encode the VP9 profile
+ * the loop uses. Never rejects: any failure counts as unsupported.
+ */
+export async function probeAnimationSupport(scope = globalThis) {
+  if (!canEncodeAnimation(scope)) return false;
+  try {
+    const result = await scope.VideoEncoder.isConfigSupported?.({
+      codec: CODEC,
+      width: 64,
+      height: 64,
+      bitrate: 32768,
+      framerate: 30,
+    });
+    return Boolean(result?.supported);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Mux VP9 chunks into a WebM with alpha. Each frame is `{ color, alpha?, key }` placed at
  * `round(index * frameMs)`. Block timecodes are int16 ms, so loops must stay under ~32 s.
  */
@@ -135,7 +155,31 @@ export function muxAlphaWebm({ width, height, frames, frameMs, durationMs }) {
   return E.concat([header, segment]);
 }
 
-async function encodeStream(makeFrames, { frameUs, encoderConfig }, scope) {
+/** Frames allowed to wait in an encoder before the next one is held back. */
+const MAX_ENCODE_QUEUE = 8;
+/** Fallback poll while waiting on the queue, in case no `dequeue` event arrives. */
+const QUEUE_POLL_MS = 10;
+
+/** Waits until `encoder` has room for another frame (or the session stops). */
+async function waitForEncoderQueue(encoder, isStopped) {
+  while ((encoder.encodeQueueSize ?? 0) > MAX_ENCODE_QUEUE && !isStopped()) {
+    await new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        encoder.removeEventListener?.('dequeue', done);
+        resolve();
+      };
+      const timer = setTimeout(done, QUEUE_POLL_MS);
+      encoder.addEventListener?.('dequeue', done);
+    });
+  }
+}
+
+/**
+ * Encodes one stream. `session.stopped` is set when the sibling stream failed, so this one stops
+ * early; the encoder and any open frame are always closed, also on errors.
+ */
+async function encodeStream(makeFrames, { frameUs, encoderConfig }, scope, session) {
   const chunks = new Array(makeFrames.length);
   let failure = null;
   const encoder = new scope.VideoEncoder({
@@ -148,16 +192,66 @@ async function encodeStream(makeFrames, { frameUs, encoderConfig }, scope) {
       failure = error;
     },
   });
-  encoder.configure(encoderConfig);
-  makeFrames.forEach((makeFrame, index) => {
-    const frame = makeFrame(index * frameUs);
-    encoder.encode(frame, { keyFrame: index === 0 });
-    frame.close();
-  });
-  await encoder.flush();
-  encoder.close();
-  if (failure) throw failure;
-  return chunks;
+  const isStopped = () => Boolean(failure || session.stopped);
+  let frame = null;
+  try {
+    encoder.configure(encoderConfig);
+    for (const [index, makeFrame] of makeFrames.entries()) {
+      await waitForEncoderQueue(encoder, isStopped);
+      if (failure) throw failure;
+      if (session.stopped) throw new Error('Animation encoding stopped');
+      frame = makeFrame(index * frameUs);
+      encoder.encode(frame, { keyFrame: index === 0 });
+      frame.close();
+      frame = null;
+    }
+    try {
+      await encoder.flush();
+    } catch (error) {
+      throw failure ?? error;
+    }
+    if (failure) throw failure;
+    return chunks;
+  } finally {
+    frame?.close();
+    if (encoder.state !== 'closed') {
+      try {
+        encoder.close();
+      } catch {
+        // Already closed by an encoder error.
+      }
+    }
+  }
+}
+
+/**
+ * Runs both streams together. When one fails the other is told to stop, both encoders are closed,
+ * and the first error is rethrown.
+ */
+async function encodeStreams(jobs) {
+  const session = { stopped: false, error: null };
+  const results = await Promise.allSettled(
+    jobs.map((job) =>
+      job(session).catch((error) => {
+        if (!session.stopped) session.error = error;
+        session.stopped = true;
+        throw error;
+      }),
+    ),
+  );
+  if (session.error) throw session.error;
+  return results.map((result) => result.value);
+}
+
+/** Pairs colour and alpha chunks per frame; a missing chunk of either stream is an error. */
+function pairChunks(color, alpha, count) {
+  const frames = [];
+  for (let index = 0; index < count; index++) {
+    if (!color[index]) throw new Error(`Missing encoded frame ${index}`);
+    if (!alpha[index]) throw new Error(`Missing encoded alpha frame ${index}`);
+    frames.push({ color: color[index].data, key: color[index].key, alpha: alpha[index].data });
+  }
+  return frames;
 }
 
 /** Copy RGBA rows into a (possibly larger) transparent buffer of `width` x `height`. */
@@ -216,22 +310,21 @@ export async function encodeAlphaWebm(
     });
   });
 
-  const [color, alpha] = await Promise.all([
-    encodeStream(colorFrames, { frameUs, encoderConfig: { ...base, bitrate } }, scope),
-    encodeStream(
-      alphaFrames,
-      { frameUs, encoderConfig: { ...base, bitrate: Math.round(bitrate / 4) } },
-      scope,
-    ),
+  const [color, alpha] = await encodeStreams([
+    (session) =>
+      encodeStream(colorFrames, { frameUs, encoderConfig: { ...base, bitrate } }, scope, session),
+    (session) =>
+      encodeStream(
+        alphaFrames,
+        { frameUs, encoderConfig: { ...base, bitrate: Math.round(bitrate / 4) } },
+        scope,
+        session,
+      ),
   ]);
   const muxed = muxAlphaWebm({
     width: evenWidth,
     height: evenHeight,
-    frames: color.map((chunk, index) => ({
-      color: chunk.data,
-      key: chunk.key,
-      alpha: alpha[index]?.data,
-    })),
+    frames: pairChunks(color, alpha, frames.length),
     frameMs: 1000 / fps,
     durationMs,
   });

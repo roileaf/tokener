@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { canEncodeAnimation, encodeAlphaWebm, muxAlphaWebm } from '../scripts/webm-alpha.js';
+import {
+  canEncodeAnimation,
+  encodeAlphaWebm,
+  muxAlphaWebm,
+  probeAnimationSupport,
+} from '../scripts/webm-alpha.js';
 
 const MASTERS = new Set([
   '1a45dfa3',
@@ -233,4 +238,143 @@ test('animation encoding needs a secure context with WebCodecs', () => {
     }),
     true,
   );
+});
+
+function makeFrames(count, width = 2, height = 2) {
+  return Array.from({ length: count }, () => ({
+    data: new Uint8ClampedArray(width * height * 4).fill(200),
+    width,
+    height,
+  }));
+}
+
+function encodeWith(scope, count = 3) {
+  return encodeAlphaWebm(
+    { frames: makeFrames(count), width: 2, height: 2, fps: 30, durationMs: 100, bitrate: 1000 },
+    scope,
+  );
+}
+
+test('an encoder error is rethrown and both encoders and frames are closed', async () => {
+  const { log, scope } = makeScope();
+  const Base = scope.VideoEncoder;
+  scope.VideoEncoder = class extends Base {
+    encode(frame, options) {
+      if (frame.format === 'I420' && frame.timestamp > 0) throw new Error('alpha broke');
+      super.encode(frame, options);
+    }
+  };
+  await assert.rejects(encodeWith(scope, 40), /alpha broke/);
+  assert.equal(log.closed, 2);
+  // The colour stream stops early instead of encoding the whole loop.
+  assert.ok(log.encodes.filter((e) => e.format === 'RGBX').length < 40);
+  assert.ok(log.frames.every((f) => f.closed));
+});
+
+test('an error reported through the encoder callback is rethrown', async () => {
+  const { log, scope } = makeScope();
+  scope.VideoEncoder = class {
+    constructor({ error }) {
+      this.error = error;
+    }
+    configure() {}
+    encode() {
+      this.error(new Error('codec failed'));
+    }
+    async flush() {}
+    close() {
+      log.closed++;
+    }
+  };
+  await assert.rejects(encodeWith(scope), /codec failed/);
+  assert.equal(log.closed, 2);
+});
+
+test('a frame the encoder never returns is an error, for colour and for alpha', async () => {
+  for (const [format, message] of [
+    ['RGBX', /Missing encoded frame 1/],
+    ['I420', /Missing encoded alpha frame 1/],
+  ]) {
+    const { scope } = makeScope();
+    const Base = scope.VideoEncoder;
+    scope.VideoEncoder = class extends Base {
+      encode(frame, options) {
+        if (frame.format === format && frame.timestamp > 0 && frame.timestamp < 40_000) return;
+        super.encode(frame, options);
+      }
+    };
+    await assert.rejects(encodeWith(scope), message);
+  }
+});
+
+test('encoding waits while the encoder queue is full', async () => {
+  let maxQueue = 0;
+  const { scope } = makeScope();
+  scope.VideoEncoder = class extends EventTarget {
+    constructor({ output }) {
+      super();
+      this.output = output;
+      this.pending = [];
+    }
+    get encodeQueueSize() {
+      return this.pending.length;
+    }
+    configure() {}
+    encode(frame, options) {
+      this.pending.push({ timestamp: frame.timestamp, key: options.keyFrame });
+      maxQueue = Math.max(maxQueue, this.pending.length);
+      setTimeout(() => this.drain(), 1);
+    }
+    drain() {
+      const item = this.pending.shift();
+      if (!item) return;
+      this.output({
+        type: item.key ? 'key' : 'delta',
+        timestamp: item.timestamp,
+        byteLength: 1,
+        copyTo: (target) => target.set([1]),
+      });
+      this.dispatchEvent(new Event('dequeue'));
+    }
+    async flush() {
+      while (this.pending.length) this.drain();
+    }
+    close() {}
+  };
+  const blob = await encodeWith(scope, 40);
+  assert.equal(blob.type, 'video/webm');
+  assert.ok(maxQueue <= 9, `queue reached ${maxQueue}`);
+});
+
+test('animation support is probed with the VP9 config', async () => {
+  const base = { isSecureContext: true, VideoFrame: function () {} };
+  let asked = null;
+  const supported = {
+    ...base,
+    VideoEncoder: Object.assign(function () {}, {
+      isConfigSupported: async (config) => {
+        asked = config;
+        return { supported: true };
+      },
+    }),
+  };
+  assert.equal(await probeAnimationSupport(supported), true);
+  assert.equal(asked.codec, 'vp09.00.10.08');
+  const unsupported = {
+    ...base,
+    VideoEncoder: Object.assign(function () {}, {
+      isConfigSupported: async () => ({ supported: false }),
+    }),
+  };
+  assert.equal(await probeAnimationSupport(unsupported), false);
+  const throws = {
+    ...base,
+    VideoEncoder: Object.assign(function () {}, {
+      isConfigSupported: async () => {
+        throw new Error('nope');
+      },
+    }),
+  };
+  assert.equal(await probeAnimationSupport(throws), false);
+  assert.equal(await probeAnimationSupport({ isSecureContext: false }), false);
 });
