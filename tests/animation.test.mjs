@@ -116,3 +116,11 @@ test('hasMotion is false for anchors only', () => {
   const moving = setKeyframe(createPin({ x: 1, y: 1 }), 0.5, { dx: 0, dy: 2 });
   assert.equal(hasMotion({ pins: [moving] }), true);
 });
+
+test('keyframe merging wraps the loop seam', () => {
+  let pin = setKeyframe(createPin({ x: 0, y: 0 }), 0, { dx: 1, dy: 1 });
+  pin = setKeyframe(pin, 0.999, { dx: 2, dy: 2 });
+  assert.deepEqual(pin.keyframes, [{ t: 0.999, dx: 2, dy: 2 }]);
+  pin = setKeyframe(pin, 0, { dx: 3, dy: 3 });
+  assert.equal(removeKeyframe(pin, 0.999).keyframes.length, 0);
+});

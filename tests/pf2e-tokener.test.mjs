@@ -4887,3 +4887,22 @@ test('animated ring tokens use the token video as the ring subject', async () =>
   assert.equal(update['ring.subject.scale'], 1.25);
   assert.equal(update['texture.scaleX'], 1.25);
 });
+
+test('animated ring tokens keep ring colours and honour a ring scale override', async () => {
+  const { buildCreatedTokenCandidate } = await import('../scripts/token-composer.js');
+  const candidate = buildCreatedTokenCandidate({
+    label: 'E',
+    tokenSrc: 'e.webm',
+    subjectSrc: 'e.webm',
+    ringColors: { ring: '#ff0000', background: '#00ff00' },
+    animated: true,
+    breakoutScale: 1.25,
+  });
+  assert.equal(candidate.ringFromToken, true);
+  const update = buildTokenUpdate(candidate, { scale: 1, ringScale: 1.6 });
+  assert.equal(update['ring.enabled'], true);
+  assert.equal(update['ring.subject.texture'], '');
+  assert.equal(update['ring.subject.scale'], 1.6);
+  assert.equal(update['ring.colors.ring'], '#ff0000');
+  assert.equal(update['ring.colors.background'], '#00ff00');
+});

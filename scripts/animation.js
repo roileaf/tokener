@@ -18,6 +18,12 @@ function wrapTime(t) {
   return value - Math.floor(value);
 }
 
+/** Distance between two loop times, measured around the loop seam (0.999 is next to 0). */
+function loopDistance(a, b) {
+  const gap = Math.abs(a - b);
+  return Math.min(gap, 1 - gap);
+}
+
 function sortKeyframes(keyframes) {
   return [...keyframes].sort((a, b) => a.t - b.t);
 }
@@ -59,14 +65,17 @@ export function createPin({ x, y }) {
 /** Returns a new pin with a keyframe at t, replacing any keyframe within 1/120 of t. */
 export function setKeyframe(pin, t, { dx, dy }) {
   const time = wrapTime(t);
-  const kept = pin.keyframes.filter((k) => Math.abs(k.t - time) >= KEYFRAME_MERGE);
+  const kept = pin.keyframes.filter((k) => loopDistance(k.t, time) >= KEYFRAME_MERGE);
   return { ...pin, keyframes: sortKeyframes([...kept, { t: time, dx, dy }]) };
 }
 
 /** Returns a new pin without the keyframe nearest to t (within 1/120). */
 export function removeKeyframe(pin, t) {
   const time = wrapTime(t);
-  return { ...pin, keyframes: pin.keyframes.filter((k) => Math.abs(k.t - time) >= KEYFRAME_MERGE) };
+  return {
+    ...pin,
+    keyframes: pin.keyframes.filter((k) => loopDistance(k.t, time) >= KEYFRAME_MERGE),
+  };
 }
 
 /** Samples a pin's looping offset at t with cosine easing between keyframes. */
