@@ -129,7 +129,12 @@ test('auto rig flaps level wings together, down and toward the body', () => {
 });
 
 test('auto rig swings a hanging tail across its length, well behind the body', () => {
-  const { pins } = rig(figure({ tail: true }), WIDE);
+  const { pins, parts } = rig(figure({ tail: true }), WIDE);
+  assert.deepEqual(parts, {
+    chestId: pins[1].id,
+    anchorIds: [pins[2].id, pins[3].id],
+    tipIds: [pins[4].id],
+  });
   const [, chest] = pins;
   const tips = pins.slice(4);
   assert.equal(tips.length, 1, 'the tail gets a pin');
@@ -264,7 +269,7 @@ test('auto rig maps tips back through the grid scale to source pixels', () => {
 
 test('auto rig returns no pins for an empty cut-out', () => {
   const grid = { alpha: new Uint8Array(100), width: 10, height: 10, scale: 1 };
-  assert.deepEqual(rig(grid), { pins: [], selectedPinIds: [] });
+  assert.deepEqual(rig(grid), { pins: [], selectedPinIds: [], parts: null });
 });
 
 test('auto rig in ping-pong peaks at the apex and moves over the whole forward half', () => {

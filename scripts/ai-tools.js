@@ -255,7 +255,9 @@ export function scaleSamPoint(point, originalSize, reshapedSize) {
 
 /**
  * Prepares Segment Anything for one image: the expensive image embedding runs once and the
- * returned `select(point)` only runs the small mask decoder for each click.
+ * returned `select(point, { exclude, all })` only runs the small mask decoder for each click.
+ * `exclude` lists points the selection must leave out; `all` returns every mask SAM proposes
+ * (from a small piece up to the whole object) instead of only its best-scoring one.
  */
 export async function createSamSelector(canvas, { onStatus } = {}) {
   const transformers = await loadTransformers();
@@ -280,27 +282,36 @@ export async function createSamSelector(canvas, { onStatus } = {}) {
   const [originalHeight, originalWidth] = inputs.original_sizes[0];
   const [reshapedHeight, reshapedWidth] = inputs.reshaped_input_sizes[0];
 
-  return async function select(point) {
-    const scaled = scaleSamPoint(
-      point,
-      { width: originalWidth, height: originalHeight },
-      { width: reshapedWidth, height: reshapedHeight },
+  return async function select(point, { exclude = [], all = false } = {}) {
+    const points = [point, ...exclude];
+    const scaled = points.flatMap((each) =>
+      scaleSamPoint(
+        each,
+        { width: originalWidth, height: originalHeight },
+        { width: reshapedWidth, height: reshapedHeight },
+      ),
     );
     const outputs = await model({
       ...embeddings,
-      input_points: new transformers.Tensor('float32', scaled, [1, 1, 1, 2]),
-      input_labels: new transformers.Tensor('int64', [1n], [1, 1, 1]),
+      input_points: new transformers.Tensor('float32', scaled, [1, 1, points.length, 2]),
+      input_labels: new transformers.Tensor(
+        'int64',
+        points.map((_, index) => (index ? 0n : 1n)),
+        [1, 1, points.length],
+      ),
     });
     const masks = await processor.post_process_masks(
       outputs.pred_masks,
       inputs.original_sizes,
       inputs.reshaped_input_sizes,
     );
-    const best = pickBestMaskIndex(outputs.iou_scores.data);
-    return new ImageData(
-      samMaskToImageData(masks[0].data, originalWidth, originalHeight, best),
-      originalWidth,
-      originalHeight,
-    );
+    const toImage = (index) =>
+      new ImageData(
+        samMaskToImageData(masks[0].data, originalWidth, originalHeight, index),
+        originalWidth,
+        originalHeight,
+      );
+    if (all) return Array.from(outputs.iou_scores.data, (_, index) => toImage(index));
+    return toImage(pickBestMaskIndex(outputs.iou_scores.data));
   };
 }
