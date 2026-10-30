@@ -4092,7 +4092,8 @@ test('release archive zip command has valid shell continuations', () => {
 
   assert.equal(lines.filter((line) => /\\\s+$/.test(line)).length, 0);
   assert.match(workflow, /\sstyles\/\s*\\$/m);
-  assert.match(workflow, /\slanguages\/\s*$/m);
+  assert.match(workflow, /\slanguages\/\s*\\$/m);
+  assert.match(workflow, /\smodels\/\s*$/m);
   assert.match(
     workflow,
     /"compatibility": \{ "minimum": "13", "verified": "14", "maximum": "14" \}/,
