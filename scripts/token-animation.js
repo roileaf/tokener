@@ -2,28 +2,58 @@ import { DEFAULT_ANIMATION, hasMotion, samplePinOffset, samplePins } from './ani
 import { buildWarpGrid, warpImageData } from './puppet-warp.js';
 import { getTokenFrameLayout } from './token-composer.js';
 
-/** Draws `image` into a size x size canvas at the token layout. */
-function drawLayout(image, layout, size, createCanvas) {
-  const canvas = createCanvas(size, size);
-  canvas.getContext('2d').drawImage(image, layout.x, layout.y, layout.width, layout.height);
+/** Largest edge, in pixels, of a saved animated token: VP9 + per-frame warps get slow beyond it. */
+export const MAX_ANIMATED_SIZE = 512;
+
+/** Share of the token size always kept around the art while bending, so edges never open up. */
+const MIN_BEND_MARGIN = 0.1;
+
+/** Draws `image` at `layout`, shifted by `margin`, into a (size + 2 margin) square canvas. */
+function drawLayout(image, layout, size, margin, createCanvas) {
+  const canvas = createCanvas(size + margin * 2, size + margin * 2);
+  canvas
+    .getContext('2d')
+    .drawImage(image, layout.x + margin, layout.y + margin, layout.width, layout.height);
   return canvas;
 }
 
-function warpCanvas(canvas, grid, size, createCanvas) {
-  const context = canvas.getContext('2d');
-  const source = context.getImageData(0, 0, size, size);
-  const out = createCanvas(size, size);
-  const outContext = out.getContext('2d');
-  const target = outContext.createImageData(size, size);
+/** Warps a padded canvas and keeps its centre `size` x `size` square. */
+function warpCanvas(canvas, grid, size, margin, createCanvas) {
+  const full = canvas.width;
+  const source = canvas.getContext('2d').getImageData(0, 0, full, full);
+  const warped = createCanvas(full, full);
+  const warpedContext = warped.getContext('2d');
+  const target = warpedContext.createImageData(full, full);
   warpImageData(source, grid, target);
-  outContext.putImageData(target, 0, 0);
+  warpedContext.putImageData(target, 0, 0);
+  if (!margin) return warped;
+  const out = createCanvas(size, size);
+  out.getContext('2d').drawImage(warped, -margin, -margin);
   return out;
+}
+
+/** Plain size x size art at the token layout (no motion). */
+function drawStill(image, layout, size, createCanvas) {
+  return drawLayout(image, layout, size, 0, createCanvas);
+}
+
+/**
+ * Padding (token pixels) drawn around the art before warping: the largest pin offset at any
+ * keyframe, and at least a tenth of the token, so art from outside the token edge can slide in.
+ */
+export function getBendMargin(pins, scale, size) {
+  let largest = 0;
+  for (const pin of pins ?? [])
+    for (const key of pin.keyframes ?? [])
+      largest = Math.max(largest, Math.abs(key.dx) * scale, Math.abs(key.dy) * scale);
+  return Math.ceil(Math.max(size * MIN_BEND_MARGIN, largest));
 }
 
 /**
  * Bends the token art (and its pop-out image) at loop time `t` in token space, so the frame or
  * ring drawn afterwards stays still. `view.offsetX/Y` are fractions of `size`, as in `app.view`.
- * Returns size x size canvases that draw at an identity layout.
+ * Returns size x size canvases that draw at an identity layout. The art is warped on a padded
+ * canvas, so parts that overflow the token (cover layouts) move in instead of leaving gaps.
  */
 export function bendTokenArt({ cutout, popOutImage, view, size, animation, t, createCanvas }) {
   const imageWidth = cutout.width;
@@ -36,22 +66,60 @@ export function bendTokenArt({ cutout, popOutImage, view, size, animation, t, cr
     offsetX: (view?.offsetX ?? 0) * size,
     offsetY: (view?.offsetY ?? 0) * size,
   });
-  let art = drawLayout(cutout, layout, size, createCanvas);
-  let popOut = popOutImage ? drawLayout(popOutImage, layout, size, createCanvas) : null;
-  if (!hasMotion(animation)) return { art, popOut };
+  if (!hasMotion(animation))
+    return {
+      art: drawStill(cutout, layout, size, createCanvas),
+      popOut: popOutImage ? drawStill(popOutImage, layout, size, createCanvas) : null,
+    };
 
   const scale = layout.width / Math.max(1, imageWidth);
+  const margin = getBendMargin(animation.pins, scale, size);
+  const full = size + margin * 2;
   const { rest, moved } = samplePins(animation.pins, t);
-  const toToken = (point) => ({ x: layout.x + point.x * scale, y: layout.y + point.y * scale });
-  const grid = buildWarpGrid({
-    width: size,
-    height: size,
-    rest: rest.map(toToken),
-    moved: moved.map(toToken),
+  const toPadded = (point) => ({
+    x: layout.x + margin + point.x * scale,
+    y: layout.y + margin + point.y * scale,
   });
-  art = warpCanvas(art, grid, size, createCanvas);
-  if (popOut) popOut = warpCanvas(popOut, grid, size, createCanvas);
-  return { art, popOut };
+  const grid = buildWarpGrid({
+    width: full,
+    height: full,
+    rest: rest.map(toPadded),
+    moved: moved.map(toPadded),
+  });
+  const bend = (image) =>
+    warpCanvas(
+      drawLayout(image, layout, size, margin, createCanvas),
+      grid,
+      size,
+      margin,
+      createCanvas,
+    );
+  return { art: bend(cutout), popOut: popOutImage ? bend(popOutImage) : null };
+}
+
+/** The edge of the saved WebM: the chosen output size, capped at `MAX_ANIMATED_SIZE`. */
+export function getAnimatedOutputSize(outputSize) {
+  return Math.min(Number(outputSize) || MAX_ANIMATED_SIZE, MAX_ANIMATED_SIZE);
+}
+
+/** Preview playback runs under Move and the pin tool; mask and touch-up tools edit the still art. */
+export function canPlayWithTool(maskTool) {
+  return !maskTool || maskTool === 'pin';
+}
+
+/**
+ * Whether the preview shows the bent art: not while a mask or touch-up tool is active, nor while
+ * a modifier/right-button stroke would paint the pop-out mask under Move (`pointerMode` set),
+ * because the mask overlay and brush map to the still art.
+ */
+export function shouldBendPreview({ maskTool, pointerMode }) {
+  return canPlayWithTool(maskTool) && !pointerMode;
+}
+
+/** Breathe scales pins about their centre, so it needs at least two pins to do anything useful. */
+export function isPresetAvailable(pins, selectedPinId, preset) {
+  if (preset === 'breathe' && (pins?.length ?? 0) < 2) return false;
+  return getPresetTargets(pins, selectedPinId, preset).length > 0;
 }
 
 /**
@@ -103,4 +171,13 @@ export function getPresetTargets(pins, selectedPinId, preset) {
 /** Dragging a pin without keyframes moves where it rests; otherwise it sets its offset now. */
 export function getPinDragMode(pin) {
   return pin?.keyframes?.length ? 'keyframe' : 'rest';
+}
+
+/**
+ * Pin hit radius in token-space preview pixels for a radius given in screen (CSS) pixels: the
+ * preview canvas may be drawn smaller or larger than its pixel size, and the viewport may zoom.
+ */
+export function getPinHitRadius({ radius, viewportScale = 1, canvasWidth, clientWidth }) {
+  const cssScale = clientWidth > 0 && canvasWidth > 0 ? canvasWidth / clientWidth : 1;
+  return (radius * cssScale) / (viewportScale || 1);
 }

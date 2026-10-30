@@ -46,13 +46,18 @@ import {
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
 import {
   bendTokenArt,
+  canPlayWithTool,
+  getAnimatedOutputSize,
   getAnimatedSavePlan,
+  getPinHitRadius,
   getPinPreviewPoints,
   getPinDragMode,
   getPresetTargets,
+  isPresetAvailable,
   resetAnimationForNewSource,
+  shouldBendPreview,
 } from './token-animation.js';
-import { canEncodeAnimation, encodeAlphaWebm } from './webm-alpha.js';
+import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
 import {
   colorizeRingBackground,
   colorizeRingFrame,
@@ -304,6 +309,9 @@ export function getTokenCreatorApplicationClass() {
       this.selectedPinId = null;
       this.animationPlaying = false;
       this._animationFrame = null;
+      // WebM encoding support, probed once when the creator first renders (false until then).
+      this.animationSupported = false;
+      this._animationProbe = null;
       this._onPaste = (event) => void handleCreatorPaste(this, event);
       this._onKeyDown = (event) => handleCreatorKeyDown(this, event);
       this._onKeyUp = (event) => {
@@ -362,6 +370,7 @@ export function getTokenCreatorApplicationClass() {
     async _onRender(context, options) {
       await super._onRender?.(context, options);
       activateCreatorListeners(this);
+      startAnimationSupportProbe(this);
       if (!this.source && !this._initialSourceRequested) {
         this._initialSourceRequested = true;
         const portrait = getDocumentActor(this.tokenDocument)?.img;
@@ -442,7 +451,7 @@ function prepareCreatorContext(app) {
     })),
     applyActions: actions,
     animation: {
-      available: canEncodeAnimation(),
+      available: app.animationSupported,
       time: formatLoopPercent(app.animationTime),
       timeValue: Math.round(app.animationTime * 1000) / 10,
       lengths: LOOP_LENGTHS.map((seconds) => ({
@@ -732,6 +741,7 @@ function bindPreviewInteractions(app, canvas) {
       : null;
     if (mode) {
       event.preventDefault();
+      stopAnimationPlayback(app);
       pushMaskHistory(app);
       const point = getTokenPoint(app, canvas, event);
       drag = { mode, last: point };
@@ -1599,7 +1609,16 @@ function getPointerMode(app, event) {
 
 /** Pins and playback work on the token art only, and only where the loop can be encoded. */
 function canEditPins(app) {
-  return Boolean(app.cutout && app.editTarget !== 'portrait' && canEncodeAnimation());
+  return Boolean(app.cutout && app.editTarget !== 'portrait' && app.animationSupported);
+}
+
+/** Asks the browser once whether it can encode the loop; until it answers, animation is off. */
+function startAnimationSupportProbe(app) {
+  if (app._animationProbe) return;
+  app._animationProbe = probeAnimationSupport().then((supported) => {
+    app.animationSupported = supported;
+    syncAnimationControls(app);
+  });
 }
 
 function selectPinTool(app) {
@@ -1666,7 +1685,13 @@ function findPinAt(app, point) {
     t: app.animationTime,
   });
   let best = null;
-  let bestDistance = PIN_HIT_RADIUS / (app.viewport.scale || 1);
+  const canvas = getCreatorRoot(app)?.querySelector?.('.pf2e-tokener-creator-preview');
+  let bestDistance = getPinHitRadius({
+    radius: PIN_HIT_RADIUS,
+    viewportScale: app.viewport.scale,
+    canvasWidth: canvas?.width,
+    clientWidth: canvas?.clientWidth,
+  });
   for (const candidate of points) {
     const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
     if (distance <= bestDistance) {
@@ -1750,8 +1775,8 @@ function removeKeyframeAtTime(app) {
 
 function applyAnimationPreset(app, preset) {
   if (!ANIMATION_PRESETS.includes(preset) || !canEditPins(app)) return;
+  if (!isPresetAvailable(app.animation.pins, app.selectedPinId, preset)) return;
   const ids = getPresetTargets(app.animation.pins, app.selectedPinId, preset);
-  if (!ids.length) return;
   const amplitude = PRESET_AMPLITUDE * Math.max(app.cutout.width, app.cutout.height);
   setAnimationPins(app, applyPreset(app.animation.pins, ids, preset, { amplitude }));
   syncAnimationControls(app);
@@ -1762,12 +1787,14 @@ function startAnimationPlayback(app) {
   const requestFrame = globalThis.requestAnimationFrame;
   if (app.animationPlaying || !canEditPins(app) || typeof requestFrame !== 'function') return;
   if (!hasMotion(app.animation)) return;
+  // Mask and touch-up tools edit the still art, so playing switches back to Move first.
+  if (!canPlayWithTool(app.maskTool)) setMaskTool(app, null);
   app.animationPlaying = true;
   let last = null;
   const step = (now) => {
     app._animationFrame = null;
     if (!app.animationPlaying) return;
-    if (!app.rendered || !canEditPins(app)) {
+    if (!app.rendered || !canEditPins(app) || !canPlayWithTool(app.maskTool)) {
       stopAnimationPlayback(app);
       return;
     }
@@ -1795,13 +1822,12 @@ function stopAnimationPlayback(app) {
 
 /**
  * The token art bent to the current loop time, or null to draw it still: in the portrait, with
- * no motion, or while a mask or touch-up tool edits the unbent art and playback is paused.
- * Cached per pose.
+ * no motion, while a mask or touch-up tool edits the unbent art, or while a modifier stroke
+ * would paint the pop-out mask under Move. Cached per pose.
  */
 function getPreviewBend(app, size) {
   if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return null;
-  // Mask and touch-up tools edit the still art, so it stays unbent there unless playing.
-  if (app.maskTool && app.maskTool !== 'pin' && !app.animationPlaying) return null;
+  if (!shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode })) return null;
   const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
   const key = {
     animation: app.animation,
@@ -1869,7 +1895,7 @@ function drawPins(context, app, viewport, size) {
 function syncAnimationControls(app) {
   const root = getCreatorRoot(app);
   if (!root?.querySelectorAll) return;
-  const available = canEncodeAnimation();
+  const available = Boolean(app.animationSupported);
   getAnimationSection(app)?.setAttribute('data-available', available ? 'true' : 'false');
   const pin = getSelectedPin(app);
   const atKeyframe = Boolean(pin?.keyframes.some((key) => isAtTime(key.t, app.animationTime)));
@@ -1881,8 +1907,11 @@ function syncAnimationControls(app) {
     if (action === 'keyframe-add') disabled ||= !pin;
     if (action === 'keyframe-remove') disabled ||= !atKeyframe;
     if (action === 'animation-preset')
-      disabled ||= !getPresetTargets(app.animation.pins, app.selectedPinId, control.dataset.preset)
-        .length;
+      disabled ||= !isPresetAvailable(
+        app.animation.pins,
+        app.selectedPinId,
+        control.dataset.preset,
+      );
     if (action === 'animation-play') disabled ||= !moving && !app.animationPlaying;
     control.disabled = disabled;
   });
@@ -1955,6 +1984,8 @@ function shouldShowMaskOverlay(app) {
 }
 
 function setMaskTool(app, tool) {
+  // The mask overlay and brushes map to the still art, so editing tools pause the preview loop.
+  if (!canPlayWithTool(tool)) stopAnimationPlayback(app);
   app.maskTool = tool;
   if (tool && tool !== 'pin' && !isCleanupTool(tool)) ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
@@ -2911,6 +2942,8 @@ export async function createToken(app, action) {
     return;
   }
 
+  // The saved loop is rendered from a snapshot, so the preview must not keep moving the pose.
+  stopAnimationPlayback(app);
   setCreatorBusy(app, true);
   setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
   try {
@@ -2925,12 +2958,12 @@ export async function createToken(app, action) {
     const label = tokenWorkspace.source.label;
     const size = app.creatorOptions.outputSize;
     const animated =
-      getAnimatedSavePlan({ animation: app.animation, canEncode: canEncodeAnimation() }) ===
+      getAnimatedSavePlan({ animation: app.animation, canEncode: app.animationSupported }) ===
       'animated';
     let tokenSrc;
     if (animated) {
       tokenSrc = await uploadBlob(
-        await encodeTokenAnimation(app, size),
+        await encodeTokenAnimation(app, getAnimatedOutputSize(size)),
         folder,
         buildCreatedTokenFileName(label, { now, extension: 'webm' }),
       );
@@ -3015,34 +3048,59 @@ export async function createToken(app, action) {
 /** Frames rendered between yields to the browser while an animation is prepared. */
 const ANIMATION_FRAMES_PER_YIELD = 4;
 
+/** Copies a canvas, so later edits to the original cannot reach a save in progress. */
+function copyCanvas(source) {
+  if (!source) return null;
+  const canvas = createCanvas(source.width, source.height);
+  canvas.getContext('2d').drawImage(source, 0, 0);
+  return canvas;
+}
+
+/**
+ * Everything `drawCreatedToken` reads for a bent token frame, frozen at save start: the pose,
+ * cut-out, pop-out image and options cannot change while frames render across yields.
+ */
+function snapshotTokenAnimation(app) {
+  return withEditTarget(app, 'token', () => ({
+    snapshot: {
+      editTarget: 'token',
+      creatorOptions: { ...app.creatorOptions },
+      cutout: copyCanvas(app.cutout),
+      view: { ...app.view },
+      ringAssets: app.ringAssets,
+      tokenDocument: app.tokenDocument,
+      popOutMask: null,
+    },
+    popOutImage: isPopOutEnabled(app) ? copyCanvas(getPopOutImage(app)) : null,
+    animation: structuredClone(app.animation),
+  }));
+}
+
 /**
  * Renders every loop frame of the token (bent art under a still frame or ring) at `size` and
- * encodes them into a transparent looping WebM. The status line counts the rendered frames.
+ * encodes them into a transparent looping WebM. `size` is already capped by
+ * `getAnimatedOutputSize`; the bitrate follows it. The status line counts the rendered frames.
  */
 async function encodeTokenAnimation(app, size) {
-  const animation = app.animation;
+  const { snapshot, popOutImage, animation } = snapshotTokenAnimation(app);
   const times = getFrameTimes(animation);
   const canvas = createCanvas(size, size);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   const frames = [];
   for (const [index, t] of times.entries()) {
     setCreatorStatus(app, getEncodingStatus(index, times.length));
-    frames.push(
-      withEditTarget(app, 'token', () => {
-        const bent = bendTokenArt({
-          cutout: app.cutout,
-          popOutImage: isPopOutEnabled(app) ? getPopOutImage(app) : null,
-          view: app.view,
-          size,
-          animation,
-          t,
-          createCanvas,
-        });
-        context.clearRect(0, 0, size, size);
-        drawCreatedToken(context, app, size, { bent });
-        return context.getImageData(0, 0, size, size);
-      }),
-    );
+    const bent = bendTokenArt({
+      cutout: snapshot.cutout,
+      popOutImage,
+      view: snapshot.view,
+      size,
+      animation,
+      t,
+      createCanvas,
+    });
+    context.clearRect(0, 0, size, size);
+    drawCreatedToken(context, snapshot, size, { bent });
+    frames.push(context.getImageData(0, 0, size, size));
     if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();
   }
   setCreatorStatus(app, getEncodingStatus(times.length, times.length));
