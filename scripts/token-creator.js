@@ -49,7 +49,10 @@ import {
 } from './animation.js';
 import {
   createEffect,
+  EFFECT_SUPPORTS_REGION,
   EFFECT_TYPES,
+  hasPaintedRegion,
+  isSafeEffectKey,
   normalizeEffects,
   PARTICLE_COLORS,
   PARTICLE_KINDS,
@@ -71,6 +74,7 @@ import {
   getPresetAmplitude,
   getPresetTargets,
   getRotationArm,
+  hasActiveMotion,
   isPastDragDeadZone,
   isPresetAvailable,
   renderAnimationFrame,
@@ -597,10 +601,13 @@ function prepareCreatorContext(app) {
             : localize('Creator.Animate.ModePingPong', 'Ping-pong'),
         tooltip:
           mode === 'loop'
-            ? localize('Creator.Animate.ModeLoopTooltip', 'Play the keyframes over and over')
+            ? localize(
+                'Creator.Animate.ModeLoopTooltip',
+                'Play the keyframes over and over. Switching keeps the existing keyframes; presets applied afterwards are shaped for this mode.',
+              )
             : localize(
                 'Creator.Animate.ModePingPongTooltip',
-                'Play the keyframes forward, then backward',
+                'Play the keyframes forward, then backward. Switching keeps the existing keyframes; presets applied afterwards are shaped for this mode.',
               ),
         selected: app.animation.mode === mode,
       })),
@@ -1495,12 +1502,18 @@ async function loadCreatorSource(app, { path, file }) {
  * touch-ups, animation, effects and their regions. Everything is fetched and decoded before
  * the creator is touched, so a failure (missing project or image file, unknown version) leaves
  * the current state as it was (an empty creator stays empty) with `Creator.ProjectLoadFailed`.
- * `fetchJson` / `loadImage` are injectable for tests. Resolves true when the project loaded.
+ * A background removal that fails while reopening keeps its error on the status line (the
+ * project is still open). `fetchJson` / `loadImage` / `updateCutouts` are injectable for tests.
+ * Resolves true when the project loaded.
  */
 export async function loadCreatorProject(
   app,
   path,
-  { fetchJson = fetchProjectJson, loadImage = loadProjectImage } = {},
+  {
+    fetchJson = fetchProjectJson,
+    loadImage = loadProjectImage,
+    updateCutouts = updateAllCutouts,
+  } = {},
 ) {
   const token = (app._projectLoadToken = (app._projectLoadToken ?? 0) + 1);
   setCreatorStatus(app, localize('Creator.ProjectLoading', 'Opening the saved project...'));
@@ -1526,10 +1539,17 @@ export async function loadCreatorProject(
   applyLoadedProject(app, restored);
   // Re-run the background removal with the saved options so autoCutout is rebuilt; the saved
   // touch-ups (already on each workspace) are composed over it by updateCutout.
-  await updateAllCutouts(app);
+  const errors = ((await updateCutouts(app)) ?? []).filter(Boolean);
   if (token !== app._projectLoadToken) return false;
   if (app.rendered && typeof app.render === 'function') await app.render({ parts: ['main'] });
-  setCreatorStatus(app, localize('Creator.ProjectLoaded', 'Editing the saved project.'));
+  // A failed background removal keeps its error on the status line (the render above cleared it).
+  if (errors.length)
+    setCreatorStatus(
+      app,
+      `${errors[0]} ${localize('Creator.ProjectLoadedWithError', 'The saved project is still open for editing.')}`,
+      true,
+    );
+  else setCreatorStatus(app, localize('Creator.ProjectLoaded', 'Editing the saved project.'));
   return true;
 }
 
@@ -1578,9 +1598,10 @@ async function decodeProject(project, loadImage) {
   };
   const token = await loadWorkspace(project.token);
   const portrait = project.portrait ? await loadWorkspace(project.portrait, token) : null;
-  const regions = {};
+  // Region keys come from the file: no prototype, and only keys parseProject would accept.
+  const regions = Object.create(null);
   for (const [key, dataUrl] of Object.entries(project.animation.regions ?? {}))
-    regions[key] = await loadMask(dataUrl, token.canvas);
+    if (isSafeEffectKey(key)) regions[key] = await loadMask(dataUrl, token.canvas);
   return { project, token, portrait, regions };
 }
 
@@ -1660,16 +1681,21 @@ function scheduleCutout(app) {
   app._cutoutTimer = setTimeout(() => void updateAllCutouts(app), 150);
 }
 
+/**
+ * Rebuilds a workspace's cut-out with the current background options. Resolves the status
+ * message of a failed background removal (the original image is used instead), or null.
+ */
 async function updateCutout(app, workspace = app.workspace) {
   if (!workspace.source) {
     renderCreatorPreview(app);
-    return;
+    return null;
   }
   const token = ++workspace.cutoutToken;
   const { backgroundMode, tolerance, feather } = app.creatorOptions;
   const source = workspace.source.canvas;
   const cutout = createCanvas(source.width, source.height);
   const context = cutout.getContext('2d');
+  let failure = null;
 
   try {
     if (backgroundMode === 'auto') {
@@ -1684,30 +1710,29 @@ async function updateCutout(app, workspace = app.workspace) {
     } else {
       context.drawImage(source, 0, 0);
     }
-    if (token !== workspace.cutoutToken) return;
+    if (token !== workspace.cutoutToken) return null;
     workspace.autoCutout = cutout;
     workspace.cutout = composeCleanCutout(workspace);
     setCreatorStatus(app, '');
   } catch (error) {
-    if (token !== workspace.cutoutToken) return;
+    if (token !== workspace.cutoutToken) return null;
     console.error(`${MODULE_ID} | Background removal failed`, error);
     workspace.autoCutout = source;
     workspace.cutout = composeCleanCutout(workspace);
-    setCreatorStatus(
-      app,
-      `${localize('Creator.RemoveFailed', 'Background removal failed; using the original image.')} (${describeError(error)})`,
-      true,
-    );
+    failure = `${localize('Creator.RemoveFailed', 'Background removal failed; using the original image.')} (${describeError(error)})`;
+    setCreatorStatus(app, failure, true);
   }
   syncAnimationControls(app);
   renderCreatorPreview(app);
+  return failure;
 }
 
+/** Rebuilds every workspace's cut-out; resolves the failure messages (null where it worked). */
 async function updateAllCutouts(app) {
   const workspaces = [app.workspaces.token, app.workspaces.portrait].filter(
     (workspace) => workspace?.source,
   );
-  await Promise.all(workspaces.map((workspace) => updateCutout(app, workspace)));
+  return Promise.all(workspaces.map((workspace) => updateCutout(app, workspace)));
 }
 
 function createWorkspace() {
@@ -2115,12 +2140,15 @@ function updateAnimationPin(app, id, change) {
   );
 }
 
-/** Pins belong to the token image they were placed on, so a new image starts without any. */
-function clearAnimationPins(app) {
+/**
+ * A new token image starts a fresh animation: pins and effects belong to the image they were
+ * made on, so both are dropped with the effects' painted regions, their undo steps and the
+ * effect caches (the loop length and playback mode stay).
+ */
+export function clearAnimationPins(app) {
   stopAnimationPlayback(app);
   app.animation = resetAnimationForNewSource(app.animation);
   app.selectedPinIds = [];
-  // Effects are dropped with the pins, and their regions belong to the old image.
   app.effectRegions = {};
   app.selectedEffectId = null;
   app._regionVersion += 1;
@@ -2282,9 +2310,17 @@ function getSelectedEffect(app) {
   return app.animation.effects.find((effect) => effect.id === id) ?? null;
 }
 
-/** The region brush works on the token art of the selected effect, where animation is possible. */
+/** Whether `effect` can be limited to a painted region (flicker always covers the whole figure). */
+function supportsRegion(effect) {
+  return Boolean(effect && EFFECT_SUPPORTS_REGION[effect.type]);
+}
+
+/**
+ * The region brush works on the token art of the selected effect, where animation is possible,
+ * when that effect can use a region.
+ */
 function canPaintRegion(app) {
-  return canEditPins(app) && Boolean(getSelectedEffect(app));
+  return canEditPins(app) && supportsRegion(getSelectedEffect(app));
 }
 
 function selectRegionTool(app) {
@@ -2295,8 +2331,8 @@ function selectRegionTool(app) {
 function setAnimationEffects(app, animation) {
   app.animation = animation;
   if (!getSelectedEffect(app)) app.selectedEffectId = null;
-  if (!hasMotion(app.animation)) stopAnimationPlayback(app);
-  if (app.maskTool === 'region' && !getSelectedEffect(app)) setMaskTool(app, null);
+  if (!hasActiveMotion(app.animation, app.effectRegions)) stopAnimationPlayback(app);
+  if (app.maskTool === 'region' && !canPaintRegion(app)) setMaskTool(app, null);
 }
 
 function addCreatorEffect(app) {
@@ -2320,7 +2356,9 @@ function selectCreatorEffect(app, id) {
   if (!app.animation.effects.some((effect) => effect.id === id)) return;
   app.selectedEffectId = id;
   syncAnimationControls(app);
-  renderCreatorPreview(app);
+  // The region brush follows the selection; an effect without regions (flicker) cannot use it.
+  if (app.maskTool === 'region' && !canPaintRegion(app)) setMaskTool(app, null);
+  else renderCreatorPreview(app);
 }
 
 /** Removes an effect with its painted region; the region's undo steps go with it. */
@@ -2352,7 +2390,7 @@ function removeCreatorEffect(app, id) {
  */
 function setEffectRegionMode(app, painted) {
   const effect = getSelectedEffect(app);
-  if (!effect) return;
+  if (!effect || (painted && !supportsRegion(effect))) return;
   const region = painted ? (getEffectRegionKey(effect) ?? effect.id) : null;
   if (region !== getEffectRegionKey(effect))
     setAnimationEffects(app, updateEffect(app.animation, effect.id, { region }));
@@ -2384,7 +2422,7 @@ function updateEffectParam(app, input) {
     }
   }
   const row = getCreatorRoot(app)?.querySelector?.(
-    `[data-creator-action="effect-select"][data-effect-id="${effect.id}"] span`,
+    `[data-creator-action="effect-select"][data-effect-id="${escapeSelectorValue(effect.id)}"] span`,
   );
   if (row && updated) row.textContent = describeEffect(updated);
   renderCreatorPreview(app);
@@ -2514,7 +2552,7 @@ function syncEffectControls(app) {
   const panel = root?.querySelector?.('[data-effects]');
   const selected = getSelectedEffect(app);
   const regionButton = root?.querySelector?.('[data-creator-action="mask-region"]');
-  if (regionButton) regionButton.hidden = !selected;
+  if (regionButton) regionButton.hidden = !supportsRegion(selected);
   if (!panel) return;
   const type = panel.querySelector('select[name="effectType"]')?.value;
   const kindPicker = panel.querySelector('[data-effect-kind-picker]');
@@ -2603,7 +2641,8 @@ function syncEffectControls(app) {
     option.append(radio, make('span', { textContent: text }));
     modes.append(option);
   }
-  params.append(modes);
+  // Flicker always covers the whole figure, so it gets no Whole / Painted toggle.
+  if (supportsRegion(selected)) params.append(modes);
 
   const grid = make('div', { className: 'pf2e-tokener-creator-effect-controls' });
   for (const control of getEffectParamControls(selected)) {
@@ -2644,13 +2683,13 @@ function syncEffectControls(app) {
     grid.append(field);
   }
   params.append(grid);
-  if (painted && !app.effectRegions[getEffectRegionKey(selected)])
+  if (painted && !hasPaintedRegion(selected, app.effectRegions))
     params.append(
       make('p', {
         className: 'pf2e-tokener-creator-hint',
         textContent: localize(
           'Creator.Animate.Effects.PaintHint',
-          'Paint the region with the region brush (F); until then the effect covers the whole figure.',
+          'Paint the region with the region brush (F); until then the effect does nothing.',
         ),
       }),
     );
@@ -2822,7 +2861,7 @@ function applyAnimationPreset(app, preset) {
   const pins = app.animation.pins.map((pin) =>
     targets.has(pin.id) ? ensurePinArm(pin, app.cutout) : pin,
   );
-  setAnimationPins(app, applyPreset(pins, ids, preset, { amplitude }));
+  setAnimationPins(app, applyPreset(pins, ids, preset, { amplitude, mode: app.animation.mode }));
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
@@ -2845,6 +2884,7 @@ async function runAutoAnimate(app) {
     view: app.view,
     clipRadius: getComposeClipRadius(app),
     gridSize: DEFAULT_COMPOSE_GRID,
+    mode: app.animation.mode,
   });
   if (!pins.length) {
     setCreatorStatus(app, localize('Creator.Animate.AutoEmpty', 'Nothing to animate yet.'), true);
@@ -2878,7 +2918,7 @@ async function confirmAutoAnimate() {
 function startAnimationPlayback(app) {
   const requestFrame = globalThis.requestAnimationFrame;
   if (app.animationPlaying || !canEditPins(app) || typeof requestFrame !== 'function') return;
-  if (!hasMotion(app.animation)) return;
+  if (!hasActiveMotion(app.animation, app.effectRegions)) return;
   // Mask and touch-up tools edit the still art, so playing switches back to Move first.
   if (!canPlayWithTool(app.maskTool)) setMaskTool(app, null);
   app.animationPlaying = true;
@@ -3017,7 +3057,7 @@ function syncAnimationControls(app) {
   getAnimationSection(app)?.setAttribute('data-available', available ? 'true' : 'false');
   const pin = getSelectedPin(app);
   const atKeyframe = Boolean(pin && getKeyframeAt(pin, app.animationTime, app.animation.mode));
-  const moving = hasMotion(app.animation);
+  const moving = hasActiveMotion(app.animation, app.effectRegions);
   const enabled = available && Boolean(app.cutout) && !app.busy;
   syncEffectControls(app);
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
@@ -4179,8 +4219,11 @@ export async function createToken(app, action) {
     const label = tokenWorkspace.source.label;
     const size = app.creatorOptions.outputSize;
     const animated =
-      getAnimatedSavePlan({ animation: app.animation, canEncode: app.animationSupported }) ===
-      'animated';
+      getAnimatedSavePlan({
+        animation: app.animation,
+        canEncode: app.animationSupported,
+        regions: app.effectRegions,
+      }) === 'animated';
     let tokenSrc;
     if (animated) {
       tokenSrc = await uploadBlob(
@@ -4567,6 +4610,13 @@ function updateValueLabel(input) {
 
 function formatZoom(value) {
   return `${Number(value).toFixed(2)}x`;
+}
+
+/** `value` escaped for a quoted attribute selector (`CSS.escape` when the browser has it). */
+export function escapeSelectorValue(value) {
+  const text = String(value ?? '');
+  if (typeof globalThis.CSS?.escape === 'function') return globalThis.CSS.escape(text);
+  return text.replace(/["\\]/g, '\\$&').replace(/[\n\r\f]/g, ' ');
 }
 
 function setCreatorStatus(app, message, isError = false) {

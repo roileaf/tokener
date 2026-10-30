@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCanvas } from 'canvas';
 import {
+  EFFECT_SUPPORTS_REGION,
   EFFECT_TYPES,
   PARTICLE_KINDS,
+  isEffectActive,
+  isSafeEffectKey,
   createEffect,
   normalizeEffects,
   getDisplacement,
@@ -301,4 +304,72 @@ test('max-allowed wind and wobble never fold the 8 px warp mesh', () => {
       }
     }
   }
+});
+
+test('flicker is whole-figure only: normalizeEffects drops its region', () => {
+  assert.deepEqual(EFFECT_SUPPORTS_REGION, {
+    wind: true,
+    wobble: true,
+    flicker: false,
+    glow: true,
+    particles: true,
+  });
+  for (const type of EFFECT_TYPES) assert.equal(typeof EFFECT_SUPPORTS_REGION[type], 'boolean');
+  const [flicker, glow] = normalizeEffects([
+    { id: 'f', type: 'flicker', region: 'f' },
+    { id: 'g', type: 'glow', region: 'g' },
+  ]);
+  assert.equal(flicker.region, null);
+  assert.equal(glow.region, 'g');
+});
+
+test('normalizeEffects replaces unsafe effect ids and region keys', () => {
+  assert.equal(isSafeEffectKey('fx-1_a'), true);
+  assert.equal(isSafeEffectKey('a"]'), false);
+  assert.equal(isSafeEffectKey(''), false);
+  assert.equal(isSafeEffectKey(42), false);
+  const effects = normalizeEffects([
+    { id: 'ok-1', type: 'wind', region: 'ok-1' },
+    { id: 'x"] , *', type: 'glow', region: 'x"] , *' },
+    { id: '__proto__ x', type: 'particles', region: 'r 1' },
+  ]);
+  assert.deepEqual(
+    effects.map((effect) => [effect.id, effect.region]),
+    [
+      ['ok-1', 'ok-1'],
+      ['fx-1', null],
+      ['fx-2', null],
+    ],
+  );
+  // Deterministic: the same file gives the same ids.
+  assert.deepEqual(
+    normalizeEffects([{ id: 'a b', type: 'wind' }]).map((effect) => effect.id),
+    ['fx-0'],
+  );
+});
+
+test('isEffectActive: strength / amount must be positive, painted regions must exist', () => {
+  const canvas = createCanvas(4, 4);
+  assert.equal(
+    isEffectActive({ id: 'w', type: 'wind', strength: 0, scale: 24, region: null }),
+    false,
+  );
+  assert.equal(
+    isEffectActive({ id: 'w', type: 'wind', strength: 2, scale: 24, region: null }),
+    true,
+  );
+  assert.equal(isEffectActive({ id: 'f', type: 'flicker', amount: 0, region: null }), false);
+  assert.equal(isEffectActive({ id: 'f', type: 'flicker', amount: 0.3, region: null }), true);
+  assert.equal(isEffectActive(createEffect('glow')), true);
+  assert.equal(isEffectActive(createEffect('particles')), true);
+  assert.equal(isEffectActive({ id: 'x', type: 'nope' }), false);
+  assert.equal(isEffectActive(null), false);
+  const painted = { id: 'g', type: 'glow', region: 'g', color: '#ffffff', size: 4, pulse: 0 };
+  assert.equal(isEffectActive(painted, {}), false);
+  assert.equal(isEffectActive(painted, undefined), false);
+  assert.equal(isEffectActive(painted, { g: canvas }), true);
+  // Inherited keys never count as a painted region.
+  assert.equal(isEffectActive({ ...painted, region: 'constructor' }, {}), false);
+  // Flicker ignores a stray region: it always covers the whole figure.
+  assert.equal(isEffectActive({ id: 'f', type: 'flicker', amount: 0.3, region: 'f' }, {}), true);
 });

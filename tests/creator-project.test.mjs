@@ -86,7 +86,8 @@ test('serialize stores canvases as data URLs and keeps nulls', () => {
 
 test('serialize keeps only regions an effect uses', () => {
   const project = serializeProject(sampleInput());
-  assert.deepEqual(project.animation.regions, { r1: 'data:image/png;base64,region1' });
+  assert.deepEqual({ ...project.animation.regions }, { r1: 'data:image/png;base64,region1' });
+  assert.equal(Object.getPrototypeOf(project.animation.regions), null);
 });
 
 test('serialize → JSON → parse round-trips views, options, animation and masks', () => {
@@ -159,7 +160,40 @@ test('parseProject drops malformed masks, regions and effects', () => {
   assert.equal(parsed.token.popOutMask, null);
   assert.deepEqual(parsed.token.view, { zoom: 1, offsetX: 0, offsetY: 0 });
   assert.equal(parsed.animation.effects.length, 2);
-  assert.deepEqual(parsed.animation.regions, {});
+  assert.deepEqual({ ...parsed.animation.regions }, {});
+});
+
+test('parseProject sanitizes crafted effect ids and region keys', () => {
+  const project = serializeProject(sampleInput());
+  const region = 'data:image/png;base64,x';
+  const raw = JSON.parse(JSON.stringify(project));
+  raw.animation.effects = [
+    { id: 'ok_1', type: 'glow', region: 'ok_1' },
+    { id: 'x"] *', type: 'wind', region: 'x"] *' },
+    { id: 'f', type: 'flicker', region: 'f' },
+  ];
+  // As JSON.parse reads a crafted file: `__proto__` is an own key there.
+  raw.animation.regions = JSON.parse(
+    JSON.stringify({ ok_1: region, 'x"] *': region, constructor: region }).replace(
+      '{',
+      `{"__proto__":"${region}",`,
+    ),
+  );
+  const parsed = parseProject(raw);
+  assert.deepEqual(
+    parsed.animation.effects.map((effect) => [effect.id, effect.region]),
+    [
+      ['ok_1', 'ok_1'],
+      ['fx-1', null],
+      ['f', null],
+    ],
+  );
+  const { regions } = parsed.animation;
+  assert.equal(Object.getPrototypeOf(regions), null);
+  assert.deepEqual(Object.keys(regions).sort(), ['__proto__', 'constructor', 'ok_1']);
+  assert.equal(regions.constructor, region);
+  // Still plain data: nothing leaked into Object.prototype.
+  assert.equal({}.ok_1, undefined);
 });
 
 test('project flag update stores the project path and the output it belongs to', () => {
@@ -233,7 +267,15 @@ test('shouldLoadProject reads the prototype token for actor-only opens', () => {
 
 /** A creator app double with a status line: the shape `loadCreatorProject` touches. */
 function createFakeCreatorApp(normalizeTokenCreatorOptions) {
-  const status = { textContent: '', classList: { toggle() {} } };
+  const status = {
+    textContent: '',
+    isError: false,
+    classList: {
+      toggle(name, value) {
+        if (name === 'is-error') status.isError = Boolean(value);
+      },
+    },
+  };
   const root = {
     nodeType: 1,
     dataset: {},
@@ -435,4 +477,74 @@ test('loading a project restores workspaces, views, options, masks, animation an
     assert.equal(app.editTarget, 'token');
     assert.match(app.status.textContent, /saved project/i);
   });
+});
+
+test('a background removal that fails on load keeps its error on the status line', async () => {
+  const { createCanvas } = await import('canvas');
+  const { loadCreatorProject, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const source = createCanvas(40, 20);
+    const mask = () => createCanvas(40, 20);
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    const loadImage = async (src) => (src.startsWith('data:') ? mask() : source);
+    const failure = 'Background removal failed; using the original image. (boom)';
+    const loaded = await loadCreatorProject(app, PROJECT_PATH, {
+      fetchJson: async () => JSON.parse(JSON.stringify(savedProject())),
+      loadImage,
+      updateCutouts: async () => [failure, null],
+    });
+    assert.equal(loaded, true);
+    assert.match(app.status.textContent, /Background removal failed/);
+    assert.match(app.status.textContent, /still open/);
+    assert.equal(app.status.isError, true);
+
+    const fine = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadCreatorProject(fine, PROJECT_PATH, {
+      fetchJson: async () => JSON.parse(JSON.stringify(savedProject())),
+      loadImage,
+      updateCutouts: async () => [null],
+    });
+    assert.equal(fine.status.textContent, 'Editing the saved project.');
+    assert.equal(fine.status.isError, false);
+  });
+});
+
+test('a new token image drops effects with their painted regions and region undo steps', async () => {
+  const { createCanvas } = await import('canvas');
+  const { clearAnimationPins, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+  const region = createCanvas(40, 20);
+  region.getContext('2d').fillRect(0, 0, 10, 10);
+  app.animation = {
+    duration: 3,
+    fps: 30,
+    mode: 'pingpong',
+    pins: [{ id: 'p', x: 1, y: 1, keyframes: [{ t: 0, dx: 2, dy: 0 }] }],
+    effects: [{ id: 'fx', type: 'glow', region: 'fx', color: '#ffffff', size: 4, pulse: 0 }],
+  };
+  app.effectRegions = { fx: region };
+  app.selectedEffectId = 'fx';
+  app.selectedPinIds = ['p'];
+  const maskStep = { layer: 'popout' };
+  app._maskHistory = {
+    undo: [maskStep, { layer: 'region', regionKey: 'fx', effectId: 'fx' }],
+    redo: [{ layer: 'region', regionKey: 'fx', effectId: 'fx' }],
+  };
+  app._previewBend = { key: 'old' };
+  clearAnimationPins(app);
+  assert.deepEqual(app.animation, {
+    duration: 3,
+    fps: 30,
+    mode: 'pingpong',
+    pins: [],
+    effects: [],
+  });
+  assert.deepEqual(app.effectRegions, {});
+  assert.equal(app.selectedEffectId, null);
+  assert.deepEqual(app.selectedPinIds, []);
+  assert.deepEqual(app._maskHistory, { undo: [maskStep], redo: [] });
+  assert.equal(app._regionVersion, 1);
+  assert.equal(app._previewBend, null);
 });

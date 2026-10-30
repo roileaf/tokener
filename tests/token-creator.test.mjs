@@ -1006,16 +1006,19 @@ test('P selects the pin tool', async () => {
   assert.equal(getMaskShortcut({ key: 'P' }), 'tool-pin');
 });
 
-test('a new token image clears pins but keeps the loop length', async () => {
+test('a new token image clears pins and effects but keeps the loop length and mode', async () => {
   const { resetAnimationForNewSource } = await import('../scripts/token-animation.js');
   const animation = {
     duration: 3.5,
     fps: 30,
+    mode: 'pingpong',
     pins: [{ id: 'a', x: 1, y: 2, keyframes: [{ t: 0, dx: 1, dy: 0 }] }],
+    effects: [{ id: 'fx', type: 'glow', region: 'fx', color: '#ffffff', size: 4, pulse: 0 }],
   };
   const reset = resetAnimationForNewSource(animation);
-  assert.deepEqual(reset, { duration: 3.5, fps: 30, mode: 'loop', pins: [], effects: [] });
+  assert.deepEqual(reset, { duration: 3.5, fps: 30, mode: 'pingpong', pins: [], effects: [] });
   assert.equal(animation.pins.length, 1);
+  assert.equal(animation.effects.length, 1);
   assert.deepEqual(resetAnimationForNewSource(undefined), {
     duration: 2,
     fps: 30,
@@ -1175,6 +1178,45 @@ test('anchors-only or unavailable encoding saves a still image', async () => {
   );
   assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: false }), 'still');
   assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: true }), 'animated');
+});
+
+test('no-op effects do not force an animated save; active ones do', async () => {
+  const { createCanvas } = await import('canvas');
+  const { getAnimatedSavePlan, hasActiveMotion } = await import('../scripts/token-animation.js');
+  const { createPin } = await import('../scripts/animation.js');
+  const anchor = createPin({ x: 1, y: 1 });
+  const plan = (effects, regions) =>
+    getAnimatedSavePlan({ animation: { pins: [anchor], effects }, canEncode: true, regions });
+  const still = { id: 'w', type: 'wind', strength: 0, scale: 24, region: null };
+  const dark = { id: 'f', type: 'flicker', amount: 0, kind: 'opacity', speed: 3, region: null };
+  const unpainted = { id: 'g', type: 'glow', region: 'g', color: '#ffffff', size: 4, pulse: 0 };
+  assert.equal(plan([still, dark]), 'still');
+  assert.equal(plan([unpainted], {}), 'still');
+  assert.equal(hasActiveMotion({ pins: [anchor], effects: [unpainted] }, {}), false);
+  assert.equal(plan([unpainted], { g: createCanvas(2, 2) }), 'animated');
+  assert.equal(plan([{ ...still, strength: 2 }]), 'animated');
+  assert.equal(plan([{ ...dark, amount: 0.2 }]), 'animated');
+  assert.equal(
+    getAnimatedSavePlan({
+      animation: { pins: [anchor], effects: [{ ...still, strength: 2 }] },
+      canEncode: false,
+    }),
+    'still',
+  );
+});
+
+test('effect ids are escaped for attribute selectors without CSS.escape', async () => {
+  const { escapeSelectorValue } = await import('../scripts/token-creator.js');
+  const previous = globalThis.CSS;
+  try {
+    globalThis.CSS = undefined;
+    assert.equal(escapeSelectorValue('fx-1'), 'fx-1');
+    assert.equal(escapeSelectorValue('a"]b\\c'), 'a\\"]b\\\\c');
+    globalThis.CSS = { escape: (value) => `<${value}>` };
+    assert.equal(escapeSelectorValue('fx'), '<fx>');
+  } finally {
+    globalThis.CSS = previous;
+  }
 });
 
 test('pop-out never draws semi-transparent art twice inside the frame opening', async () => {

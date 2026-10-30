@@ -4,7 +4,7 @@
  * data URLs by the injected `toDataUrl`, so this module never touches the DOM.
  */
 import { normalizeAnimation } from './animation.js';
-import { normalizeEffects } from './animation-effects.js';
+import { isSafeEffectKey, normalizeEffects } from './animation-effects.js';
 import { MODULE_ID } from './constants.js';
 
 export const PROJECT_VERSION = 1;
@@ -53,7 +53,7 @@ export function serializeProject({
       : null;
   const normalized = normalizeProjectAnimation(animation);
   const used = new Set(normalized.effects.map((effect) => effect.region).filter(Boolean));
-  const storedRegions = {};
+  const storedRegions = Object.create(null);
   for (const [key, canvas] of Object.entries(regions ?? {})) {
     if (used.has(key) && canvas) storedRegions[key] = toDataUrl(canvas);
   }
@@ -88,10 +88,12 @@ export function parseProject(json) {
   const token = parseWorkspace(raw.token);
   if (!token) return null;
   const animation = isPlainObject(raw.animation) ? raw.animation : {};
-  const regions = {};
+  // Region keys become object keys and selector values: no prototype, and only `[\w-]` keys
+  // (normalizeEffects applies the same rule to effect ids and regions).
+  const regions = Object.create(null);
   if (isPlainObject(animation.regions)) {
     for (const [key, value] of Object.entries(animation.regions)) {
-      if (isImageDataUrl(value)) regions[key] = value;
+      if (isSafeEffectKey(key) && isImageDataUrl(value)) regions[key] = value;
     }
   }
   return {

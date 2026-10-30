@@ -4,6 +4,16 @@
  */
 export const EFFECT_TYPES = ['wind', 'wobble', 'flicker', 'glow', 'particles'];
 export const PARTICLE_KINDS = ['embers', 'smoke', 'sparkles', 'snow', 'drips'];
+/** Whether an effect type can be limited to a painted region (flicker is whole-figure only). */
+export const EFFECT_SUPPORTS_REGION = Object.freeze({
+  wind: true,
+  wobble: true,
+  flicker: false,
+  glow: true,
+  particles: true,
+});
+/** Effect ids and region keys allowed in a project (they end up in selectors and object keys). */
+const SAFE_KEY = /^[\w-]+$/;
 
 const TAU = Math.PI * 2;
 const FLICKER_KINDS = ['opacity', 'brightness'];
@@ -95,9 +105,9 @@ function normalizeEffect(raw, index) {
   if (!raw || typeof raw !== 'object' || !EFFECT_TYPES.includes(raw.type)) return null;
   const defaults = createEffect(raw.type);
   const effect = {
-    id: typeof raw.id === 'string' && raw.id ? raw.id : `fx-${index}`,
+    id: isSafeEffectKey(raw.id) ? raw.id : `fx-${index}`,
     type: raw.type,
-    region: typeof raw.region === 'string' && raw.region ? raw.region : null,
+    region: EFFECT_SUPPORTS_REGION[raw.type] && isSafeEffectKey(raw.region) ? raw.region : null,
   };
   switch (raw.type) {
     case 'wind':
@@ -129,10 +139,44 @@ function normalizeEffect(raw, index) {
   return effect;
 }
 
-/** Drops unknown effect types and clamps every param to its valid range. */
+/** Whether `value` can be used as an effect id or region key: letters, digits, `_` and `-`. */
+export function isSafeEffectKey(value) {
+  return typeof value === 'string' && SAFE_KEY.test(value);
+}
+
+/**
+ * Drops unknown effect types and clamps every param to its valid range. Ids and region keys
+ * outside `[\w-]` are replaced (ids by `fx-<index>`, regions by the whole figure), and effects
+ * that cannot use a region (flicker) always cover the whole figure.
+ */
 export function normalizeEffects(list) {
   if (!Array.isArray(list)) return [];
   return list.map((raw, index) => normalizeEffect(raw, index)).filter(Boolean);
+}
+
+/**
+ * Whether an effect changes the token at all: wind / wobble with strength, flicker with an
+ * amount, any glow or particles; a painted-region effect only once its region canvas exists in
+ * `regions` (keyed by its `region`, or its id).
+ */
+export function isEffectActive(effect, regions) {
+  if (!effect || !EFFECT_TYPES.includes(effect.type)) return false;
+  if (effect.type === 'wind' || effect.type === 'wobble') {
+    if (!(Number(effect.strength) > 0)) return false;
+  } else if (effect.type === 'flicker') {
+    if (!(Number(effect.amount) > 0)) return false;
+  } else if (effect.type === 'particles') {
+    if (!(Number(effect.count) > 0)) return false;
+  }
+  if (!EFFECT_SUPPORTS_REGION[effect.type] || !effect.region) return true;
+  return hasPaintedRegion(effect, regions);
+}
+
+/** Whether `regions` holds a canvas for the effect's painted region (own keys only). */
+export function hasPaintedRegion(effect, regions) {
+  if (!effect?.region || !regions) return false;
+  const has = (key) => typeof key === 'string' && Object.hasOwn(regions, key) && !!regions[key];
+  return has(effect.region) || has(effect.id);
 }
 
 function lattice(ix, iy, salt) {

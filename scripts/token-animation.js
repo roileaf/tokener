@@ -1,6 +1,7 @@
 import {
   DEFAULT_ANIMATION,
   KEYFRAME_MERGE,
+  PINGPONG_MAX_KEY,
   hasMotion,
   loopDistance,
   samplePinOffset,
@@ -13,6 +14,7 @@ import {
   getDisplacement,
   getEmitterPoints,
   getFlickerFactor,
+  isEffectActive,
 } from './animation-effects.js';
 import { buildWarpGrid, warpImageData } from './puppet-warp.js';
 import { getTokenFrameLayout } from './token-composer.js';
@@ -238,8 +240,10 @@ function displaceGrid(grid, displacements, { margin, size, t }) {
 
 /** The canvas an effect's region is painted on, or null for the whole figure / no paint yet. */
 function getRegionCanvas(effect, regions) {
-  if (!effect.region) return null;
-  return regions?.[effect.region] ?? regions?.[effect.id] ?? null;
+  if (!effect.region || !regions) return null;
+  // Own keys only: an id such as `constructor` must never find an inherited value.
+  const own = (key) => (Object.hasOwn(regions, key) ? regions[key] : null);
+  return own(effect.region) ?? own(effect.id) ?? null;
 }
 
 /**
@@ -517,8 +521,6 @@ const PRESET_AMPLITUDE = 0.03;
 const SHIVER_AMPLITUDE = 0.01;
 /** Rotation arm of a new pin as a share of the cut-out's long side. */
 export const ROTATION_ARM_RATIO = 0.12;
-/** Ping-pong keyframes stop short of 1 so the apex never merges with a keyframe at 0. */
-const PINGPONG_MAX_KEY = 1 - 2 * KEYFRAME_MERGE;
 /** Screen pixels a press on a pin must travel before it counts as a drag. */
 const PIN_DRAG_DEAD_ZONE = 3;
 
@@ -621,16 +623,30 @@ export function updateKeyframeAt(pin, t, changes, mode = 'loop') {
 }
 
 /**
- * How the token is saved: an animated WebM loop only when some pin moves and this browser can
- * encode one; otherwise the usual still image.
+ * Whether the animation visibly changes the token over the loop: some pin moves or turns, or some
+ * effect is active (`isEffectActive`: a no-op effect, such as a painted-region effect whose
+ * region is not painted yet, does not count). `regions` holds the painted region canvases.
  */
-export function getAnimatedSavePlan({ animation, canEncode }) {
-  return canEncode && hasMotion(animation) ? 'animated' : 'still';
+export function hasActiveMotion(animation, regions) {
+  if (hasMotion({ pins: animation?.pins ?? [] })) return true;
+  return (animation?.effects ?? []).some((effect) => isEffectActive(effect, regions));
 }
 
-/** A fresh animation for a newly loaded token image: pins belong to the old art, the loop length stays. */
+/**
+ * How the token is saved: an animated WebM loop only when this browser can encode one and the
+ * animation changes the token (a moving pin or an active effect, see `hasActiveMotion`; effects
+ * read their painted regions from `regions`); otherwise the usual still image.
+ */
+export function getAnimatedSavePlan({ animation, canEncode, regions = null }) {
+  return canEncode && hasActiveMotion(animation, regions) ? 'animated' : 'still';
+}
+
+/**
+ * A fresh animation for a newly loaded token image: pins and effects (with their painted regions)
+ * belong to the old art and are dropped; the loop length and playback mode stay.
+ */
 export function resetAnimationForNewSource(animation) {
-  return { ...DEFAULT_ANIMATION, ...(animation ?? {}), pins: [] };
+  return { ...DEFAULT_ANIMATION, ...(animation ?? {}), pins: [], effects: [] };
 }
 
 /** True when a pin never moves or turns, so it holds the art still around it. */
