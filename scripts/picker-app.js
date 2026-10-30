@@ -26,7 +26,13 @@ import {
   isFavoriteCandidate,
   toggleFavoriteCandidate,
 } from './favorites.js';
-import { ensureIndex } from './foundry-index.js';
+import {
+  ensureIndex,
+  hasIndexFailed,
+  isIndexReady,
+  rebuildIndex,
+  state as indexState,
+} from './foundry-index.js';
 import {
   getPickerGridMinSize,
   getPickerGridSize,
@@ -201,8 +207,22 @@ export function getTokenPickerApplicationClass(
   return TokenPickerApplicationClass;
 }
 
+/**
+ * The index can be shown: it is ready, or this window waited for a build that failed (shown as
+ * "No token art found" rather than loading forever; the next window builds again).
+ */
+function canShowIndex(app) {
+  return isIndexReady() || (app._indexFailed === true && hasIndexFailed());
+}
+
 async function preparePickerContext(app) {
-  const index = await ensureIndex();
+  if (!canShowIndex(app)) {
+    renderWhenIndexSettles(app);
+    return prepareLoadingPickerContext(app);
+  }
+  // A background rebuild (settings change) keeps showing the current index until it lands.
+  if (indexState.indexing) renderWhenIndexSettles(app);
+  const index = indexState.index;
   const sourceOptions = getPanelSourceFilterOptions(index);
   syncSelectedSources(app, sourceOptions);
 
@@ -225,11 +245,66 @@ async function preparePickerContext(app) {
     sections,
     favorites: prepareFavoritesView(favoriteIds, app),
     gridSize: preparePickerGridSizeView(app.gridSize),
+    loading: false,
     revert: prepareRevertView(app.tokenDocument),
+    rescan: prepareRescanView(false),
     creator: prepareCreatorView(),
     source: prepareSourceFilterView(sourceOptions, app),
     tags: prepareTagFilterView(tagOptions, app),
   };
+}
+
+// Rendered while the art index is still being built: the window opens at once and the main part
+// re-renders when the build lands. Selections are left untouched so a rescan keeps the filters.
+function prepareLoadingPickerContext(app) {
+  const favoriteIds = getFavoriteIds();
+  return {
+    count: '',
+    emptyMessage: localize('HUD.IndexLoading', 'Finding token art…'),
+    hasResults: false,
+    paging: preparePagingView({ hasMore: false }),
+    searchPlaceholder: localize('HUD.SearchPlaceholder', 'Search tokens'),
+    searchQuery: app.searchQuery,
+    sections: [],
+    favorites: prepareFavoritesView(favoriteIds, app),
+    gridSize: preparePickerGridSizeView(app.gridSize),
+    loading: true,
+    revert: prepareRevertView(app.tokenDocument),
+    rescan: prepareRescanView(true),
+    creator: prepareCreatorView(),
+    source: prepareSourceFilterView([], app),
+    tags: prepareTagFilterView([], app),
+  };
+}
+
+function prepareRescanView(loading) {
+  return {
+    disabled: loading,
+    label: localize('HUD.Rescan', 'Rescan'),
+    tooltip: localize(
+      'HUD.RescanTooltip',
+      'Scan installed modules and custom folders again for token art.',
+    ),
+  };
+}
+
+function renderWhenIndexSettles(app) {
+  if (!indexState.indexing) void ensureIndex();
+  const pending = indexState.indexing;
+  if (!pending || app._indexWait === pending) return;
+  app._indexWait = pending;
+  void pending.then(() => {
+    if (app._indexWait !== pending) return;
+    app._indexWait = null;
+    app._indexFailed = hasIndexFailed();
+    if (app.rendered) renderMainPart(app, { preserveScroll: true });
+  });
+}
+
+async function rescanIndex(app) {
+  const rebuilding = rebuildIndex({ force: true });
+  renderMainPart(app);
+  await rebuilding;
 }
 
 export function getPickerCandidatePool(
@@ -379,6 +454,13 @@ async function handlePickerClick(app, event) {
   if (closestTarget(target, '[data-revert-action="last"]')) {
     event.preventDefault?.();
     await handleRevertControlClick(app);
+    return;
+  }
+
+  if (closestTarget(target, '[data-picker-action="rescan-index"]')) {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    if (canShowIndex(app)) await rescanIndex(app);
     return;
   }
 

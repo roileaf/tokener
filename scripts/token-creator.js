@@ -1,3 +1,4 @@
+import { buildAutoRig } from './auto-animate.js';
 import {
   composeCandidates,
   DEFAULT_COMPOSE_GRID,
@@ -40,26 +41,64 @@ import {
   createPin,
   getFrameTimes,
   hasMotion,
+  KEYFRAME_MERGE,
+  loopDistance,
   normalizeAnimation,
   removeKeyframe,
   samplePinOffset,
-  setKeyframe,
 } from './animation.js';
+import {
+  createEffect,
+  EFFECT_SUPPORTS_REGION,
+  EFFECT_TYPES,
+  hasPaintedRegion,
+  isSafeEffectKey,
+  normalizeEffects,
+  PARTICLE_COLORS,
+  PARTICLE_KINDS,
+} from './animation-effects.js';
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
 import {
-  bendTokenArt,
   canPlayWithTool,
+  clearEffectCaches,
   getAnimatedOutputSize,
   getAnimatedSavePlan,
   getPinHitRadius,
+  ensurePinArm,
+  getKeyframeAt,
+  getKeyframeMarkerTimes,
+  getKeyframeTime,
+  getPinToolEscapeAction,
   getPinPreviewPoints,
   getPinDragMode,
+  getPresetAmplitude,
   getPresetTargets,
+  getRotationArm,
+  hasActiveMotion,
+  isPastDragDeadZone,
   isPresetAvailable,
+  renderAnimationFrame,
   resetAnimationForNewSource,
   shouldBendPreview,
+  toggleSelection,
+  updateKeyframeAt,
 } from './token-animation.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
+import { encodeAnimatedWebp } from './webp-anim.js';
+import {
+  buildProjectFileName,
+  parseProject,
+  serializeProject,
+  shouldLoadProject,
+} from './creator-project.js';
+import {
+  applyFlip,
+  flipCanvas,
+  flipPins,
+  flipView,
+  normalizeFlip,
+  toggleFlip,
+} from './image-flip.js';
 import { registerCreatedTokenSubjectPath } from './ring-video.js';
 import {
   colorizeRingBackground,
@@ -98,6 +137,8 @@ import { clamp, getDocumentActor, localize, normalizeHudElement, numberOr } from
 
 const CREATOR_TEMPLATE = 'modules/pf2e-tokener/templates/token-creator.hbs';
 const WORKING_MAX_SIZE = 1024;
+/** Stable stand-in for missing effect regions, so the preview bend cache key can match. */
+const EMPTY_REGIONS = Object.freeze({});
 const PREVIEW_SIZE = 480;
 // Painted border widths are expressed in pixels of a 320px token so saved tokens keep the same
 // proportions no matter how large the editor preview is.
@@ -138,10 +179,71 @@ const PIN_RADIUS = 5;
 const PIN_HIT_RADIUS = 10;
 const PIN_COLOR = '#8fb9d6';
 const PIN_SELECTED_COLOR = '#ffd166';
-const PRESET_AMPLITUDE = 0.03;
+const PIN_PRIMARY_RING = 5;
+// Preset button icons (Font Awesome) and the keyframe easing / loop mode choices.
+const PRESET_ICONS = {
+  bob: 'fa-arrows-up-down',
+  sway: 'fa-arrows-left-right',
+  breathe: 'fa-lungs',
+  flap: 'fa-dove',
+  wave: 'fa-water',
+  hover: 'fa-feather',
+  shiver: 'fa-wave-square',
+  look: 'fa-eye',
+};
+const PRESET_TOOLTIPS = {
+  bob: 'Bob: the selected pins rise and fall',
+  sway: 'Sway: the selected pins swing side to side',
+  breathe: 'Breathe: every pin swells and settles about their centre (2+ pins)',
+  flap: 'Flap: the selected pins beat down together, like wings',
+  wave: 'Wave: the selected pins sway one after another, in the order you selected them (2+ pins)',
+  hover: 'Hover: every pin floats up and down',
+  shiver: 'Shiver: the selected pins jitter quickly',
+  look: 'Look: the selected pins turn left and right',
+};
+// Effects list: icons per type, the region brush/overlay colour and the warp strength cap
+// (normalizeEffects keeps wind/wobble strength under 18 % of the noise scale, at most 40 px).
+const EFFECT_ICONS = {
+  wind: 'fa-wind',
+  wobble: 'fa-water',
+  flicker: 'fa-lightbulb',
+  glow: 'fa-sun',
+  particles: 'fa-fire',
+};
+const EFFECT_TYPE_LABELS = {
+  wind: 'Wind',
+  wobble: 'Wobble',
+  flicker: 'Flicker',
+  glow: 'Glow',
+  particles: 'Particles',
+};
+const PARTICLE_KIND_LABELS = {
+  embers: 'Embers',
+  smoke: 'Smoke',
+  sparkles: 'Sparkles',
+  snow: 'Snow',
+  drips: 'Drips',
+};
+const FLICKER_KIND_LABELS = { opacity: 'Fade', brightness: 'Brightness' };
+const EFFECT_PARAM_LABELS = {
+  strength: 'Strength',
+  scale: 'Ripple size',
+  amount: 'Amount',
+  kind: 'Kind',
+  speed: 'Flickers per loop',
+  color: 'Colour',
+  size: 'Size',
+  pulse: 'Pulse',
+  count: 'Count',
+};
+const MAX_WARP_STRENGTH = 40;
+const WARP_STRENGTH_RATIO = 0.18;
+const REGION_COLOR = '#d38fff';
+const REGION_OVERLAY_ALPHA = 0.45;
+const KEYFRAME_EASES = ['smooth', 'linear', 'hold'];
+const ANIMATION_MODES = ['loop', 'pingpong'];
+const MAX_KEYFRAME_ROTATION = 45;
 const LOOP_LENGTHS = [1, 1.5, 2, 2.5, 3, 3.5, 4];
-// Keyframes closer than this to the current time count as "at" it (matches animation.js merging).
-const KEYFRAME_TOLERANCE = 1 / 120;
 const TEXT_ENTRY_SELECTOR =
   'input:not([type]), input[type="text"], input[type="search"], input[type="number"], textarea, select, [contenteditable="true"]';
 
@@ -158,12 +260,14 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   popOutShadow: true,
   breakoutRoom: 25,
   ringColors: false,
+  ringEffects: Object.freeze({ pulse: false, gradient: false, wave: false, spectral: false }),
   ringColor: '#d4af37',
   ringBackgroundColor: '#1b1b1b',
   outputSize: 400,
   portraitAspect: 'original',
   portraitBackground: 'original',
   portraitColor: '#1b1b1b',
+  animatePortrait: false,
 });
 
 const MAX_BREAKOUT_ROOM = 50;
@@ -229,6 +333,7 @@ export function normalizeTokenCreatorOptions(value = {}) {
       MAX_BREAKOUT_ROOM,
     ),
     ringColors: Boolean(options.ringColors),
+    ringEffects: normalizeRingEffects(options.ringEffects),
     ringColor: normalizeColor(options.ringColor, defaults.ringColor),
     ringBackgroundColor: normalizeColor(options.ringBackgroundColor, defaults.ringBackgroundColor),
     outputSize: OUTPUT_SIZES.includes(Number(options.outputSize))
@@ -241,6 +346,17 @@ export function normalizeTokenCreatorOptions(value = {}) {
       ? options.portraitBackground
       : defaults.portraitBackground,
     portraitColor: normalizeColor(options.portraitColor, defaults.portraitColor),
+    animatePortrait: Boolean(options.animatePortrait),
+  };
+}
+
+function normalizeRingEffects(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    pulse: Boolean(source.pulse),
+    gradient: Boolean(source.gradient),
+    wave: Boolean(source.wave),
+    spectral: Boolean(source.spectral),
   };
 }
 
@@ -253,6 +369,11 @@ export function openTokenCreator(tokenDocument, { onApplied } = {}) {
     activeCreator.tokenDocument = tokenDocument;
     activeCreator.onApplied = onApplied;
     activeCreator.bringToFront?.();
+    // Re-targeting never replaces work in progress: the saved project opens only while the
+    // creator is still empty (use Open project to switch on purpose).
+    const project = shouldLoadProject(tokenDocument);
+    if (project && !activeCreator.workspaces.token.source && !activeCreator.busy)
+      void loadCreatorProject(activeCreator, project.path);
     return activeCreator;
   }
 
@@ -312,7 +433,13 @@ export function getTokenCreatorApplicationClass() {
       // Token animation: pins in source-image pixels, time as a fraction of the loop.
       this.animation = normalizeAnimation(null);
       this.animationTime = 0;
-      this.selectedPinId = null;
+      // Selected pins in selection order; the first is the primary that keyframe controls edit.
+      this.selectedPinIds = [];
+      // Effect regions: source-image px canvases keyed by effect.region. One stable object; the
+      // preview falls back to the frozen EMPTY_REGIONS only when it is missing.
+      this.effectRegions = {};
+      this.selectedEffectId = null;
+      this._regionVersion = 0;
       this.animationPlaying = false;
       this._animationFrame = null;
       // WebM encoding support, probed once when the creator first renders (false until then).
@@ -379,8 +506,11 @@ export function getTokenCreatorApplicationClass() {
       startAnimationSupportProbe(this);
       if (!this.source && !this._initialSourceRequested) {
         this._initialSourceRequested = true;
+        // A token made in the creator reopens its saved project instead of starting over.
+        const project = shouldLoadProject(this.tokenDocument);
         const portrait = getDocumentActor(this.tokenDocument)?.img;
-        if (portrait && !isDefaultArtwork(portrait))
+        if (project) void loadCreatorProject(this, project.path);
+        else if (portrait && !isDefaultArtwork(portrait))
           void loadCreatorSource(this, { path: portrait });
       } else {
         renderCreatorPreview(this);
@@ -414,6 +544,7 @@ function prepareCreatorContext(app) {
       label: formatZoom(getActiveView(app).zoom),
     },
     editTarget: app.editTarget,
+    canFlip: canFlip(app),
     editTargets: EDIT_TARGETS.map((target) => ({
       ...target,
       label: localize(`Creator.EditTarget.${target.value}`, target.value),
@@ -465,12 +596,48 @@ function prepareCreatorContext(app) {
         label: `${seconds} s`,
         selected: app.animation.duration === seconds,
       })),
-      presets: ANIMATION_PRESETS.map((preset) => ({
-        value: preset,
+      presets: ANIMATION_PRESETS.map((preset) => {
+        const key = `${preset[0].toUpperCase()}${preset.slice(1)}`;
+        return {
+          value: preset,
+          icon: PRESET_ICONS[preset],
+          label: localize(`Creator.Animate.${key}`, key),
+          tooltip: localize(`Creator.Animate.${key}Tooltip`, PRESET_TOOLTIPS[preset]),
+        };
+      }),
+      modes: ANIMATION_MODES.map((mode) => ({
+        value: mode,
+        label:
+          mode === 'loop'
+            ? localize('Creator.Animate.ModeLoop', 'Loop')
+            : localize('Creator.Animate.ModePingPong', 'Ping-pong'),
+        tooltip:
+          mode === 'loop'
+            ? localize(
+                'Creator.Animate.ModeLoopTooltip',
+                'Play the keyframes over and over. Switching keeps the existing keyframes; presets applied afterwards are shaped for this mode.',
+              )
+            : localize(
+                'Creator.Animate.ModePingPongTooltip',
+                'Play the keyframes forward, then backward. Switching keeps the existing keyframes; presets applied afterwards are shaped for this mode.',
+              ),
+        selected: app.animation.mode === mode,
+      })),
+      eases: KEYFRAME_EASES.map((ease) => ({
+        value: ease,
         label: localize(
-          `Creator.Animate.${preset[0].toUpperCase()}${preset.slice(1)}`,
-          `${preset[0].toUpperCase()}${preset.slice(1)}`,
+          `Creator.Animate.Ease${ease[0].toUpperCase()}${ease.slice(1)}`,
+          `${ease[0].toUpperCase()}${ease.slice(1)}`,
         ),
+      })),
+      rotationMax: MAX_KEYFRAME_ROTATION,
+      effectTypes: EFFECT_TYPES.map((type) => ({
+        value: type,
+        label: getEffectTypeLabel(type),
+      })),
+      particleKinds: PARTICLE_KINDS.map((kind) => ({
+        value: kind,
+        label: getParticleKindLabel(kind),
       })),
     },
     labels: {
@@ -479,7 +646,23 @@ function prepareCreatorContext(app) {
       animatePause: localize('Creator.Animate.Pause', 'Pause'),
       animateAddKeyframe: localize('Creator.Animate.AddKeyframe', 'Add keyframe'),
       animateRemoveKeyframe: localize('Creator.Animate.RemoveKeyframe', 'Remove keyframe'),
+      animateAuto: localize('Creator.Animate.AutoAnimate', 'Auto animate'),
+      animateAutoTooltip: localize(
+        'Creator.Animate.AutoAnimateTooltip',
+        'Place pins on the head, chest, base and any protruding parts, with a gentle idle loop',
+      ),
       animateLength: localize('Creator.Animate.Length', 'Loop length'),
+      animateMode: localize('Creator.Animate.Mode', 'Playback'),
+      animateEase: localize('Creator.Animate.Ease', 'Easing'),
+      animateEaseTooltip: localize(
+        'Creator.Animate.EaseTooltip',
+        'How the selected pin moves from this keyframe to the next: smooth, steady, or holding still until it jumps',
+      ),
+      animateRotation: localize('Creator.Animate.Rotation', 'Rotation'),
+      animateRotationTooltip: localize(
+        'Creator.Animate.RotationTooltip',
+        'Turns the art around the selected pin at this keyframe',
+      ),
       animateHint: localize(
         'Creator.Animate.Hint',
         "Keep moves small: parts can't reveal what is behind them.",
@@ -490,11 +673,42 @@ function prepareCreatorContext(app) {
       ),
       pinTooltip: localize(
         'Creator.Animate.PinTooltip',
-        'Pins: click to add, drag to move or keyframe at the current time, right-click to remove (P)',
+        'Pins: click to add or select, Shift+click to add to the selection, drag to move or keyframe at the current time, right-click to remove (P)',
+      ),
+      effectsTitle: localize('Creator.Animate.Effects.Title', 'Effects'),
+      effectsType: localize('Creator.Animate.Effects.Type', 'Effect'),
+      effectsKind: localize('Creator.Animate.Effects.Kind', 'Kind'),
+      effectsAdd: localize('Creator.Animate.Effects.Add', 'Add'),
+      effectsAddTooltip: localize(
+        'Creator.Animate.Effects.AddTooltip',
+        'Add an effect of this type. Effects loop seamlessly with the pins.',
+      ),
+      effectsEmpty: localize(
+        'Creator.Animate.Effects.Empty',
+        'No effects yet: add wind, a glow, flickering or particles.',
+      ),
+      regionTooltip: localize(
+        'Creator.Animate.Effects.RegionTooltip',
+        'Effect region brush (F): drag over the art where the selected effect applies, right-drag or Alt-drag to remove',
       ),
       source: localize('Creator.Source', 'Image'),
       browse: localize('Creator.Browse', 'Browse files'),
+      openProject: localize('Creator.OpenProject', 'Open project'),
+      openProjectTooltip: localize(
+        'Creator.OpenProjectTooltip',
+        'Open a saved Token Creator project (.tokener.json) to keep editing it.',
+      ),
       upload: localize('Creator.Upload', 'Upload'),
+      flipHorizontal: localize('Creator.FlipHorizontal', 'Flip horizontal'),
+      flipHorizontalTooltip: localize(
+        'Creator.FlipHorizontalTooltip',
+        'Mirror the image left to right, with its touch-ups, pop-out, effect regions and pins. In Portrait mode a separate portrait image flips on its own; a portrait linked to the token flips the token too.',
+      ),
+      flipVertical: localize('Creator.FlipVertical', 'Flip vertical'),
+      flipVerticalTooltip: localize(
+        'Creator.FlipVerticalTooltip',
+        'Mirror the image top to bottom, with its touch-ups, pop-out, effect regions and pins. In Portrait mode a separate portrait image flips on its own; a portrait linked to the token flips the token too.',
+      ),
       portrait: localize('Creator.UsePortrait', 'Use portrait'),
       dropHint: localize(
         'Creator.DropHint',
@@ -576,6 +790,14 @@ function prepareCreatorContext(app) {
           tokenOnly: true,
         },
         {
+          keys: `${kbd('F')}`,
+          label: localize(
+            'Creator.ShortcutRegion',
+            'Effect region brush: paint where the selected effect applies',
+          ),
+          tokenOnly: true,
+        },
+        {
           keys: `${kbd('Shift')} ${localize('Creator.ShortcutDrag', 'drag')}`,
           label: localize('Creator.ShortcutPaint', 'Pop parts out (any tool)'),
           popOut: true,
@@ -614,6 +836,15 @@ function prepareCreatorContext(app) {
         'Creator.RingHint',
         'Saves a transparent subject and enables the dynamic token ring. Foundry draws the ring.',
       ),
+      ringEffectsTitle: localize('Creator.RingEffects.Title', 'Ring effects'),
+      ringEffectsHint: localize(
+        'Creator.RingEffects.Hint',
+        'Foundry animates the ring itself, so these work without video.',
+      ),
+      ringEffectPulse: localize('Creator.RingEffects.Pulse', 'Pulse'),
+      ringEffectGradient: localize('Creator.RingEffects.Gradient', 'Gradient'),
+      ringEffectWave: localize('Creator.RingEffects.Wave', 'Wave'),
+      ringEffectSpectral: localize('Creator.RingEffects.Spectral', 'Spectral'),
       ringColors: localize('Creator.RingColors', 'Set ring colours'),
       ringColor: localize('Creator.RingColor', 'Ring'),
       ringBackgroundColor: localize('Creator.RingBackgroundColor', 'Background'),
@@ -638,6 +869,11 @@ function prepareCreatorContext(app) {
       ),
       portraitAspect: localize('Creator.PortraitAspectLabel', 'Shape'),
       portraitBackground: localize('Creator.PortraitBackgroundLabel', 'Background'),
+      animatePortrait: localize('Creator.AnimatePortrait', 'Animate portrait'),
+      animatePortraitTooltip: localize(
+        'Creator.AnimatePortraitTooltip',
+        'Save the portrait as an animated WebP that plays the token animation (15 fps, up to 512 px).',
+      ),
       portraitHint: localize(
         'Creator.PortraitHint',
         'Actor, Portrait and Both save this portrait. Left untouched, the original image is used.',
@@ -699,8 +935,27 @@ function bindPreviewInteractions(app, canvas) {
     if (app.maskTool === 'pin') {
       event.preventDefault();
       if (!canEditPins(app)) return;
-      drag = startPinDrag(app, getTokenPoint(app, canvas, event), event.button);
-      if (drag) canvas.setPointerCapture?.(event.pointerId);
+      drag = startPinDrag(app, getTokenPoint(app, canvas, event), event.button, event.shiftKey);
+      if (drag) {
+        drag.press = { x: event.clientX, y: event.clientY };
+        canvas.setPointerCapture?.(event.pointerId);
+      }
+      return;
+    }
+    if (app.maskTool === 'region') {
+      event.preventDefault();
+      const key = startRegionStroke(app);
+      if (!key) return;
+      const mode = getStrokeMode({
+        tool: 'region',
+        button: event.button,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+      });
+      const point = getTokenPoint(app, canvas, event);
+      drag = { mode, region: key, last: point };
+      paintEffectRegion(app, key, point, point, mode);
+      canvas.setPointerCapture?.(event.pointerId);
       return;
     }
     if (isCleanupTool(app.maskTool) && app.cutout) {
@@ -772,12 +1027,16 @@ function bindPreviewInteractions(app, canvas) {
       return;
     }
     if (drag.pinId) {
+      // A small tremor on a press is still a click: it neither keyframes nor keeps the selection.
+      if (!drag.moved && !isPastDragDeadZone(drag.press, { x: event.clientX, y: event.clientY }))
+        return;
       dragPin(app, drag, getTokenPoint(app, canvas, event));
       return;
     }
     if (drag.mode) {
       const point = getTokenPoint(app, canvas, event);
       if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
+      else if (drag.region) paintEffectRegion(app, drag.region, drag.last, point, drag.mode);
       else paintPopOutMask(app, drag.last, point, drag.mode);
       drag.last = point;
       return;
@@ -791,6 +1050,11 @@ function bindPreviewInteractions(app, canvas) {
   });
   const endDrag = () => {
     const wasPin = Boolean(drag?.pinId);
+    if (wasPin && drag.narrow && !drag.moved) {
+      app.selectedPinIds = [drag.pinId];
+      renderCreatorPreview(app);
+    }
+    if (drag?.region) finishRegionStroke(app);
     drag = null;
     syncMaskControls(app);
     if (wasPin) syncAnimationControls(app);
@@ -812,7 +1076,7 @@ function bindPreviewInteractions(app, canvas) {
         setViewScale(app, stepViewScale(app.viewport.scale, event.deltaY < 0 ? 1 : -1));
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && canMask(app)) {
+      if ((event.ctrlKey || event.metaKey) && (canMask(app) || app.maskTool === 'region')) {
         setBrushSize(app, stepBrushSize(app.brushSize, event.deltaY < 0 ? 1 : -1));
         return;
       }
@@ -852,12 +1116,28 @@ function handleCreatorKeyDown(app, event) {
       selectMaskTool(app, command.replace('tool-', ''));
       return;
     case 'tool-move':
+      if (
+        event.key === 'Escape' &&
+        getPinToolEscapeAction({
+          maskTool: app.maskTool,
+          selectedCount: app.selectedPinIds.length,
+        }) === 'clear-selection'
+      ) {
+        app.selectedPinIds = [];
+        syncAnimationControls(app);
+        renderCreatorPreview(app);
+        return;
+      }
       setMaskTool(app, null);
       return;
     case 'tool-pin':
       selectPinTool(app);
       return;
+    case 'tool-region':
+      selectRegionTool(app);
+      return;
     case 'swap':
+      if (app.maskTool === 'region') return;
       if (isCleanupTool(app.maskTool))
         selectMaskTool(app, app.maskTool === 'cut' ? 'restore' : 'cut');
       else selectMaskTool(app, app.maskTool === 'paint' ? 'erase' : 'paint');
@@ -901,9 +1181,13 @@ function refreshPointerMode(app, event) {
   renderCreatorPreview(app);
 }
 
-function handleCreatorInput(app, event) {
+export function handleCreatorInput(app, event) {
   const target = event.target;
   const name = target?.name;
+  if (target?.dataset?.effectParam) {
+    updateEffectParam(app, target);
+    return;
+  }
   if (name === 'zoom') {
     setCreatorZoom(app, Number(target.value));
     return;
@@ -917,7 +1201,15 @@ function handleCreatorInput(app, event) {
     setAnimationTime(app, Number(target.value) / 100);
     return;
   }
-  if (!name || !(name in app.creatorOptions)) return;
+  if (name === 'animationRotation') {
+    const degrees = Math.max(
+      -MAX_KEYFRAME_ROTATION,
+      Math.min(MAX_KEYFRAME_ROTATION, Number(target.value) || 0),
+    );
+    setPrimaryKeyframe(app, { rot: (degrees * Math.PI) / 180 });
+    return;
+  }
+  if (!getCreatorOptionKey(name, app.creatorOptions)) return;
 
   updateCreatorOption(app, target);
   updateValueLabel(target);
@@ -925,7 +1217,7 @@ function handleCreatorInput(app, event) {
   else renderCreatorPreview(app);
 }
 
-async function handleCreatorChange(app, event) {
+export async function handleCreatorChange(app, event) {
   const target = event.target;
   if (target?.name === 'upload') {
     const file = target.files?.[0];
@@ -946,7 +1238,27 @@ async function handleCreatorChange(app, event) {
     syncAnimationControls(app);
     return;
   }
-  if (!target?.name || !(target.name in app.creatorOptions)) return;
+  if (target?.name === 'animationMode') {
+    if (!ANIMATION_MODES.includes(target.value)) return;
+    app.animation = normalizeAnimation({ ...app.animation, mode: target.value });
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+    return;
+  }
+  if (target?.name === 'effectType') {
+    syncEffectControls(app);
+    return;
+  }
+  if (target?.name === 'effectRegion') {
+    setEffectRegionMode(app, target.value === 'painted');
+    return;
+  }
+  if (target?.dataset?.effectParam) return;
+  if (target?.name === 'animationEase') {
+    if (KEYFRAME_EASES.includes(target.value)) setPrimaryKeyframe(app, { ease: target.value });
+    return;
+  }
+  if (!getCreatorOptionKey(target?.name, app.creatorOptions)) return;
   updateCreatorOption(app, target);
   saveCreatorDefaults(app.creatorOptions);
   if (target.name === 'portraitBackground') syncPortraitControls(app);
@@ -981,8 +1293,15 @@ async function handleCreatorClick(app, event) {
     case 'browse':
       openCreatorFilePicker(app);
       return;
+    case 'open-project':
+      openProjectFilePicker(app);
+      return;
     case 'upload':
       getCreatorRoot(app)?.querySelector('input[name="upload"]')?.click();
+      return;
+    case 'flip-x':
+    case 'flip-y':
+      if (canFlip(app)) flipWorkspace(app, button.dataset.creatorAction === 'flip-x' ? 'x' : 'y');
       return;
     case 'portrait': {
       const portrait = getDocumentActor(app.tokenDocument)?.img;
@@ -994,6 +1313,18 @@ async function handleCreatorClick(app, event) {
       return;
     case 'mask-pin':
       selectPinTool(app);
+      return;
+    case 'mask-region':
+      selectRegionTool(app);
+      return;
+    case 'effect-add':
+      addCreatorEffect(app);
+      return;
+    case 'effect-select':
+      selectCreatorEffect(app, button.dataset.effectId);
+      return;
+    case 'effect-remove':
+      removeCreatorEffect(app, button.dataset.effectId);
       return;
     case 'animation-play':
       if (app.animationPlaying) stopAnimationPlayback(app);
@@ -1011,6 +1342,9 @@ async function handleCreatorClick(app, event) {
       return;
     case 'animation-preset':
       applyAnimationPreset(app, button.dataset.preset);
+      return;
+    case 'animation-auto':
+      await runAutoAnimate(app);
       return;
     case 'mask-paint':
     case 'mask-select':
@@ -1123,7 +1457,38 @@ function openCreatorFilePicker(app) {
   }).render(true);
 }
 
+/** Browses for a `.tokener.json` project (text files) and opens it in the creator. */
+function openProjectFilePicker(app) {
+  const FilePicker = getFilePickerImplementation();
+  if (!FilePicker) return;
+  const link = app.tokenDocument?.isTokenerActorProxy
+    ? app.tokenDocument.prototypeToken
+    : app.tokenDocument;
+  const current =
+    link?._source?.flags?.[MODULE_ID]?.project?.path ??
+    link?._source?.texture?.src ??
+    link?.texture?.src ??
+    '';
+  new FilePicker({
+    type: 'text',
+    current,
+    callback: (path) => {
+      if (!/\.json$/i.test(String(path ?? ''))) {
+        setCreatorStatus(
+          app,
+          localize('Creator.ProjectNotJson', 'Choose a .tokener.json project file.'),
+          true,
+        );
+        return;
+      }
+      void loadCreatorProject(app, path);
+    },
+  }).render(true);
+}
+
 async function loadCreatorSource(app, { path, file }) {
+  // An image picked while a project is still opening wins over that project.
+  app._projectLoadToken = (app._projectLoadToken ?? 0) + 1;
   setCreatorStatus(app, localize('Creator.Loading', 'Loading image...'));
   try {
     const image = await loadImageElement(file ? URL.createObjectURL(file) : path, Boolean(file));
@@ -1163,6 +1528,170 @@ async function loadCreatorSource(app, { path, file }) {
   }
 }
 
+/**
+ * Reopens a saved Token Creator project: sources (by path), views, options, the pop-out mask,
+ * touch-ups, animation, effects and their regions. Everything is fetched and decoded before
+ * the creator is touched, so a failure (missing project or image file, unknown version) leaves
+ * the current state as it was (an empty creator stays empty) with `Creator.ProjectLoadFailed`.
+ * A background removal that fails while reopening keeps its error on the status line (the
+ * project is still open). `fetchJson` / `loadImage` / `updateCutouts` are injectable for tests.
+ * Resolves true when the project loaded.
+ */
+export async function loadCreatorProject(
+  app,
+  path,
+  {
+    fetchJson = fetchProjectJson,
+    loadImage = loadProjectImage,
+    updateCutouts = updateAllCutouts,
+  } = {},
+) {
+  const token = (app._projectLoadToken = (app._projectLoadToken ?? 0) + 1);
+  setCreatorStatus(app, localize('Creator.ProjectLoading', 'Opening the saved project...'));
+  let restored;
+  try {
+    const project = parseProject(await fetchJson(path));
+    if (!project) throw new Error(`Not a Token Creator project: ${path}`);
+    restored = await decodeProject(project, loadImage);
+  } catch (error) {
+    if (token !== app._projectLoadToken) return false;
+    console.error(`${MODULE_ID} | Failed to open token creator project ${path}`, error);
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.ProjectLoadFailed',
+        'Could not open the saved project. Its files may have been moved or deleted.',
+      ),
+      true,
+    );
+    return false;
+  }
+  if (token !== app._projectLoadToken) return false;
+  applyLoadedProject(app, restored);
+  // Re-run the background removal with the saved options so autoCutout is rebuilt; the saved
+  // touch-ups (already on each workspace) are composed over it by updateCutout.
+  const errors = ((await updateCutouts(app)) ?? []).filter(Boolean);
+  if (token !== app._projectLoadToken) return false;
+  if (app.rendered && typeof app.render === 'function') await app.render({ parts: ['main'] });
+  // A failed background removal keeps its error on the status line (the render above cleared it).
+  if (errors.length)
+    setCreatorStatus(
+      app,
+      `${errors[0]} ${localize('Creator.ProjectLoadedWithError', 'The saved project is still open for editing.')}`,
+      true,
+    );
+  else setCreatorStatus(app, localize('Creator.ProjectLoaded', 'Editing the saved project.'));
+  return true;
+}
+
+async function fetchProjectJson(path) {
+  const url = globalThis.foundry?.utils?.getRoute?.(path) ?? path;
+  const fetchJsonWithTimeout = globalThis.foundry?.utils?.fetchJsonWithTimeout;
+  if (typeof fetchJsonWithTimeout === 'function') return fetchJsonWithTimeout(url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+function loadProjectImage(src) {
+  const url = src.startsWith('data:') ? src : (globalThis.foundry?.utils?.getRoute?.(src) ?? src);
+  return loadImageElement(url, false);
+}
+
+/** Loads every image a parsed project refers to into canvases, without touching the app. */
+async function decodeProject(project, loadImage) {
+  // The source file is unflipped; the saved flip is applied to it here. Masks and regions are
+  // saved already flipped, so they are restored as they are.
+  const loadSource = async (path, flip) => {
+    const canvas = drawToWorkingCanvas(await loadImage(path));
+    canvas.getContext('2d').getImageData(0, 0, 1, 1);
+    return applyFlip(canvas, flip, createCanvas);
+  };
+  // Masks and regions are stored at source resolution; drawing them at the source size keeps
+  // them aligned even if a mask was saved at a slightly different working size.
+  const loadMask = async (dataUrl, size) => {
+    if (!dataUrl) return null;
+    const image = await loadImage(dataUrl);
+    const canvas = createCanvas(size.width, size.height);
+    canvas.getContext('2d').drawImage(image, 0, 0, size.width, size.height);
+    return canvas;
+  };
+  const loadWorkspace = async (workspace, shared) => {
+    const flip = normalizeFlip(workspace.flip);
+    const canvas =
+      shared &&
+      workspace.sourcePath === shared.path &&
+      flip.x === shared.flip.x &&
+      flip.y === shared.flip.y
+        ? shared.canvas
+        : await loadSource(workspace.sourcePath, flip);
+    return {
+      path: workspace.sourcePath,
+      flip,
+      canvas,
+      popOutMask: await loadMask(workspace.popOutMask, canvas),
+      keep: await loadMask(workspace.cleanup.keep, canvas),
+      remove: await loadMask(workspace.cleanup.remove, canvas),
+    };
+  };
+  const token = await loadWorkspace(project.token);
+  const portrait = project.portrait ? await loadWorkspace(project.portrait, token) : null;
+  // Region keys come from the file: no prototype, and only keys parseProject would accept.
+  const regions = Object.create(null);
+  for (const [key, dataUrl] of Object.entries(project.animation.regions ?? {}))
+    if (isSafeEffectKey(key)) regions[key] = await loadMask(dataUrl, token.canvas);
+  return { project, token, portrait, regions };
+}
+
+/** Swaps the decoded project into the creator; selections, history and caches start fresh. */
+function applyLoadedProject(app, { project, token, portrait, regions }) {
+  stopAnimationPlayback(app);
+  let options = normalizeTokenCreatorOptions(project.options);
+  if (AI_BACKGROUND_MODES.includes(options.backgroundMode) && !areAiToolsEnabled())
+    options = { ...options, backgroundMode: 'auto' };
+  app.creatorOptions = options;
+  const label = project.label || deriveSourceLabel(app, token.path, null);
+  const workspace = (loaded, sharedSource) => ({
+    ...createWorkspace(),
+    source: sharedSource ?? {
+      canvas: loaded.canvas,
+      path: loaded.path,
+      file: null,
+      label,
+      flip: loaded.flip,
+    },
+    cleanup: { keep: loaded.keep, remove: loaded.remove },
+  });
+  const tokenWorkspace = workspace(token);
+  app.workspaces = {
+    token: tokenWorkspace,
+    portrait: portrait
+      ? workspace(portrait, portrait.canvas === token.canvas ? tokenWorkspace.source : null)
+      : null,
+  };
+  app.editTarget = 'token';
+  app.view = { ...project.token.view };
+  // The top-level portraitView is the single source of truth for portrait framing.
+  app.portraitView = { ...project.portraitView };
+  app.viewport = { scale: 1, panX: 0, panY: 0 };
+  app.popOutMask = token.popOutMask;
+  app._maskVersion += 1;
+  app._maskHistory = { undo: [], redo: [] };
+  app.maskTool = null;
+  app._compose = null;
+  const animation = { ...project.animation };
+  delete animation.regions;
+  app.animation = animation;
+  app.animationTime = 0;
+  app.selectedPinIds = [];
+  app.effectRegions = regions;
+  app.selectedEffectId = null;
+  app._regionVersion += 1;
+  clearEffectCaches();
+  app._previewBend = null;
+  syncZoomInput(app);
+}
+
 function loadImageElement(src, revoke) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -1196,54 +1725,78 @@ function scheduleCutout(app) {
   app._cutoutTimer = setTimeout(() => void updateAllCutouts(app), 150);
 }
 
+/**
+ * Rebuilds a workspace's cut-out with the current background options. Resolves the status
+ * message of a failed background removal (the original image is used instead), or null.
+ */
 async function updateCutout(app, workspace = app.workspace) {
   if (!workspace.source) {
     renderCreatorPreview(app);
-    return;
+    return null;
   }
   const token = ++workspace.cutoutToken;
   const { backgroundMode, tolerance, feather } = app.creatorOptions;
   const source = workspace.source.canvas;
   const cutout = createCanvas(source.width, source.height);
   const context = cutout.getContext('2d');
+  let failure = null;
 
+  // Removal always runs on the image as it was given (un-flipped) and the result is mirrored
+  // back, so a live flip, a recompute and a reopened project all give the same cut-out.
+  const flip = workspace.source.flip;
   try {
     if (backgroundMode === 'auto') {
       setCreatorStatus(app, localize('Creator.Removing', 'Removing background...'));
-      const imageData = source.getContext('2d').getImageData(0, 0, source.width, source.height);
+      const original = applyFlip(source, flip, createCanvas);
+      const imageData = original
+        .getContext('2d')
+        .getImageData(0, 0, original.width, original.height);
       removeImageBackground(imageData, { tolerance, feather });
-      context.putImageData(imageData, 0, 0);
+      const removed = createCanvas(original.width, original.height);
+      removed.getContext('2d').putImageData(imageData, 0, 0);
+      context.drawImage(applyFlip(removed, flip, createCanvas), 0, 0);
     } else if (backgroundMode === 'ai') {
       setCreatorStatus(app, localize('Creator.AiRunning', 'Running AI background removal...'));
-      workspace.source.aiCutout ??= await removeBackgroundWithModel(source);
-      context.drawImage(workspace.source.aiCutout, 0, 0, source.width, source.height);
+      // Cached in the original orientation, so flipping never runs the model again.
+      workspace.source.aiCutout ??= await removeBackgroundWithModel(
+        applyFlip(source, flip, createCanvas),
+      );
+      context.drawImage(
+        applyFlip(workspace.source.aiCutout, flip, createCanvas),
+        0,
+        0,
+        source.width,
+        source.height,
+      );
     } else {
       context.drawImage(source, 0, 0);
     }
-    if (token !== workspace.cutoutToken) return;
+    if (token !== workspace.cutoutToken) return null;
+    // A flip during the removal replaced the source: start over on the mirrored image.
+    if (workspace.source?.canvas !== source) return updateCutout(app, workspace);
     workspace.autoCutout = cutout;
     workspace.cutout = composeCleanCutout(workspace);
     setCreatorStatus(app, '');
   } catch (error) {
-    if (token !== workspace.cutoutToken) return;
+    if (token !== workspace.cutoutToken) return null;
+    if (workspace.source?.canvas !== source) return updateCutout(app, workspace);
     console.error(`${MODULE_ID} | Background removal failed`, error);
     workspace.autoCutout = source;
     workspace.cutout = composeCleanCutout(workspace);
-    setCreatorStatus(
-      app,
-      `${localize('Creator.RemoveFailed', 'Background removal failed; using the original image.')} (${describeError(error)})`,
-      true,
-    );
+    failure = `${localize('Creator.RemoveFailed', 'Background removal failed; using the original image.')} (${describeError(error)})`;
+    setCreatorStatus(app, failure, true);
   }
   syncAnimationControls(app);
   renderCreatorPreview(app);
+  return failure;
 }
 
-async function updateAllCutouts(app) {
+/** Rebuilds every workspace's cut-out; resolves the failure messages (null where it worked). */
+export async function updateAllCutouts(app) {
   const workspaces = [app.workspaces.token, app.workspaces.portrait].filter(
     (workspace) => workspace?.source,
   );
-  await Promise.all(workspaces.map((workspace) => updateCutout(app, workspace)));
+  return Promise.all(workspaces.map((workspace) => updateCutout(app, workspace)));
 }
 
 function createWorkspace() {
@@ -1270,6 +1823,85 @@ function cloneWorkspace(workspace) {
   };
 }
 
+/**
+ * Flip horizontal (`axis` 'x') / vertical ('y') for the workspace being edited. Its source is
+ * replaced by a mirrored copy (dropping per-image caches such as the click-to-select analysis),
+ * and every workspace showing that same source flips with it: its cut-out and touch-ups, and
+ * for the token workspace also the pop-out mask, effect regions, pins and token framing. In
+ * Portrait mode with a separate portrait image (even one still showing the token's image) only
+ * the portrait flips: it gets its own mirrored source, so the token, its pins, pop-out, regions
+ * and view are untouched. A linked portrait ("same as token") flips the shared image. The
+ * portrait framing flips when the portrait shows the flipped image. Flipping twice restores
+ * everything exactly. Undo steps for the flipped image no longer line up, so they are cleared.
+ * Returns false when there is nothing to flip.
+ */
+export function flipWorkspace(app, axis) {
+  if (axis !== 'x' && axis !== 'y') return false;
+  const previous = app.workspace?.source;
+  if (!previous?.canvas) return false;
+  // One mirrored copy per canvas, so canvases the workspaces share stay shared.
+  const mirrored = new Map();
+  const flip = (canvas) => {
+    if (!canvas) return null;
+    if (!mirrored.has(canvas)) mirrored.set(canvas, flipCanvas(canvas, axis, createCanvas));
+    return mirrored.get(canvas);
+  };
+  const { width, height } = previous.canvas;
+  const source = {
+    canvas: flip(previous.canvas),
+    path: previous.path ?? null,
+    file: previous.file ?? null,
+    label: previous.label,
+    flip: toggleFlip(previous.flip, axis),
+  };
+  // The AI cut-out is cached in the original orientation and stays valid.
+  if (previous.aiCutout) source.aiCutout = previous.aiCutout;
+
+  const { token, portrait } = app.workspaces;
+  const portraitOnly = app.editTarget === 'portrait' && Boolean(portrait);
+  const flipped = (portraitOnly ? [portrait] : [token, portrait]).filter(
+    (workspace) => workspace?.source === previous,
+  );
+  for (const workspace of flipped) {
+    workspace.source = source;
+    workspace.autoCutout = flip(workspace.autoCutout);
+    workspace.cleanup = {
+      keep: flip(workspace.cleanup?.keep),
+      remove: flip(workspace.cleanup?.remove),
+    };
+    workspace.cutout = workspace.autoCutout
+      ? composeCleanCutout(workspace)
+      : flip(workspace.cutout);
+  }
+  if (flipped.includes(token)) {
+    app.popOutMask = flip(app.popOutMask);
+    app._maskVersion += 1;
+    // Mirrored in place: the regions object is shared with the preview.
+    for (const key of Object.keys(app.effectRegions ?? {}))
+      app.effectRegions[key] = flip(app.effectRegions[key]);
+    app._regionVersion += 1;
+    app.animation = {
+      ...app.animation,
+      pins: flipPins(app.animation.pins, axis, { width, height }),
+    };
+    app.view = flipView(app.view, axis);
+  }
+  if (flipped.includes(portrait ?? token)) app.portraitView = flipView(app.portraitView, axis);
+
+  app._maskHistory = { undo: [], redo: [] };
+  app._compose = null;
+  app._previewBend = null;
+  app._popOutImage = null;
+  app._maskHighlight = null;
+  app._regionTint = null;
+  app._removedGhost = null;
+  clearEffectCaches();
+  syncMaskControls(app);
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+  return true;
+}
+
 /** Runs `draw` as if `target` were being edited, so saving never mixes token and portrait. */
 function withEditTarget(app, target, draw) {
   const previous = app.editTarget;
@@ -1286,6 +1918,7 @@ function setPortraitImageMode(app, mode) {
   else app.workspaces.portrait = null;
   app._maskHistory = { undo: [], redo: [] };
   syncPortraitControls(app);
+  syncFlipControls(app);
   syncMaskControls(app);
   renderCreatorPreview(app);
 }
@@ -1369,10 +2002,10 @@ function renderCreatorPreview(app) {
   const tokenContext = token.getContext('2d');
   const portraitMode = app.editTarget === 'portrait';
   if (portraitMode) drawPortraitPreview(tokenContext, app, size);
-  else
-    drawCreatedToken(tokenContext, app, size, { preview: true, bent: getPreviewBend(app, size) });
+  else drawPreviewToken(tokenContext, app, size);
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
   if (!portraitMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
+  if (!portraitMode) drawEffectRegionOverlay(tokenContext, app, size);
 
   const viewport = getViewport(app, size);
   const isFramed = !portraitMode && (viewport.scale !== 1 || viewport.x !== 0 || viewport.y !== 0);
@@ -1470,8 +2103,21 @@ function renderPortraitCanvas(app) {
   return canvas;
 }
 
+/** Flip needs an image in the workspace being edited and an idle creator (click-to-select too). */
+export function canFlip(app) {
+  return Boolean(app.workspace?.source?.canvas) && !app.busy && !app._samBusy;
+}
+
+function syncFlipControls(app) {
+  const disabled = !canFlip(app);
+  getCreatorRoot(app)
+    ?.querySelectorAll?.('[data-creator-action="flip-x"], [data-creator-action="flip-y"]')
+    .forEach((button) => (button.disabled = disabled));
+}
+
 function setEditTarget(app, target) {
   app.editTarget = target === 'portrait' ? 'portrait' : 'token';
+  syncFlipControls(app);
   if (app.editTarget === 'portrait') stopAnimationPlayback(app);
   if (app.editTarget === 'portrait' && !isCleanupTool(app.maskTool)) setMaskTool(app, null);
   getCreatorSection(app)?.setAttribute('data-edit-target', app.editTarget);
@@ -1487,6 +2133,33 @@ function syncPortraitControls(app) {
   getCreatorRoot(app)
     ?.querySelector('.pf2e-tokener-creator-portrait')
     ?.setAttribute('data-background', app.creatorOptions.portraitBackground);
+  syncPortraitAnimateControl(app);
+}
+
+/**
+ * Animate portrait shows only while the token animation can be made and moves; a portrait that
+ * does not show the token's image (its own image, or its own flip) cannot follow it, since the
+ * pins and effects belong to the token image.
+ */
+function syncPortraitAnimateControl(app) {
+  const label = getCreatorRoot(app)?.querySelector?.('[data-portrait-animate]');
+  if (!label) return;
+  label.hidden = !(app.animationSupported && hasActiveMotion(app.animation, app.effectRegions));
+  const shared = isPortraitShared(app);
+  const input = label.querySelector('input[name="animatePortrait"]');
+  if (input) {
+    input.disabled = !shared;
+    input.checked = Boolean(app.creatorOptions.animatePortrait);
+  }
+  label.dataset.tooltip = shared
+    ? localize(
+        'Creator.AnimatePortraitTooltip',
+        'Save the portrait as an animated WebP that plays the token animation (15 fps, up to 512 px).',
+      )
+    : localize(
+        'Creator.AnimatePortraitSeparate',
+        "Only a portrait that shows the token's image can be animated. A portrait with its own image or its own flip cannot follow the token animation; link the portrait to the token image to animate it.",
+      );
 }
 
 function getViewport(app, size = PREVIEW_SIZE) {
@@ -1600,6 +2273,7 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
 /** Pointer mode for the brush cursor; the pin tool never paints. */
 function getPointerMode(app, event) {
   if (app.maskTool === 'pin') return null;
+  if (app.maskTool === 'region' && !canPaintRegion(app)) return null;
   return getStrokeMode({ tool: app.maskTool, shiftKey: event.shiftKey, altKey: event.altKey });
 }
 
@@ -1621,21 +2295,25 @@ function selectPinTool(app) {
   if (canEditPins(app)) setMaskTool(app, 'pin');
 }
 
-function isAtTime(keyTime, t) {
-  return Math.abs(keyTime - t) < KEYFRAME_TOLERANCE;
+/** Whether keyframe time `keyTime` is the keyframe time `keyT` (seam-aware, as setKeyframe merges). */
+function isAtTime(keyTime, keyT) {
+  return loopDistance(keyTime, keyT) < KEYFRAME_MERGE;
 }
 
 function formatLoopPercent(t) {
   return `${Math.round(t * 100)}%`;
 }
 
+/** The primary (first) selected pin, which the keyframe controls edit. */
 function getSelectedPin(app) {
-  return app.animation.pins.find((pin) => pin.id === app.selectedPinId) ?? null;
+  const id = app.selectedPinIds[0];
+  return app.animation.pins.find((pin) => pin.id === id) ?? null;
 }
 
 function setAnimationPins(app, pins) {
   app.animation = { ...app.animation, pins };
-  if (!pins.some((pin) => pin.id === app.selectedPinId)) app.selectedPinId = null;
+  const ids = new Set(pins.map((pin) => pin.id));
+  app.selectedPinIds = app.selectedPinIds.filter((id) => ids.has(id));
   if (!pins.length) stopAnimationPlayback(app);
 }
 
@@ -1646,13 +2324,559 @@ function updateAnimationPin(app, id, change) {
   );
 }
 
-/** Pins belong to the token image they were placed on, so a new image starts without any. */
-function clearAnimationPins(app) {
+/**
+ * A new token image starts a fresh animation: pins and effects belong to the image they were
+ * made on, so both are dropped with the effects' painted regions, their undo steps and the
+ * effect caches (the loop length and playback mode stay).
+ */
+export function clearAnimationPins(app) {
   stopAnimationPlayback(app);
   app.animation = resetAnimationForNewSource(app.animation);
-  app.selectedPinId = null;
+  app.selectedPinIds = [];
+  app.effectRegions = {};
+  app.selectedEffectId = null;
+  app._regionVersion += 1;
+  app._maskHistory.undo = app._maskHistory.undo.filter((entry) => entry.layer !== 'region');
+  app._maskHistory.redo = app._maskHistory.redo.filter((entry) => entry.layer !== 'region');
+  if (app.maskTool === 'region') {
+    app.maskTool = null;
+    syncMaskControls(app);
+  }
+  clearEffectCaches();
   app._previewBend = null;
   syncAnimationControls(app);
+}
+
+/** The key of an effect's painted region in `app.effectRegions`, or null for the whole figure. */
+export function getEffectRegionKey(effect) {
+  const region = effect?.region;
+  return typeof region === 'string' && region ? region : null;
+}
+
+/** A new animation with `effect` appended (params clamped). The old animation is untouched. */
+export function addEffect(animation, effect) {
+  return { ...animation, effects: normalizeEffects([...(animation?.effects ?? []), effect]) };
+}
+
+/**
+ * A new animation with effect `id` changed (params clamped, so wind/wobble strength follows the
+ * scale). Choosing another particle kind goes back to that kind's own colour. Returns the same
+ * animation when there is no such effect.
+ */
+export function updateEffect(animation, id, changes) {
+  const effects = animation?.effects ?? [];
+  const index = effects.findIndex((effect) => effect.id === id);
+  if (index < 0) return animation;
+  const current = effects[index];
+  const next = { ...current, ...changes };
+  if (
+    current.type === 'particles' &&
+    'kind' in changes &&
+    changes.kind !== current.kind &&
+    !('color' in changes)
+  )
+    next.color = null;
+  const [normalized] = normalizeEffects([next]);
+  if (!normalized) return animation;
+  const list = effects.slice();
+  list[index] = normalized;
+  return { ...animation, effects: list };
+}
+
+/**
+ * Removes effect `id` with the region canvases it owns: the one keyed by its id (kept even while
+ * it is switched to the whole figure) and the one its `region` names, unless a remaining effect
+ * still paints with that key. `regions` is then a new object; `removedRegions` lists the keys.
+ */
+export function removeEffect({ animation, regions }, id) {
+  const effects = animation?.effects ?? [];
+  const effect = effects.find((entry) => entry.id === id);
+  if (!effect) return { animation, regions, removedRegions: [] };
+  const rest = effects.filter((entry) => entry.id !== id);
+  const next = { ...animation, effects: rest };
+  const used = new Set(rest.map((entry) => getEffectRegionKey(entry)).filter(Boolean));
+  const removed = [...new Set([effect.id, getEffectRegionKey(effect)])].filter(
+    (key) => key && regions && Object.hasOwn(regions, key) && !used.has(key),
+  );
+  if (!removed.length) return { animation: next, regions, removedRegions: [] };
+  return {
+    animation: next,
+    regions: Object.fromEntries(
+      Object.entries(regions).filter(([name]) => !removed.includes(name)),
+    ),
+    removedRegions: removed,
+  };
+}
+
+function getEffectTypeLabel(type) {
+  return localize(`Creator.Animate.Effects.Types.${type}`, EFFECT_TYPE_LABELS[type] ?? type);
+}
+
+function getParticleKindLabel(kind) {
+  return localize(`Creator.Animate.Effects.Particles.${kind}`, PARTICLE_KIND_LABELS[kind] ?? kind);
+}
+
+/** Highest wind/wobble strength the scale allows, rounded down to the slider's 0.1 step. */
+function getMaxWarpStrength(scale) {
+  return Math.floor(Math.min(MAX_WARP_STRENGTH, scale * WARP_STRENGTH_RATIO) * 10) / 10;
+}
+
+/**
+ * The parameter controls of an effect, in display order: `{ param, input: 'range' | 'select' |
+ * 'color', label, value, min, max, step, unit, options }`.
+ */
+export function getEffectParamControls(effect) {
+  if (!effect) return [];
+  const label = (param) =>
+    localize(`Creator.Animate.Effects.Params.${param}`, EFFECT_PARAM_LABELS[param] ?? param);
+  const range = (param, min, max, step, unit = '') => ({
+    param,
+    input: 'range',
+    label: label(param),
+    value: effect[param],
+    min,
+    max,
+    step,
+    unit,
+  });
+  const select = (param, options) => ({
+    param,
+    input: 'select',
+    label: label(param),
+    value: effect[param],
+    options: options.map((option) => ({ ...option, selected: option.value === effect[param] })),
+  });
+  const color = (value) => ({ param: 'color', input: 'color', label: label('color'), value });
+  switch (effect.type) {
+    case 'wind':
+    case 'wobble':
+      return [
+        range('strength', 0, getMaxWarpStrength(effect.scale), 0.1, 'px'),
+        range('scale', 16, 200, 1, 'px'),
+      ];
+    case 'flicker':
+      return [
+        range('amount', 0, 1, 0.05, '%'),
+        select(
+          'kind',
+          Object.keys(FLICKER_KIND_LABELS).map((value) => ({
+            value,
+            label: localize(`Creator.Animate.Effects.Flicker.${value}`, FLICKER_KIND_LABELS[value]),
+          })),
+        ),
+        range('speed', 1, 12, 1),
+      ];
+    case 'glow':
+      return [color(effect.color), range('size', 1, 60, 1, 'px'), range('pulse', 0, 1, 0.05, '%')];
+    case 'particles':
+      return [
+        select(
+          'kind',
+          PARTICLE_KINDS.map((value) => ({ value, label: getParticleKindLabel(value) })),
+        ),
+        range('count', 1, 200, 1),
+        color(effect.color ?? PARTICLE_COLORS[effect.kind] ?? '#ffffff'),
+        range('size', 1, 20, 0.5, 'px'),
+      ];
+    default:
+      return [];
+  }
+}
+
+function formatEffectValue(control, value) {
+  const number = Number(value) || 0;
+  if (control.unit === '%') return `${Math.round(number * 100)}%`;
+  return `${Math.round(number * 10) / 10}${control.unit ?? ''}`;
+}
+
+function getSelectedEffect(app) {
+  const id = app.selectedEffectId;
+  return app.animation.effects.find((effect) => effect.id === id) ?? null;
+}
+
+/** Whether `effect` can be limited to a painted region (flicker always covers the whole figure). */
+function supportsRegion(effect) {
+  return Boolean(effect && EFFECT_SUPPORTS_REGION[effect.type]);
+}
+
+/**
+ * The region brush works on the token art of the selected effect, where animation is possible,
+ * when that effect can use a region.
+ */
+function canPaintRegion(app) {
+  return canEditPins(app) && supportsRegion(getSelectedEffect(app));
+}
+
+function selectRegionTool(app) {
+  if (canPaintRegion(app)) setMaskTool(app, 'region');
+}
+
+/** Replaces the animation after an effect change and keeps the selection and tools valid. */
+function setAnimationEffects(app, animation) {
+  app.animation = animation;
+  if (!getSelectedEffect(app)) app.selectedEffectId = null;
+  if (!hasActiveMotion(app.animation, app.effectRegions)) stopAnimationPlayback(app);
+  if (app.maskTool === 'region' && !canPaintRegion(app)) setMaskTool(app, null);
+}
+
+function addCreatorEffect(app) {
+  if (!canEditPins(app)) return;
+  const root = getCreatorRoot(app);
+  const type = root?.querySelector('select[name="effectType"]')?.value;
+  if (!EFFECT_TYPES.includes(type)) return;
+  const effect = createEffect(type);
+  if (type === 'particles') {
+    const kind = root.querySelector('select[name="effectKind"]')?.value;
+    if (PARTICLE_KINDS.includes(kind)) effect.kind = kind;
+  }
+  setAnimationEffects(app, addEffect(app.animation, effect));
+  app.selectedEffectId = effect.id;
+  syncAnimationControls(app);
+  syncMaskControls(app);
+  renderCreatorPreview(app);
+}
+
+function selectCreatorEffect(app, id) {
+  if (!app.animation.effects.some((effect) => effect.id === id)) return;
+  app.selectedEffectId = id;
+  syncAnimationControls(app);
+  // The region brush follows the selection; an effect without regions (flicker) cannot use it.
+  if (app.maskTool === 'region' && !canPaintRegion(app)) setMaskTool(app, null);
+  else renderCreatorPreview(app);
+}
+
+/** Removes an effect with its painted region; the region's undo steps go with it. */
+function removeCreatorEffect(app, id) {
+  const result = removeEffect({ animation: app.animation, regions: app.effectRegions }, id);
+  if (result.animation === app.animation) return;
+  if (result.removedRegions.length) {
+    app.effectRegions = result.regions;
+    const keep = (entry) =>
+      entry.layer !== 'region' || !result.removedRegions.includes(entry.regionKey);
+    app._maskHistory.undo = app._maskHistory.undo.filter(keep);
+    app._maskHistory.redo = app._maskHistory.redo.filter(keep);
+    app._regionVersion += 1;
+  }
+  const ownStep = (entry) => entry.layer !== 'region' || entry.effectId !== id;
+  app._maskHistory.undo = app._maskHistory.undo.filter(ownStep);
+  app._maskHistory.redo = app._maskHistory.redo.filter(ownStep);
+  clearEffectCaches();
+  app._previewBend = null;
+  setAnimationEffects(app, result.animation);
+  syncAnimationControls(app);
+  syncMaskControls(app);
+  renderCreatorPreview(app);
+}
+
+/**
+ * Whole figure / painted region for the selected effect. A painted region is keyed by the
+ * effect's id; its canvas is kept when switching back to the whole figure so it can return.
+ */
+function setEffectRegionMode(app, painted) {
+  const effect = getSelectedEffect(app);
+  if (!effect || (painted && !supportsRegion(effect))) return;
+  const region = painted ? (getEffectRegionKey(effect) ?? effect.id) : null;
+  if (region !== getEffectRegionKey(effect))
+    setAnimationEffects(app, updateEffect(app.animation, effect.id, { region }));
+  syncAnimationControls(app);
+  if (painted) selectRegionTool(app);
+  else if (app.maskTool === 'region') setMaskTool(app, null);
+  else renderCreatorPreview(app);
+}
+
+/** Applies a parameter control of the selected effect without rebuilding the controls. */
+function updateEffectParam(app, input) {
+  const effect = getSelectedEffect(app);
+  const param = input.dataset.effectParam;
+  if (!effect || !param) return;
+  const value = input.type === 'range' ? Number(input.value) : input.value;
+  app.animation = updateEffect(app.animation, effect.id, { [param]: value });
+  const updated = getSelectedEffect(app);
+  const panel = input.closest?.('[data-effect-params]');
+  if (panel && updated) {
+    for (const control of getEffectParamControls(updated)) {
+      const field = panel.querySelector(`[data-effect-param="${control.param}"]`);
+      if (!field) continue;
+      if (control.input === 'range') {
+        field.max = String(control.max);
+        if (field !== input) field.value = String(control.value);
+      } else if (field !== input) field.value = String(control.value);
+      const label = panel.querySelector(`[data-effect-value="${control.param}"]`);
+      if (label) label.textContent = formatEffectValue(control, control.value);
+    }
+  }
+  const row = getCreatorRoot(app)?.querySelector?.(
+    `[data-creator-action="effect-select"][data-effect-id="${escapeSelectorValue(effect.id)}"] span`,
+  );
+  if (row && updated) row.textContent = describeEffect(updated);
+  renderCreatorPreview(app);
+}
+
+/**
+ * Starts a region stroke on the selected effect: switches it to a painted region if it was the
+ * whole figure, records an undo step and returns the region key (null when it cannot paint).
+ */
+function startRegionStroke(app) {
+  if (!canPaintRegion(app)) return null;
+  stopAnimationPlayback(app);
+  const effect = getSelectedEffect(app);
+  const key = getEffectRegionKey(effect) ?? effect.id;
+  // Recorded before the switch, so undoing the first stroke also returns to the whole figure.
+  pushMaskHistory(app, 'region', { regionKey: key, effectId: effect.id });
+  if (!getEffectRegionKey(effect)) {
+    app.animation = updateEffect(app.animation, effect.id, { region: key });
+    syncAnimationControls(app);
+  }
+  return key;
+}
+
+/** The region canvas for `key`, in source-image px (the cut-out's size), created on demand. */
+function ensureEffectRegion(app, key) {
+  const current = app.effectRegions[key];
+  if (current && current.width === app.cutout.width && current.height === app.cutout.height)
+    return current;
+  const canvas = createCanvas(app.cutout.width, app.cutout.height);
+  app.effectRegions[key] = canvas;
+  return canvas;
+}
+
+/**
+ * Paints (or erases) a region stroke in place. The preview is unbent while the region tool is
+ * active, so the bend and effect caches are only reset when the stroke ends.
+ */
+function paintEffectRegion(app, key, from, to, mode) {
+  if (!app.cutout) return;
+  const region = ensureEffectRegion(app, key);
+  const layout = getPreviewLayout(app);
+  const toImage = (point) =>
+    previewPointToImage({
+      layout,
+      imageWidth: app.cutout.width,
+      imageHeight: app.cutout.height,
+      x: point.x,
+      y: point.y,
+    });
+  const start = toImage(from);
+  const end = toImage(to);
+  const context = region.getContext('2d');
+  context.save();
+  context.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+  context.strokeStyle = '#ffffff';
+  context.fillStyle = '#ffffff';
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.lineWidth = app.brushSize * end.scale;
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.lineTo(end.x, end.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(end.x, end.y, context.lineWidth / 2, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+  app._regionVersion += 1;
+  renderCreatorPreview(app);
+}
+
+/** The region canvas changed in place: forget everything cached by its identity. */
+function finishRegionStroke(app) {
+  clearEffectCaches();
+  app._previewBend = null;
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+/** While the region brush is active, the selected effect's region is tinted over the art. */
+function drawEffectRegionOverlay(context, app, size) {
+  if (app.maskTool !== 'region' || !app.cutout) return;
+  const key = getEffectRegionKey(getSelectedEffect(app));
+  const region = key ? app.effectRegions[key] : null;
+  if (!region) return;
+  // One tint canvas is reused (reallocated only for a new size) and redrawn when the region or
+  // its paint changes, so strokes do not allocate a full-resolution canvas per move.
+  let cached = app._regionTint;
+  if (!cached || cached.tint.width !== region.width || cached.tint.height !== region.height) {
+    cached = { tint: createCanvas(region.width, region.height), region: null, version: -1 };
+    app._regionTint = cached;
+  }
+  const tint = cached.tint;
+  if (cached.region !== region || cached.version !== app._regionVersion) {
+    const tintContext = tint.getContext('2d');
+    tintContext.save();
+    tintContext.clearRect(0, 0, tint.width, tint.height);
+    tintContext.drawImage(region, 0, 0);
+    tintContext.globalCompositeOperation = 'source-in';
+    tintContext.fillStyle = REGION_COLOR;
+    tintContext.fillRect(0, 0, tint.width, tint.height);
+    tintContext.restore();
+    cached.region = region;
+    cached.version = app._regionVersion;
+  }
+  const layout = getPreviewLayout(app, size);
+  context.save();
+  context.globalAlpha = REGION_OVERLAY_ALPHA;
+  context.drawImage(tint, layout.x, layout.y, layout.width, layout.height);
+  context.restore();
+}
+
+function describeEffect(effect) {
+  const type = getEffectTypeLabel(effect.type);
+  const name = effect.type === 'particles' ? `${type}: ${getParticleKindLabel(effect.kind)}` : type;
+  if (!getEffectRegionKey(effect)) return name;
+  return `${name} (${localize('Creator.Animate.Effects.RegionShort', 'region')})`;
+}
+
+/**
+ * Effects list and the selected effect's controls, built from `app.animation.effects`. They are
+ * rebuilt only when the effects or the selection change, so a control being dragged survives
+ * unrelated syncs. Built controls carry `data-animation-control` so they share its enabling.
+ */
+function syncEffectControls(app) {
+  const root = getCreatorRoot(app);
+  const panel = root?.querySelector?.('[data-effects]');
+  const selected = getSelectedEffect(app);
+  const regionButton = root?.querySelector?.('[data-creator-action="mask-region"]');
+  if (regionButton) regionButton.hidden = !supportsRegion(selected);
+  if (!panel) return;
+  const type = panel.querySelector('select[name="effectType"]')?.value;
+  const kindPicker = panel.querySelector('[data-effect-kind-picker]');
+  if (kindPicker) kindPicker.hidden = type !== 'particles';
+
+  const signature = JSON.stringify([
+    app.animation.effects,
+    app.selectedEffectId,
+    Object.keys(app.effectRegions ?? {}),
+  ]);
+  if (panel.dataset.signature === signature) return;
+  panel.dataset.signature = signature;
+  const doc = panel.ownerDocument;
+  const make = (tag, props = {}) => Object.assign(doc.createElement(tag), props);
+
+  const empty = panel.querySelector('[data-effects-empty]');
+  if (empty) empty.hidden = app.animation.effects.length > 0;
+  const list = panel.querySelector('[data-effects-list]');
+  if (list) {
+    list.replaceChildren();
+    for (const effect of app.animation.effects) {
+      const item = make('li', { className: 'pf2e-tokener-creator-effect' });
+      item.classList.toggle('is-selected', effect.id === app.selectedEffectId);
+      const choose = make('button', {
+        type: 'button',
+        className: 'pf2e-tokener-creator-effect-select',
+      });
+      choose.dataset.creatorAction = 'effect-select';
+      choose.dataset.effectId = effect.id;
+      choose.dataset.animationControl = '';
+      choose.setAttribute('aria-pressed', effect.id === app.selectedEffectId ? 'true' : 'false');
+      choose.append(
+        make('i', { className: `fas ${EFFECT_ICONS[effect.type] ?? 'fa-star'}` }),
+        make('span', { textContent: describeEffect(effect) }),
+      );
+      const remove = make('button', {
+        type: 'button',
+        className: 'pf2e-tokener-creator-icon-button',
+      });
+      const removeLabel = localize('Creator.Animate.Effects.Remove', 'Remove effect');
+      remove.dataset.creatorAction = 'effect-remove';
+      remove.dataset.effectId = effect.id;
+      remove.dataset.animationControl = '';
+      remove.dataset.tooltip = removeLabel;
+      remove.setAttribute('aria-label', removeLabel);
+      remove.append(make('i', { className: 'fas fa-trash' }));
+      item.append(choose, remove);
+      list.append(item);
+    }
+  }
+
+  const params = panel.querySelector('[data-effect-params]');
+  if (!params) return;
+  params.replaceChildren();
+  params.hidden = !selected;
+  if (!selected) return;
+  const painted = Boolean(getEffectRegionKey(selected));
+  const modes = make('div', {
+    className: 'pf2e-tokener-creator-segmented pf2e-tokener-creator-effect-region',
+  });
+  for (const value of ['whole', 'painted']) {
+    const option = make('label');
+    option.dataset.tooltip =
+      value === 'whole'
+        ? localize(
+            'Creator.Animate.Effects.WholeTooltip',
+            'The effect covers the whole figure (particles rise around it)',
+          )
+        : localize(
+            'Creator.Animate.Effects.PaintedTooltip',
+            'The effect covers only the area painted with the region brush (F)',
+          );
+    const radio = make('input', {
+      type: 'radio',
+      name: 'effectRegion',
+      value,
+      checked: (value === 'painted') === painted,
+    });
+    radio.dataset.animationControl = '';
+    const text =
+      value === 'painted'
+        ? localize('Creator.Animate.Effects.Painted', 'Painted region')
+        : selected.type === 'particles'
+          ? localize('Creator.Animate.Effects.Around', 'Around the figure')
+          : localize('Creator.Animate.Effects.Whole', 'Whole figure');
+    option.append(radio, make('span', { textContent: text }));
+    modes.append(option);
+  }
+  // Flicker always covers the whole figure, so it gets no Whole / Painted toggle.
+  if (supportsRegion(selected)) params.append(modes);
+
+  const grid = make('div', { className: 'pf2e-tokener-creator-effect-controls' });
+  for (const control of getEffectParamControls(selected)) {
+    const field = make('label', { className: 'pf2e-tokener-creator-slider' });
+    field.append(make('span', { textContent: control.label }));
+    let input;
+    if (control.input === 'range') {
+      const value = make('span', {
+        className: 'pf2e-tokener-creator-value',
+        textContent: formatEffectValue(control, control.value),
+      });
+      value.dataset.effectValue = control.param;
+      field.append(value);
+      input = make('input', {
+        type: 'range',
+        min: String(control.min),
+        max: String(control.max),
+        step: String(control.step),
+      });
+      input.value = String(control.value);
+    } else if (control.input === 'select') {
+      input = make('select');
+      for (const option of control.options)
+        input.append(
+          make('option', {
+            value: option.value,
+            textContent: option.label,
+            selected: option.selected,
+          }),
+        );
+    } else {
+      input = make('input', { type: 'color', value: control.value });
+    }
+    input.name = 'effectParam';
+    input.dataset.effectParam = control.param;
+    input.dataset.animationControl = '';
+    field.append(input);
+    grid.append(field);
+  }
+  params.append(grid);
+  if (painted && !hasPaintedRegion(selected, app.effectRegions))
+    params.append(
+      make('p', {
+        className: 'pf2e-tokener-creator-hint',
+        textContent: localize(
+          'Creator.Animate.Effects.PaintHint',
+          'Paint the region with the region brush (F); until then the effect does nothing.',
+        ),
+      }),
+    );
 }
 
 function setAnimationTime(app, t) {
@@ -1679,6 +2903,7 @@ function findPinAt(app, point) {
     layout: getPreviewLayout(app),
     cutoutWidth: app.cutout.width,
     t: app.animationTime,
+    mode: app.animation.mode,
   });
   let best = null;
   const canvas = getCreatorRoot(app)?.querySelector?.('.pf2e-tokener-creator-preview');
@@ -1699,11 +2924,12 @@ function findPinAt(app, point) {
 }
 
 /**
- * Pin tool press: right-click removes the pin under the pointer; a left press selects that pin or
- * adds one, and returns the drag that follows. Dragging places the pin (new pins, or while the
- * animation has no keyframes yet) or keyframes its offset at the current time.
+ * Pin tool press: right-click removes the pin under the pointer; a left press selects that pin
+ * (Shift toggles it in the selection instead, without dragging) or adds one, and returns the drag
+ * that follows. Dragging places the pin (new pins, or while the animation has no keyframes yet) or
+ * keyframes its offset at the current time; only the dragged pin moves.
  */
-function startPinDrag(app, point, button) {
+function startPinDrag(app, point, button, additive = false) {
   const hit = findPinAt(app, point);
   if (button === 2) {
     if (hit) {
@@ -1720,18 +2946,33 @@ function startPinDrag(app, point, button) {
   stopAnimationPlayback(app);
   const source = previewPointToSource(app, point);
   let pin = hit ? app.animation.pins.find((entry) => entry.id === hit.id) : null;
-  if (!pin) {
+  let narrow = false;
+  if (pin && additive) {
+    app.selectedPinIds = toggleSelection(app.selectedPinIds, pin.id, true);
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+    return null;
+  }
+  if (pin) {
+    // Pressing a pin that is already selected keeps the selection while it is dragged alone; a
+    // click without moving narrows the selection to it (see endDrag).
+    narrow = app.selectedPinIds.includes(pin.id) && app.selectedPinIds.length > 1;
+    if (!app.selectedPinIds.includes(pin.id))
+      app.selectedPinIds = toggleSelection(app.selectedPinIds, pin.id, false);
+  } else {
     const { width, height } = app.cutout;
     if (source.x < 0 || source.y < 0 || source.x >= width || source.y >= height) return null;
-    pin = createPin({ x: source.x, y: source.y });
+    pin = createPin({ x: source.x, y: source.y, arm: getRotationArm(app.cutout) });
     setAnimationPins(app, [...app.animation.pins, pin]);
+    app.selectedPinIds = toggleSelection(app.selectedPinIds, pin.id, additive);
   }
-  app.selectedPinId = pin.id;
-  const offset = samplePinOffset(pin, app.animationTime);
+  const offset = samplePinOffset(pin, app.animationTime, app.animation.mode);
   syncAnimationControls(app);
   renderCreatorPreview(app);
   return {
     pinId: pin.id,
+    narrow,
+    moved: false,
     moveRest: getPinDragMode(pin) === 'rest',
     grabX: source.x - (pin.x + offset.dx),
     grabY: source.y - (pin.y + offset.dy),
@@ -1739,13 +2980,19 @@ function startPinDrag(app, point, button) {
 }
 
 function dragPin(app, drag, point) {
+  drag.moved = true;
   const source = previewPointToSource(app, point);
   const x = source.x - drag.grabX;
   const y = source.y - drag.grabY;
   updateAnimationPin(app, drag.pinId, (pin) =>
     drag.moveRest
       ? { ...pin, x, y }
-      : setKeyframe(pin, app.animationTime, { dx: x - pin.x, dy: y - pin.y }),
+      : updateKeyframeAt(
+          pin,
+          app.animationTime,
+          { dx: x - pin.x, dy: y - pin.y },
+          app.animation.mode,
+        ),
   );
   renderCreatorPreview(app);
 }
@@ -1755,7 +3002,23 @@ function addKeyframeAtTime(app) {
   if (!pin || !canEditPins(app)) return;
   stopAnimationPlayback(app);
   const t = app.animationTime;
-  updateAnimationPin(app, pin.id, (entry) => setKeyframe(entry, t, samplePinOffset(entry, t)));
+  updateAnimationPin(app, pin.id, (entry) => updateKeyframeAt(entry, t, {}, app.animation.mode));
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+/**
+ * Sets the easing and/or rotation of the primary pin's keyframe at the current time, creating the
+ * keyframe from the current pose when there is none. Pins made before rotation existed get an arm.
+ */
+function setPrimaryKeyframe(app, changes) {
+  const pin = getSelectedPin(app);
+  if (!pin || !canEditPins(app)) return;
+  stopAnimationPlayback(app);
+  updateAnimationPin(app, pin.id, (entry) => {
+    const next = updateKeyframeAt(entry, app.animationTime, changes, app.animation.mode);
+    return 'rot' in changes ? ensurePinArm(next, app.cutout) : next;
+  });
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
@@ -1764,25 +3027,82 @@ function removeKeyframeAtTime(app) {
   const pin = getSelectedPin(app);
   if (!pin || !canEditPins(app)) return;
   stopAnimationPlayback(app);
-  updateAnimationPin(app, pin.id, (entry) => removeKeyframe(entry, app.animationTime));
+  updateAnimationPin(app, pin.id, (entry) =>
+    removeKeyframe(entry, getKeyframeTime(app.animationTime, app.animation.mode)),
+  );
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
 
 function applyAnimationPreset(app, preset) {
   if (!ANIMATION_PRESETS.includes(preset) || !canEditPins(app)) return;
-  if (!isPresetAvailable(app.animation.pins, app.selectedPinId, preset)) return;
-  const ids = getPresetTargets(app.animation.pins, app.selectedPinId, preset);
-  const amplitude = PRESET_AMPLITUDE * Math.max(app.cutout.width, app.cutout.height);
-  setAnimationPins(app, applyPreset(app.animation.pins, ids, preset, { amplitude }));
+  if (!isPresetAvailable(app.animation.pins, app.selectedPinIds, preset)) return;
+  // Selection order matters: Wave staggers its sway along it.
+  const ids = getPresetTargets(app.animation.pins, app.selectedPinIds, preset);
+  const amplitude = getPresetAmplitude(preset, app.cutout);
+  // Pins made before rotation existed get an arm so Look (and later rotation) visibly turns them.
+  const targets = new Set(ids);
+  const pins = app.animation.pins.map((pin) =>
+    targets.has(pin.id) ? ensurePinArm(pin, app.cutout) : pin,
+  );
+  setAnimationPins(app, applyPreset(pins, ids, preset, { amplitude, mode: app.animation.mode }));
   syncAnimationControls(app);
   renderCreatorPreview(app);
+}
+
+/** Auto animate: pins and an idle loop from the cut-out's silhouette, after a confirm if pins exist. */
+async function runAutoAnimate(app) {
+  if (!canEditPins(app) || app.busy) return;
+  const cutout = app.cutout;
+  if (app.animation.pins.length) {
+    const confirmed = await confirmAutoAnimate();
+    if (!confirmed || app.cutout !== cutout) return;
+  }
+  const alpha = getAlphaGrid(
+    cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
+  );
+  const { pins, selectedPinIds } = buildAutoRig({
+    alpha,
+    cutoutWidth: cutout.width,
+    cutoutHeight: cutout.height,
+    view: app.view,
+    clipRadius: getComposeClipRadius(app),
+    gridSize: DEFAULT_COMPOSE_GRID,
+    mode: app.animation.mode,
+  });
+  if (!pins.length) {
+    setCreatorStatus(app, localize('Creator.Animate.AutoEmpty', 'Nothing to animate yet.'), true);
+    return;
+  }
+  stopAnimationPlayback(app);
+  app.animation = { ...app.animation, pins };
+  app.selectedPinIds = selectedPinIds;
+  app._previewBend = null;
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+async function confirmAutoAnimate() {
+  const title = localize('Creator.Animate.AutoAnimate', 'Auto animate');
+  const message = localize(
+    'Creator.Animate.AutoConfirm',
+    'Replace the existing pins with automatic ones?',
+  );
+  const dialog = globalThis.foundry?.applications?.api?.DialogV2;
+  if (dialog?.confirm) {
+    return Boolean(
+      await dialog.confirm({ window: { title }, content: `<p>${message}</p>`, rejectClose: false }),
+    );
+  }
+  return typeof globalThis.confirm === 'function'
+    ? globalThis.confirm(`${title}: ${message}`)
+    : true;
 }
 
 function startAnimationPlayback(app) {
   const requestFrame = globalThis.requestAnimationFrame;
   if (app.animationPlaying || !canEditPins(app) || typeof requestFrame !== 'function') return;
-  if (!hasMotion(app.animation)) return;
+  if (!hasActiveMotion(app.animation, app.effectRegions)) return;
   // Mask and touch-up tools edit the still art, so playing switches back to Move first.
   if (!canPlayWithTool(app.maskTool)) setMaskTool(app, null);
   app.animationPlaying = true;
@@ -1817,14 +3137,27 @@ function stopAnimationPlayback(app) {
 }
 
 /**
- * The token art bent to the current loop time, or null to draw it still: in the portrait, with
- * no motion, while a mask or touch-up tool edits the unbent art, or while a modifier stroke
- * would paint the pop-out mask under Move. Cached per pose.
+ * Whether the preview animates the token: not in the portrait, with no motion, while a mask or
+ * touch-up tool edits the unbent art, or while a modifier stroke would paint the pop-out mask
+ * under Move.
  */
-function getPreviewBend(app, size) {
-  if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return null;
-  if (!shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode })) return null;
+function shouldAnimatePreview(app) {
+  if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return false;
+  return shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode });
+}
+
+/**
+ * Draws the preview token: still, or the animation frame at the current loop time (bent art,
+ * effects, glow and particles). The bend is cached per pose, so redraws for other reasons (pins,
+ * options) reuse it.
+ */
+function drawPreviewToken(context, app, size) {
+  if (!shouldAnimatePreview(app)) {
+    drawCreatedToken(context, app, size, { preview: true });
+    return;
+  }
   const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
+  const regions = app.effectRegions ?? EMPTY_REGIONS;
   const key = {
     animation: app.animation,
     t: app.animationTime,
@@ -1833,25 +3166,31 @@ function getPreviewBend(app, size) {
     offsetY: app.view.offsetY,
     cutout: app.cutout,
     popOutImage,
+    regions,
     size,
   };
   const cached = app._previewBend;
-  if (cached && Object.keys(key).every((name) => cached.key[name] === key[name]))
-    return cached.bent;
-  const bent = bendTokenArt({
-    cutout: app.cutout,
-    popOutImage,
-    view: app.view,
+  const reuse =
+    cached && Object.keys(key).every((name) => cached.key[name] === key[name]) ? cached.bent : null;
+  const bent = renderAnimationFrame({
+    context,
     size,
-    animation: app.animation,
     t: app.animationTime,
+    art: { cutout: app.cutout, popOutImage, regions },
+    view: app.view,
+    animation: app.animation,
     createCanvas,
+    drawFrame: (frameContext, frameBent) =>
+      drawCreatedToken(frameContext, app, size, { preview: true, bent: frameBent }),
+    bent: reuse,
   });
   app._previewBend = { key, bent };
-  return bent;
 }
 
-/** Pin dots while the pin tool is active: selected pins get a gold ring, anchors are hollow. */
+/**
+ * Pin dots while the pin tool is active: selected pins get a gold ring (the primary a wider,
+ * thicker one), anchors are hollow.
+ */
 function drawPins(context, app, viewport, size) {
   if (app.maskTool !== 'pin' || !canEditPins(app) || !app.animation.pins.length) return;
   const points = getPinPreviewPoints({
@@ -1859,7 +3198,8 @@ function drawPins(context, app, viewport, size) {
     layout: getPreviewLayout(app, size),
     cutoutWidth: app.cutout.width,
     t: app.animationTime,
-    selectedId: app.selectedPinId,
+    mode: app.animation.mode,
+    selectedIds: app.selectedPinIds,
   });
   for (const point of points) {
     const x = viewport.x + point.x * viewport.scale;
@@ -1878,9 +3218,15 @@ function drawPins(context, app, viewport, size) {
     context.strokeStyle = PIN_COLOR;
     context.stroke();
     if (point.selected) {
+      const ring = PIN_RADIUS + (point.primary ? PIN_PRIMARY_RING : 3.5);
       context.beginPath();
-      context.arc(x, y, PIN_RADIUS + 3.5, 0, Math.PI * 2);
-      context.lineWidth = 2;
+      context.arc(x, y, ring, 0, Math.PI * 2);
+      if (point.primary) {
+        context.lineWidth = 4.5;
+        context.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+        context.stroke();
+      }
+      context.lineWidth = point.primary ? 3 : 2;
       context.strokeStyle = PIN_SELECTED_COLOR;
       context.stroke();
     }
@@ -1894,9 +3240,12 @@ function syncAnimationControls(app) {
   const available = Boolean(app.animationSupported);
   getAnimationSection(app)?.setAttribute('data-available', available ? 'true' : 'false');
   const pin = getSelectedPin(app);
-  const atKeyframe = Boolean(pin?.keyframes.some((key) => isAtTime(key.t, app.animationTime)));
-  const moving = hasMotion(app.animation);
+  const atKeyframe = Boolean(pin && getKeyframeAt(pin, app.animationTime, app.animation.mode));
+  const moving = hasActiveMotion(app.animation, app.effectRegions);
   const enabled = available && Boolean(app.cutout) && !app.busy;
+  syncFlipControls(app);
+  syncEffectControls(app);
+  syncPortraitAnimateControl(app);
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
     let disabled = !enabled;
@@ -1905,9 +3254,10 @@ function syncAnimationControls(app) {
     if (action === 'animation-preset')
       disabled ||= !isPresetAvailable(
         app.animation.pins,
-        app.selectedPinId,
+        app.selectedPinIds,
         control.dataset.preset,
       );
+    if (control.dataset.keyframeControl !== undefined) disabled ||= !pin;
     if (action === 'animation-play') disabled ||= !moving && !app.animationPlaying;
     control.disabled = disabled;
   });
@@ -1926,20 +3276,27 @@ function syncAnimationControls(app) {
   }
   const duration = root.querySelector('select[name="animationDuration"]');
   if (duration) duration.value = String(app.animation.duration);
+  root.querySelectorAll('input[name="animationMode"]').forEach((radio) => {
+    radio.checked = radio.value === app.animation.mode;
+  });
 
   const row = root.querySelector('[data-animation-keyframes]');
   if (row) {
     row.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => marker.remove());
     for (const key of pin?.keyframes ?? []) {
-      const marker = row.ownerDocument.createElement('button');
-      marker.type = 'button';
-      marker.className = 'pf2e-tokener-creator-keyframe';
-      marker.dataset.creatorAction = 'keyframe-seek';
-      marker.dataset.time = String(key.t);
-      marker.style.left = `${key.t * 100}%`;
-      marker.setAttribute('aria-label', formatLoopPercent(key.t));
-      marker.disabled = !enabled;
-      row.append(marker);
+      // In ping-pong each keyframe is passed twice per loop, so it gets a marker on both legs.
+      for (const time of getKeyframeMarkerTimes(key.t, app.animation.mode)) {
+        const marker = row.ownerDocument.createElement('button');
+        marker.type = 'button';
+        marker.className = 'pf2e-tokener-creator-keyframe';
+        marker.dataset.creatorAction = 'keyframe-seek';
+        marker.dataset.time = String(time);
+        marker.dataset.key = String(key.t);
+        marker.style.left = `${time * 100}%`;
+        marker.setAttribute('aria-label', formatLoopPercent(time));
+        marker.disabled = !enabled;
+        row.append(marker);
+      }
     }
   }
   syncAnimationTime(app);
@@ -1956,9 +3313,32 @@ function syncAnimationTime(app) {
   if (label) label.textContent = formatLoopPercent(t);
   const playhead = root.querySelector('[data-animation-playhead]');
   if (playhead) playhead.style.left = `${t * 100}%`;
+  const keyT = getKeyframeTime(t, app.animation.mode);
   root.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => {
-    marker.classList.toggle('is-current', isAtTime(Number(marker.dataset.time), t));
+    marker.classList.toggle('is-current', isAtTime(Number(marker.dataset.key), keyT));
   });
+  syncKeyframeControls(app, root);
+}
+
+/**
+ * Easing and rotation controls show the primary pin's keyframe at the current time, or the
+ * sampled rotation and the default easing when there is no keyframe there.
+ */
+function syncKeyframeControls(app, root) {
+  const pin = getSelectedPin(app);
+  const key = pin ? getKeyframeAt(pin, app.animationTime, app.animation.mode) : null;
+  const rot = key
+    ? (key.rot ?? 0)
+    : pin
+      ? samplePinOffset(pin, app.animationTime, app.animation.mode).rot
+      : 0;
+  const degrees = Math.round((rot * 180) / Math.PI);
+  const ease = root.querySelector('select[name="animationEase"]');
+  if (ease) ease.value = key?.ease ?? 'smooth';
+  const rotation = root.querySelector('input[name="animationRotation"]');
+  if (rotation && root.ownerDocument?.activeElement !== rotation) rotation.value = String(degrees);
+  const label = root.querySelector('[data-animation-rotation]');
+  if (label) label.textContent = `${degrees}°`;
 }
 
 function isPopOutEnabled(app) {
@@ -1975,7 +3355,8 @@ function canMask(app) {
 }
 
 function shouldShowMaskOverlay(app) {
-  if (isCleanupTool(app.maskTool) || app.maskTool === 'pin') return false;
+  if (isCleanupTool(app.maskTool) || app.maskTool === 'pin' || app.maskTool === 'region')
+    return false;
   return canMask(app) && Boolean(app.maskTool || app._pointer?.mode);
 }
 
@@ -1983,9 +3364,9 @@ function setMaskTool(app, tool) {
   // The mask overlay and brushes map to the still art, so editing tools pause the preview loop.
   if (!canPlayWithTool(tool)) stopAnimationPlayback(app);
   app.maskTool = tool;
-  if (tool && tool !== 'pin' && !isCleanupTool(tool)) ensurePopOutMask(app);
+  if (tool && tool !== 'pin' && tool !== 'region' && !isCleanupTool(tool)) ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
-  if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool;
+  if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool === 'region' ? 'paint' : tool;
   syncMaskControls(app);
   syncBrushCursor(app);
   renderCreatorPreview(app);
@@ -2029,15 +3410,31 @@ function setBrushSize(app, size) {
   renderCreatorPreview(app);
 }
 
-function pushMaskHistory(app, layer = 'popout') {
+/** `target` names the region step's canvas key and effect: `{ regionKey, effectId }`. */
+function pushMaskHistory(app, layer = 'popout', target = null) {
   const history = app._maskHistory;
-  history.undo.push({ layer, workspace: app.workspace, snapshot: snapshotLayer(app, layer) });
+  const entry = {
+    layer,
+    regionKey: target?.regionKey ?? null,
+    effectId: target?.effectId ?? null,
+    workspace: app.workspace,
+  };
+  entry.snapshot = snapshotLayer(app, layer, app.workspace, entry);
+  history.undo.push(entry);
   if (history.undo.length > MASK_HISTORY_LIMIT) history.undo.shift();
   history.redo = [];
   syncMaskControls(app);
 }
 
-function snapshotLayer(app, layer, workspace = app.workspace) {
+/** A region step keeps the canvas and the effect's region mode (whole figure or painted). */
+function snapshotLayer(app, layer, workspace = app.workspace, entry = null) {
+  if (layer === 'region') {
+    const effect = app.animation.effects.find((item) => item.id === entry?.effectId);
+    return {
+      canvas: cloneMask(app.effectRegions[entry?.regionKey]),
+      effectRegion: effect ? getEffectRegionKey(effect) : null,
+    };
+  }
   if (layer === 'cleanup')
     return {
       keep: cloneMask(workspace.cleanup.keep),
@@ -2052,7 +3449,7 @@ function undoMask(app) {
   if (!entry) return;
   history.redo.push({
     ...entry,
-    snapshot: snapshotLayer(app, entry.layer, entry.workspace),
+    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry),
   });
   restoreLayer(app, entry);
 }
@@ -2063,12 +3460,28 @@ function redoMask(app) {
   if (!entry) return;
   history.undo.push({
     ...entry,
-    snapshot: snapshotLayer(app, entry.layer, entry.workspace),
+    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry),
   });
   restoreLayer(app, entry);
 }
 
-function restoreLayer(app, { layer, snapshot, workspace = app.workspace }) {
+function restoreLayer(app, { layer, snapshot, regionKey, effectId, workspace = app.workspace }) {
+  if (layer === 'region') {
+    // A restored region is a new canvas, but the regions object keeps its identity, so the
+    // preview bend and the effect caches are reset by hand.
+    if (snapshot.canvas) app.effectRegions[regionKey] = snapshot.canvas;
+    else delete app.effectRegions[regionKey];
+    const effect = app.animation.effects.find((item) => item.id === effectId);
+    if (effect && getEffectRegionKey(effect) !== snapshot.effectRegion)
+      app.animation = updateEffect(app.animation, effectId, { region: snapshot.effectRegion });
+    app._regionVersion += 1;
+    clearEffectCaches();
+    app._previewBend = null;
+    syncMaskControls(app);
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+    return;
+  }
   if (layer === 'cleanup') {
     workspace.cleanup = { keep: snapshot.keep, remove: snapshot.remove };
     workspace.cutout = composeCleanCutout(workspace);
@@ -2247,7 +3660,7 @@ function syncMaskControls(app) {
   const root = getCreatorRoot(app);
   if (!root) return;
   const tool = getToolButton(app.maskTool);
-  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin'];
+  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin', 'region'];
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
@@ -2288,6 +3701,7 @@ async function selectPopOutPart(app, tokenPoint, { remove = false } = {}) {
     return;
 
   app._samBusy = true;
+  syncFlipControls(app);
   if (source.samReady) setCreatorStatus(app, localize('Creator.Selecting', 'Selecting...'));
   try {
     const select = await prepareSamSelector(app);
@@ -2319,6 +3733,7 @@ async function selectPopOutPart(app, tokenPoint, { remove = false } = {}) {
     );
   } finally {
     app._samBusy = false;
+    syncFlipControls(app);
   }
 }
 
@@ -2384,6 +3799,7 @@ function formatDownloadStatus(key, percent) {
 }
 
 function canShowBrush(app) {
+  if (app.maskTool === 'region') return canPaintRegion(app);
   return isCleanupTool(app.maskTool) ? Boolean(app.cutout) : canMask(app);
 }
 
@@ -2404,7 +3820,8 @@ function drawBrushCursor(context, app, viewport) {
   context.strokeStyle = 'rgba(0, 0, 0, 0.7)';
   context.stroke();
   context.lineWidth = 1.5;
-  context.strokeStyle = BRUSH_COLORS[pointer.mode] ?? BRUSH_COLORS.paint;
+  context.strokeStyle =
+    app.maskTool === 'region' ? REGION_COLOR : (BRUSH_COLORS[pointer.mode] ?? BRUSH_COLORS.paint);
   if (pointer.mode === 'erase' || pointer.mode === 'cut') context.setLineDash([4, 3]);
   context.stroke();
   context.restore();
@@ -2968,6 +4385,14 @@ export async function createToken(app, action) {
 
   // The saved loop is rendered from a snapshot, so the preview must not keep moving the pose.
   stopAnimationPlayback(app);
+  // The project is frozen now, with playback stopped, so edits made while files upload never
+  // mix into it.
+  let projectState = null;
+  try {
+    projectState = snapshotProjectState(app);
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Failed to snapshot the Token Creator project`, error);
+  }
   setCreatorBusy(app, true);
   setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
   try {
@@ -2982,8 +4407,11 @@ export async function createToken(app, action) {
     const label = tokenWorkspace.source.label;
     const size = app.creatorOptions.outputSize;
     const animated =
-      getAnimatedSavePlan({ animation: app.animation, canEncode: app.animationSupported }) ===
-      'animated';
+      getAnimatedSavePlan({
+        animation: app.animation,
+        canEncode: app.animationSupported,
+        regions: app.effectRegions,
+      }) === 'animated';
     let tokenSrc;
     if (animated) {
       tokenSrc = await uploadBlob(
@@ -3010,13 +4438,50 @@ export async function createToken(app, action) {
 
     const portraitPlan = getPortraitSavePlan({
       action,
-      edited: !isPortraitUnchanged(app.creatorOptions, app.portraitView),
+      edited: !isPortraitUnchanged(
+        app.creatorOptions,
+        app.portraitView,
+        portraitWorkspace.source?.flip,
+      ),
       sourcePath: portraitWorkspace.source?.path,
       hasFile: Boolean(portraitWorkspace.source?.file),
     });
-    const portraitEdited = portraitPlan === 'render';
+    let portraitEdited = portraitPlan === 'render';
     let portraitSrc;
-    if (portraitPlan === 'render') {
+    // Animate portrait: the shared image, bent like the token, saved as an animated WebP.
+    let portraitNote = '';
+    if (action !== 'token' && wantsPortraitAnimation(app)) {
+      // The token is already uploaded: a failed animated portrait falls back to the still one.
+      let blob = null;
+      let failed = false;
+      try {
+        blob = (await canEncodeWebp()) ? await encodePortraitAnimation(app) : null;
+      } catch (error) {
+        console.warn(`${MODULE_ID} | Failed to encode the animated portrait`, error);
+        failed = true;
+      }
+      if (failed)
+        portraitNote = localize(
+          'Creator.AnimatePortraitFailed',
+          'The animated portrait could not be made, so the portrait was saved as a still image.',
+        );
+      else if (blob) {
+        portraitSrc = await uploadBlob(
+          blob,
+          folder,
+          buildCreatedTokenFileName(label, { now, suffix: 'portrait' }),
+        );
+        portraitEdited = true;
+      } else
+        portraitNote = localize(
+          'Creator.AnimatePortraitUnsupported',
+          'This browser cannot save animated WebP, so the portrait was saved as a still image.',
+        );
+      setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
+    }
+    if (portraitSrc) {
+      // Already saved as an animated portrait.
+    } else if (portraitPlan === 'render') {
       portraitSrc = await uploadCanvas(
         withEditTarget(app, 'portrait', () => renderPortraitCanvas(app)),
         folder,
@@ -3032,14 +4497,29 @@ export async function createToken(app, action) {
       );
     }
 
+    // A project that fails to save never fails the token: it is applied without the flag.
+    let projectSrc;
+    let projectNote = '';
+    try {
+      projectSrc = await saveCreatorProject(projectState, { folder, tokenSrc });
+    } catch (error) {
+      console.warn(`${MODULE_ID} | Failed to save the Token Creator project`, error);
+      projectNote = localize(
+        'Creator.ProjectSaveFailed',
+        'The token was saved, but its project could not be saved for later editing.',
+      );
+    }
+
     const candidate = buildCreatedTokenCandidate({
       label,
       tokenSrc,
       portraitSrc,
       subjectSrc,
       ringColors,
+      ringEffects: ringMode ? app.creatorOptions.ringEffects : undefined,
       breakoutScale: 1 / getActiveRingScale(app),
       animated,
+      projectSrc,
     });
     if (action) {
       await applyCreatedTokenCandidate(action, candidate, app.tokenDocument);
@@ -3057,7 +4537,12 @@ export async function createToken(app, action) {
             ),
       );
     }
-    setCreatorStatus(app, tokenSrc);
+    const notes = [portraitNote, projectNote].filter(Boolean);
+    setCreatorStatus(
+      app,
+      notes.length ? `${tokenSrc} — ${notes.join(' ')}` : tokenSrc,
+      Boolean(projectNote),
+    );
   } catch (error) {
     console.error(`${MODULE_ID} | Failed to create token`, error);
     setCreatorStatus(app, localize('Creator.SaveFailed', 'Failed to save the token.'), true);
@@ -3067,6 +4552,103 @@ export async function createToken(app, action) {
   } finally {
     setCreatorBusy(app, false);
   }
+}
+
+/**
+ * Everything a Token Creator project stores, frozen at save start. Sources are kept by
+ * reference (they are replaced, never drawn into); masks and regions are painted in place, so
+ * they are copied.
+ */
+export function snapshotProjectState(app) {
+  const token = app.workspaces.token;
+  const portrait = app.workspaces.portrait?.source ? app.workspaces.portrait : null;
+  const cleanup = (workspace) => ({
+    keep: copyCanvas(workspace.cleanup?.keep),
+    remove: copyCanvas(workspace.cleanup?.remove),
+  });
+  // A source without a path is uploaded un-flipped (getProjectSourceCanvas), so every
+  // source records its real flip.
+  const flip = (source) => normalizeFlip(source?.flip);
+  return {
+    label: token.source?.label ?? '',
+    options: structuredClone(app.creatorOptions),
+    token: {
+      source: token.source,
+      view: { ...app.view },
+      flip: flip(token.source),
+      popOutMask: copyCanvas(app.popOutMask),
+      cleanup: cleanup(token),
+    },
+    portrait: portrait
+      ? {
+          source: portrait.source,
+          view: { ...app.portraitView },
+          flip: flip(portrait.source),
+          popOutMask: null,
+          cleanup: cleanup(portrait),
+        }
+      : null,
+    portraitView: { ...app.portraitView },
+    animation: structuredClone(app.animation),
+    regions: Object.fromEntries(
+      Object.entries(app.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+    ),
+  };
+}
+
+/**
+ * Writes `<stem>.tokener.json` next to the saved token and returns its path. Sources without a
+ * path (file, paste, drop, generated) are uploaded first as lossless `<stem>-source.png` (and
+ * `<stem>-portrait-source.png` for a separate portrait image) so the project can reload them.
+ */
+async function saveCreatorProject(state, { folder, tokenSrc }) {
+  if (!state) throw new Error('No project snapshot.');
+  const tokenFileName = String(tokenSrc).split('/').pop();
+  const stem = tokenFileName.replace(/\.[^.]+$/, '');
+  const uploadSource = async (source, fileName) =>
+    source.path ||
+    uploadBlob(await canvasToBlob(getProjectSourceCanvas(source), 'image/png'), folder, fileName);
+  const tokenPath = await uploadSource(state.token.source, `${stem}-source.png`);
+  let portraitPath = null;
+  if (state.portrait)
+    portraitPath =
+      state.portrait.source === state.token.source
+        ? tokenPath
+        : await uploadSource(state.portrait.source, `${stem}-portrait-source.png`);
+  const project = serializeProjectSnapshot(state, {
+    tokenPath,
+    portraitPath,
+    output: tokenSrc,
+    toDataUrl: (canvas) => canvas.toDataURL('image/png'),
+  });
+  return uploadBlob(
+    new Blob([JSON.stringify(project)], { type: 'application/json' }),
+    folder,
+    buildProjectFileName(tokenFileName),
+  );
+}
+
+/** The source image as it was given, before any flip: what a project stores and reloads. */
+export function getProjectSourceCanvas(source) {
+  return applyFlip(source.canvas, source.flip, createCanvas);
+}
+
+/**
+ * The project object for a snapshot whose sources are stored at `tokenPath` / `portraitPath`
+ * (the portrait path only matters while the portrait has its own workspace).
+ */
+export function serializeProjectSnapshot(state, { tokenPath, portraitPath, output, toDataUrl }) {
+  return serializeProject({
+    label: state.label,
+    output,
+    options: state.options,
+    token: { ...state.token, sourcePath: tokenPath },
+    portrait: state.portrait ? { ...state.portrait, sourcePath: portraitPath } : null,
+    portraitView: state.portraitView,
+    animation: state.animation,
+    regions: state.regions,
+    toDataUrl,
+  });
 }
 
 /** Frames rendered between yields to the browser while an animation is prepared. */
@@ -3096,6 +4678,9 @@ function snapshotTokenAnimation(app) {
       popOutMask: null,
     },
     popOutImage: isPopOutEnabled(app) ? copyCanvas(getPopOutImage(app)) : null,
+    regions: Object.fromEntries(
+      Object.entries(app.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+    ),
     animation: structuredClone(app.animation),
   }));
 }
@@ -3106,24 +4691,24 @@ function snapshotTokenAnimation(app) {
  * `getAnimatedOutputSize`; the bitrate follows it. The status line counts the rendered frames.
  */
 async function encodeTokenAnimation(app, size) {
-  const { snapshot, popOutImage, animation } = snapshotTokenAnimation(app);
+  const { snapshot, popOutImage, regions, animation } = snapshotTokenAnimation(app);
   const times = getFrameTimes(animation);
   const canvas = createCanvas(size, size);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   const frames = [];
   for (const [index, t] of times.entries()) {
     setCreatorStatus(app, getEncodingStatus(index, times.length));
-    const bent = bendTokenArt({
-      cutout: snapshot.cutout,
-      popOutImage,
-      view: snapshot.view,
-      size,
-      animation,
-      t,
-      createCanvas,
-    });
     context.clearRect(0, 0, size, size);
-    drawCreatedToken(context, snapshot, size, { bent });
+    renderAnimationFrame({
+      context,
+      size,
+      t,
+      art: { cutout: snapshot.cutout, popOutImage, regions },
+      view: snapshot.view,
+      animation,
+      createCanvas,
+      drawFrame: (frameContext, bent) => drawCreatedToken(frameContext, snapshot, size, { bent }),
+    });
     frames.push(context.getImageData(0, 0, size, size));
     if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();
   }
@@ -3137,6 +4722,201 @@ async function encodeTokenAnimation(app, size) {
     durationMs: animation.duration * 1000,
     bitrate: size * size * 8,
   });
+}
+
+/** Frame rate of animated portraits (animated WebP); lower than the token's to keep files small. */
+const PORTRAIT_ANIMATION_FPS = 15;
+const PORTRAIT_ANIMATION_QUALITY = 0.85;
+/** Longest side of an animated portrait, in pixels. */
+const MAX_ANIMATED_PORTRAIT_SIZE = 512;
+
+/**
+ * Whether the saved portrait is an animated WebP: only when asked for, when the portrait shares
+ * the token's image (pins and effects live in that image's pixel space), when the token animation
+ * moves, and when this browser can encode WebP.
+ */
+export function getPortraitAnimationPlan({
+  options,
+  sharedSource,
+  hasActiveMotion: moving,
+  canEncodeWebp: canEncode,
+} = {}) {
+  return options?.animatePortrait && sharedSource && moving && canEncode ? 'animated' : 'still';
+}
+
+/**
+ * Everything but WebP support: what the Animate portrait checkbox asks for applies now. The
+ * checkbox only shows while the token animation can be made, so the save follows that too.
+ */
+export function wantsPortraitAnimation(app) {
+  return (
+    Boolean(app.animationSupported) &&
+    getPortraitAnimationPlan({
+      options: app.creatorOptions,
+      sharedSource: isPortraitShared(app),
+      hasActiveMotion: hasActiveMotion(app.animation, app.effectRegions),
+      canEncodeWebp: true,
+    }) === 'animated'
+  );
+}
+
+/** The portrait size `width` x `height` scaled down (never up) to `MAX_ANIMATED_PORTRAIT_SIZE`. */
+export function getAnimatedPortraitSize(width, height) {
+  const scale = Math.min(1, MAX_ANIMATED_PORTRAIT_SIZE / Math.max(1, width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+/** The portrait has no image of its own (or the same one), so it can follow the token animation. */
+function isPortraitShared(app) {
+  const portrait = app.workspaces?.portrait;
+  return !portrait || portrait.source === app.workspaces?.token?.source;
+}
+
+/** Whether `canvas.toBlob('image/webp')` really gives WebP here (some browsers fall back to PNG). */
+async function canEncodeWebp() {
+  try {
+    const blob = await canvasToBlob(createCanvas(1, 1), 'image/webp', PORTRAIT_ANIMATION_QUALITY);
+    if (blob.type && blob.type !== 'image/webp') return false;
+    const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+    return String.fromCharCode(...head.subarray(0, 4), ...head.subarray(8, 12)) === 'RIFFWEBP';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Renders the animation loop through the portrait layout (`drawPortrait` geometry: aspect, zoom,
+ * offset, background; no frame or ring) at the portrait size capped to 512 px, 15 fps, and encodes
+ * it as an animated WebP. Null when WebP cannot be encoded.
+ */
+async function encodePortraitAnimation(app) {
+  const { image, backdrop, background, color, regions, animation, view } = withEditTarget(
+    app,
+    'portrait',
+    () => ({
+      // The figure is always the cut-out, so effects find its silhouette; with the 'original'
+      // background the uncut image is bent with it underneath.
+      image: copyCanvas(app.cutout),
+      backdrop:
+        app.creatorOptions.portraitBackground === 'original' ? copyCanvas(app.source.canvas) : null,
+      background: app.creatorOptions.portraitBackground,
+      color: app.creatorOptions.portraitColor,
+      regions: Object.fromEntries(
+        Object.entries(app.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+      ),
+      animation: structuredClone(app.animation),
+      view: { ...app.portraitView },
+    }),
+  );
+  const ratio = getPortraitAspectRatio(
+    app.creatorOptions.portraitAspect,
+    image.width,
+    image.height,
+  );
+  const longSide = Math.max(image.width, image.height);
+  const { width, height } = getAnimatedPortraitSize(
+    Math.round(ratio >= 1 ? longSide : longSide * ratio),
+    Math.round(ratio >= 1 ? longSide / ratio : longSide),
+  );
+  const times = getFrameTimes({ ...animation, fps: PORTRAIT_ANIMATION_FPS });
+  const output = createCanvas(width, height);
+  // One canvas redrawn per frame: each frame is encoded before the next is drawn.
+  const frames = (function* () {
+    for (const t of times) {
+      renderPortraitAnimationFrame(output, {
+        image,
+        backdrop,
+        regions,
+        animation,
+        view,
+        background,
+        color,
+        t,
+      });
+      yield output;
+    }
+  })();
+  return encodeAnimatedWebp(
+    frames,
+    { fps: PORTRAIT_ANIMATION_FPS, quality: PORTRAIT_ANIMATION_QUALITY },
+    {
+      total: times.length,
+      onFrame: (done, total) =>
+        setCreatorStatus(
+          app,
+          localize('Creator.AnimatePortraitEncoding', 'Encoding animated portrait… {n}/{total}')
+            .replace('{n}', String(done))
+            .replace('{total}', String(total)),
+        ),
+      yield: yieldToBrowser,
+      yieldEvery: ANIMATION_FRAMES_PER_YIELD,
+    },
+  );
+}
+
+/**
+ * One portrait frame at loop time `t` into `output` (the portrait size). The animation renderer
+ * works on a square, so the frame is rendered on a square as large as the portrait's long side,
+ * with the art laid out so the centred portrait rect matches `drawPortrait` exactly, then cropped.
+ * `image` is the cut-out (the figure the effects act on). The portrait `background` is 'original'
+ * (`backdrop`, the uncut image of the same size, is bent with the same warp and drawn under the
+ * figure), 'transparent' or 'color'.
+ */
+export function renderPortraitAnimationFrame(
+  output,
+  { image, backdrop = null, regions, animation, view, background, color, t },
+) {
+  const { width, height } = output;
+  const size = Math.max(width, height);
+  const left = (size - width) / 2;
+  const top = (size - height) / 2;
+  const portraitScale =
+    Math.max(width / Math.max(1, image.width), height / Math.max(1, image.height)) *
+    (Number(view?.zoom) || 1);
+  const squareCover = size / Math.max(1, Math.min(image.width, image.height));
+  const squareView = {
+    zoom: portraitScale / squareCover,
+    offsetX: ((Number(view?.offsetX) || 0) * width) / size,
+    offsetY: ((Number(view?.offsetY) || 0) * height) / size,
+  };
+  const under = background === 'original' ? backdrop : null;
+  const square = createCanvas(size, size);
+  renderAnimationFrame({
+    context: square.getContext('2d'),
+    size,
+    t,
+    art: { cutout: image, popOutImage: null, background: under, regions },
+    view: squareView,
+    animation,
+    createCanvas,
+    drawFrame: (frameContext, bent) => {
+      if (background === 'color') {
+        frameContext.fillStyle = color;
+        frameContext.fillRect(left, top, width, height);
+      }
+      if (bent) {
+        if (bent.background) frameContext.drawImage(bent.background, 0, 0, size, size);
+        frameContext.drawImage(bent.art, 0, 0, size, size);
+        return;
+      }
+      const layout = getTokenFrameLayout({
+        imageWidth: image.width,
+        imageHeight: image.height,
+        size,
+        zoom: squareView.zoom,
+        offsetX: squareView.offsetX * size,
+        offsetY: squareView.offsetY * size,
+      });
+      // Nothing moves: the uncut image alone is exactly the still portrait.
+      frameContext.drawImage(under ?? image, layout.x, layout.y, layout.width, layout.height);
+    },
+  });
+  const outputContext = output.getContext('2d');
+  outputContext.clearRect(0, 0, width, height);
+  outputContext.drawImage(square, -left, -top);
 }
 
 function getEncodingStatus(done, total) {
@@ -3232,10 +5012,32 @@ function syncBackgroundControls(app) {
 
 function updateCreatorOption(app, input) {
   const value = input.type === 'checkbox' ? input.checked : input.value;
-  app.creatorOptions = normalizeTokenCreatorOptions({
-    ...app.creatorOptions,
-    [input.name]: value,
-  });
+  const path = getCreatorOptionKey(input.name, app.creatorOptions);
+  if (!path) return;
+  app.creatorOptions = normalizeTokenCreatorOptions(
+    path.key
+      ? {
+          ...app.creatorOptions,
+          [path.group]: { ...app.creatorOptions[path.group], [path.key]: value },
+        }
+      : { ...app.creatorOptions, [path.group]: value },
+  );
+}
+
+const NESTED_OPTION_GROUPS = Object.freeze(['ringEffects']);
+
+/**
+ * Maps an input name to the creator option it edits: a flat option name, or `group.key` for a
+ * whitelisted nested group such as `ringEffects.pulse`. Anything else is not an option.
+ */
+export function getCreatorOptionKey(name, options = {}) {
+  if (typeof name !== 'string' || !name) return null;
+  if (!name.includes('.')) return name in options ? { group: name, key: null } : null;
+  const [group, key, ...rest] = name.split('.');
+  if (rest.length || !NESTED_OPTION_GROUPS.includes(group)) return null;
+  const nested = options[group];
+  if (!nested || typeof nested !== 'object' || !(key in nested)) return null;
+  return { group, key };
 }
 
 function updateValueLabel(input) {
@@ -3251,6 +5053,13 @@ function updateValueLabel(input) {
 
 function formatZoom(value) {
   return `${Number(value).toFixed(2)}x`;
+}
+
+/** `value` escaped for a quoted attribute selector (`CSS.escape` when the browser has it). */
+export function escapeSelectorValue(value) {
+  const text = String(value ?? '');
+  if (typeof globalThis.CSS?.escape === 'function') return globalThis.CSS.escape(text);
+  return text.replace(/["\\]/g, '\\$&').replace(/[\n\r\f]/g, ' ');
 }
 
 function setCreatorStatus(app, message, isError = false) {

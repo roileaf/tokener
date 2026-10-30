@@ -112,6 +112,17 @@ function createFakeHudRoot() {
   return { root, target };
 }
 
+/** Clears every index build field, so one test's build never leaks into the next. */
+function resetIndexBuildState() {
+  Object.assign(state, {
+    indexing: null,
+    builtIndex: null,
+    rescanning: false,
+    generation: 0,
+    failed: false,
+  });
+}
+
 test('native compendiumArtMappings become searchable token candidates', () => {
   const mapping = {
     'pf2e.pathfinder-bestiary': {
@@ -617,7 +628,7 @@ test('Foundry index discovers datasheet tags from token module datasheet folders
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   const browseCalls = [];
   globalThis.game = {
@@ -693,7 +704,7 @@ test('Foundry index discovers datasheet tags from token module datasheet folders
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -702,7 +713,7 @@ test('Foundry index reads native compendium art mappings for the active system',
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   globalThis.game = {
     system: { id: 'dnd5e' },
@@ -762,7 +773,7 @@ test('Foundry index reads native compendium art mappings for the active system',
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -771,7 +782,7 @@ test('Foundry index folder-scans active modules by evidence instead of token-lik
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   const browseCalls = [];
   globalThis.game = {
@@ -839,7 +850,7 @@ test('Foundry index folder-scans active modules by evidence instead of token-lik
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -848,7 +859,7 @@ test('Foundry index finds tokens and portraits under pictures/ folders of locali
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   globalThis.game = {
     modules: new Map([['pf2e-zda', { id: 'pf2e-zda', title: 'Zeitalter der Asche', flags: {} }]]),
@@ -901,7 +912,7 @@ test('Foundry index finds tokens and portraits under pictures/ folders of locali
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -910,7 +921,7 @@ test('Foundry index scans modules concurrently while preserving candidate order'
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
   let active = 0;
   let maxActive = 0;
   const modules = Array.from({ length: 8 }, (_, index) => ({
@@ -954,7 +965,7 @@ test('Foundry index scans modules concurrently while preserving candidate order'
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -963,7 +974,7 @@ test('Foundry index discovers datasheets from monster and adventure modules', as
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   globalThis.game = {
     modules: new Map([
@@ -1026,7 +1037,7 @@ test('Foundry index discovers datasheets from monster and adventure modules', as
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -1035,7 +1046,7 @@ test('Foundry index adds custom folders as source-scoped token art', async () =>
   const previousFoundry = globalThis.foundry;
   state.index = [];
   state.errors = [];
-  state.indexing = null;
+  resetIndexBuildState();
 
   const browseCalls = [];
   globalThis.game = {
@@ -1112,7 +1123,7 @@ test('Foundry index adds custom folders as source-scoped token art', async () =>
     else globalThis.foundry = previousFoundry;
     state.index = [];
     state.errors = [];
-    state.indexing = null;
+    resetIndexBuildState();
   }
 });
 
@@ -2907,6 +2918,7 @@ test('revert snapshot captures previous token, actor, and portrait art before ap
     randomImg: true,
     ring: {
       enabled: true,
+      effects: 1,
       subject: {
         texture: 'old-subject.webp',
         scale: 1.25,
@@ -4576,7 +4588,9 @@ test('favorite controls render on token cards and in the sidebar filter row', ()
   assert.match(template, /data-favorites-filter=['"]toggle['"]/);
   assert.match(template, /data-favorite-candidate-id=['"]{{viewId}}['"]/);
   assert.match(template, /aria-pressed=['"]{{favoriteAriaPressed}}['"]/);
-  assert.match(filterRowRule, /grid-template-columns:\s*1fr;/);
+  // Favorites stretch; the Rescan icon button sits beside them.
+  assert.match(filterRowRule, /grid-template-columns:\s*1fr auto;/);
+  assert.match(template, /data-picker-action=['"]rescan-index['"]/);
   assert.match(cardFavoriteRule, /position:\s*absolute;/);
   assert.match(cardFavoriteRule, /top:\s*4px;/);
   assert.match(activeFavoriteRule, /color:\s*#d6b56d;/);
@@ -4906,4 +4920,87 @@ test('animated ring tokens keep ring colours and honour a ring scale override', 
   assert.equal(update['ring.subject.scale'], 1.6);
   assert.equal(update['ring.colors.ring'], '#ff0000');
   assert.equal(update['ring.colors.background'], '#00ff00');
+});
+
+test('getRingEffectsMask folds the ring effect toggles into Foundry bit flags', async () => {
+  const { getRingEffectsMask } = await import('../scripts/token-composer.js');
+  assert.equal(getRingEffectsMask({}), 1);
+  assert.equal(getRingEffectsMask(), 1);
+  assert.equal(getRingEffectsMask({ pulse: true }), 3);
+  assert.equal(getRingEffectsMask({ gradient: true }), 5);
+  assert.equal(getRingEffectsMask({ wave: true }), 9);
+  assert.equal(getRingEffectsMask({ spectral: true }), 17);
+  assert.equal(getRingEffectsMask({ pulse: true, gradient: true, wave: true, spectral: true }), 31);
+});
+
+test('ring effects are written for still and animated ring candidates only', async () => {
+  const { buildCreatedTokenCandidate } = await import('../scripts/token-composer.js');
+  const still = buildCreatedTokenCandidate({
+    label: 'S',
+    tokenSrc: 's.webp',
+    subjectSrc: 's.webp',
+    ringEffects: { pulse: true, wave: true },
+  });
+  assert.equal(still.ringEffects, 11);
+  assert.equal(buildTokenUpdate(still, { scale: 1 })['ring.effects'], 11);
+
+  const animated = buildCreatedTokenCandidate({
+    label: 'A',
+    tokenSrc: 'a.webm',
+    subjectSrc: 'a.webm',
+    animated: true,
+    ringEffects: { spectral: true },
+  });
+  assert.equal(animated.ringEffects, 17);
+  assert.equal(buildTokenUpdate(animated, { scale: 1 })['ring.effects'], 17);
+
+  const plain = buildCreatedTokenCandidate({
+    label: 'P',
+    tokenSrc: 'p.webp',
+    ringEffects: { pulse: true },
+  });
+  assert.equal(plain.ringEffects, undefined);
+  assert.equal('ring.effects' in buildTokenUpdate(plain, { scale: 1 }), false);
+});
+
+test('created tokens with a saved project write the project flag on token and prototype', async () => {
+  const { buildCreatedTokenCandidate } = await import('../scripts/token-composer.js');
+  const candidate = buildCreatedTokenCandidate({
+    label: 'D',
+    tokenSrc: 'w/tokener/d.webm',
+    projectSrc: 'w/tokener/d.tokener.json',
+  });
+  assert.equal(candidate.projectSrc, 'w/tokener/d.tokener.json');
+  const project = { path: 'w/tokener/d.tokener.json', output: 'w/tokener/d.webm' };
+  assert.deepEqual(buildTokenUpdate(candidate)['flags.pf2e-tokener.project'], project);
+  assert.deepEqual(
+    buildActorUpdate(candidate, { actor: { prototypeToken: {} } })[
+      'prototypeToken.flags.pf2e-tokener.project'
+    ],
+    project,
+  );
+
+  const without = buildCreatedTokenCandidate({ label: 'P', tokenSrc: 'p.webp' });
+  assert.equal('projectSrc' in without, false);
+  assert.equal('flags.pf2e-tokener.project' in buildTokenUpdate(without), false);
+});
+
+test('revert state captures and restores ring.effects', () => {
+  const snapshot = buildRevertSnapshot({
+    action: 'token',
+    candidate: { label: 'X', tokenSrc: 'x.webp' },
+    tokenDocument: {
+      texture: { src: 'old.webp', scaleX: 1, scaleY: 1 },
+      ring: { enabled: true, effects: 19, subject: { texture: 's.webp', scale: 1 } },
+    },
+  });
+  assert.equal(snapshot.token.ring.effects, 19);
+  assert.equal(buildTokenRevertUpdate(snapshot)['ring.effects'], 19);
+
+  const bare = buildRevertSnapshot({
+    action: 'token',
+    candidate: { label: 'X', tokenSrc: 'x.webp' },
+    tokenDocument: { texture: { src: 'old.webp' }, ring: { enabled: false } },
+  });
+  assert.equal(bare.token.ring.effects, 1);
 });

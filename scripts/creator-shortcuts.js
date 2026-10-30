@@ -12,6 +12,7 @@ const KEY_COMMANDS = {
   r: 'tool-restore',
   g: 'tool-wand',
   p: 'tool-pin',
+  f: 'tool-region',
   v: 'tool-move',
   escape: 'tool-move',
   x: 'swap',
@@ -64,6 +65,8 @@ export function getStrokeMode({ tool = null, button = 0, shiftKey = false, altKe
     return tool;
   }
   if (tool === 'wand') return null;
+  // The effect region brush adds on a plain drag and removes on a right or Alt drag.
+  if (tool === 'region') return altKey || button === 2 ? 'erase' : 'paint';
   if (altKey) return 'erase';
   if (shiftKey) return 'paint';
   if (button === 2) return tool === 'erase' ? 'paint' : 'erase';

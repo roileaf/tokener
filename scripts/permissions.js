@@ -45,6 +45,13 @@ export function canUseTokenHudDocument(tokenDocument, settings = globalThis.game
   return isPlayerOwnedTokenerAllowed(settings) && canUserUpdateDocument(tokenDocument, user);
 }
 
+/** Whether the current user can open Tokener anywhere (used to gate the background index warm-up). */
+export function canUseTokener(settings = globalThis.game?.settings) {
+  const user = globalThis.game?.user;
+  if (!user) return false;
+  return Boolean(user.isGM) || isPlayerOwnedTokenerAllowed(settings);
+}
+
 export function canUseActorTokenerEntry(actor) {
   const user = globalThis.game?.user;
   return Boolean(user?.isGM && actor);

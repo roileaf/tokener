@@ -10,9 +10,10 @@ import {
   getBendMargin,
   getPinHitRadius,
   isPresetAvailable,
+  renderAnimationFrame,
   shouldBendPreview,
 } from '../scripts/token-animation.js';
-import { getTokenFrameLayout } from '../scripts/token-composer.js';
+import { drawTokenFrame, getTokenFrameLayout } from '../scripts/token-composer.js';
 
 const SIZE = 32;
 const VIEW = { zoom: 1, offsetX: 0, offsetY: 0 };
@@ -153,10 +154,10 @@ test('the preview stays unbent while a mask tool or a mask stroke works on the s
 test('Breathe needs at least two pins; Bob and Sway need a selected pin', () => {
   const one = [{ id: 'a', x: 0, y: 0, keyframes: [] }];
   const two = [...one, { id: 'b', x: 5, y: 5, keyframes: [] }];
-  assert.equal(isPresetAvailable(one, null, 'breathe'), false);
-  assert.equal(isPresetAvailable(two, null, 'breathe'), true);
-  assert.equal(isPresetAvailable(one, 'a', 'bob'), true);
-  assert.equal(isPresetAvailable(one, null, 'sway'), false);
+  assert.equal(isPresetAvailable(one, [], 'breathe'), false);
+  assert.equal(isPresetAvailable(two, [], 'breathe'), true);
+  assert.equal(isPresetAvailable(one, ['a'], 'bob'), true);
+  assert.equal(isPresetAvailable(one, [], 'sway'), false);
 });
 
 test('pin hit radius follows CSS scaling of the preview canvas and viewport zoom', () => {
@@ -166,4 +167,363 @@ test('pin hit radius follows CSS scaling of the preview canvas and viewport zoom
     10,
   );
   assert.equal(getPinHitRadius({ radius: 10, canvasWidth: 600, clientWidth: 0 }), 10);
+});
+
+function alphaAt(canvas, x, y) {
+  return pixels(canvas)[(y * canvas.width + x) * 4 + 3];
+}
+
+test('a rotating pin turns the art around it', () => {
+  const cutout = createCanvas(40, 40);
+  const context = cutout.getContext('2d');
+  context.fillStyle = '#c03020';
+  context.fillRect(6, 18, 28, 4);
+  const pins = [
+    {
+      id: 'p',
+      x: 20,
+      y: 20,
+      arm: 10,
+      keyframes: [
+        { t: 0, dx: 0, dy: 0, rot: 0 },
+        { t: 0.5, dx: 0, dy: 0, rot: Math.PI / 2 },
+      ],
+    },
+  ];
+  const run = (t) =>
+    bendTokenArt({
+      cutout,
+      view: VIEW,
+      size: 40,
+      animation: { duration: 2, fps: 30, mode: 'loop', pins },
+      t,
+      createCanvas,
+    }).art;
+  const flat = run(0);
+  assert.ok(alphaAt(flat, 12, 20) > 128, 'bar is horizontal at rest');
+  assert.ok(alphaAt(flat, 20, 12) < 128);
+  const turned = run(0.5);
+  assert.ok(alphaAt(turned, 20, 12) > 128, 'opaque above the pin');
+  assert.ok(alphaAt(turned, 20, 28) > 128, 'opaque below the pin');
+  assert.ok(alphaAt(turned, 10, 20) < 128, 'transparent left at arm distance');
+  assert.ok(alphaAt(turned, 30, 20) < 128, 'transparent right at arm distance');
+});
+
+test('ping-pong animation bends the same at t and 1-t', () => {
+  const cutout = makeCutout();
+  const pins = [
+    pin([
+      { t: 0, dx: 0, dy: 0 },
+      { t: 0.3, dx: 0, dy: -6 },
+    ]),
+  ];
+  const run = (t) =>
+    bendTokenArt({
+      cutout,
+      view: VIEW,
+      size: SIZE,
+      animation: { duration: 2, fps: 30, mode: 'pingpong', pins },
+      t,
+      createCanvas,
+    }).art;
+  assert.deepEqual(pixels(run(0.1)), pixels(run(0.9)));
+  assert.notDeepEqual(pixels(run(0.1)), pixels(run(0)));
+});
+
+test('bend margin covers a rotated satellite', () => {
+  const pins = [
+    {
+      id: 'p',
+      x: 20,
+      y: 20,
+      arm: 10,
+      keyframes: [
+        { t: 0, dx: 0, dy: 0, rot: 0 },
+        { t: 0.5, dx: 0, dy: 0, rot: Math.PI / 2 },
+      ],
+    },
+  ];
+  assert.ok(getBendMargin(pins, 1, 40) >= 15);
+});
+
+/** A 40x20 cut-out: red body with a green square at (14..20, 12..18); the region marks the square. */
+function makeRegionArt() {
+  const cutout = createCanvas(40, 20);
+  const context = cutout.getContext('2d');
+  context.fillStyle = '#c03020';
+  context.fillRect(4, 4, 32, 14);
+  context.fillStyle = '#20c040';
+  context.fillRect(14, 12, 6, 6);
+  const region = createCanvas(40, 20);
+  const regionContext = region.getContext('2d');
+  regionContext.fillStyle = '#ffffff';
+  regionContext.fillRect(14, 12, 6, 6);
+  return { cutout, region };
+}
+
+function plainDraw(context, bent, size) {
+  context.clearRect(0, 0, size, size);
+  if (bent) context.drawImage(bent.art, 0, 0);
+}
+
+test('regions follow the art when the view changes', () => {
+  const { cutout, region } = makeRegionArt();
+  const size = 64;
+  const animation = {
+    duration: 2,
+    fps: 30,
+    pins: [],
+    // Wobble forces the warp path, so region and art must share the same grid.
+    effects: [
+      { id: 'fx', type: 'flicker', region: 'eyes', amount: 0, kind: 'opacity', speed: 3 },
+      { id: 'wb', type: 'wobble', region: null, strength: 3, scale: 40 },
+    ],
+  };
+  for (const view of [
+    { zoom: 1, offsetX: 0, offsetY: 0 },
+    { zoom: 1.6, offsetX: 0.2, offsetY: -0.1 },
+  ]) {
+    const context = createCanvas(size, size).getContext('2d');
+    const bent = renderAnimationFrame({
+      context,
+      size,
+      t: 0.3,
+      art: { cutout, popOutImage: null, regions: { eyes: region } },
+      view,
+      animation,
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    const bentRegion = bent.regions.eyes;
+    assert.ok(bentRegion, 'bent region exists');
+    const regionData = pixels(bentRegion);
+    const artData = pixels(bent.art);
+    let inside = 0;
+    for (let i = 0; i < size * size; i += 1) {
+      if (regionData[i * 4 + 3] < 250) continue;
+      inside += 1;
+      assert.ok(artData[i * 4 + 1] > artData[i * 4], `region pixel ${i} lies on the green square`);
+    }
+    assert.ok(inside > 10, 'region covers some pixels');
+  }
+});
+
+test('a wind effect only moves pixels inside its region', () => {
+  const size = 128;
+  const cutout = createCanvas(128, 128);
+  const context = cutout.getContext('2d');
+  // Striped art over the whole image, so any displacement shows.
+  for (let x = 0; x < 128; x += 4) {
+    context.fillStyle = x % 8 ? '#2040c0' : '#e0d020';
+    context.fillRect(x, 0, 4, 128);
+  }
+  const region = createCanvas(128, 128);
+  const regionContext = region.getContext('2d');
+  regionContext.fillStyle = '#ffffff';
+  regionContext.fillRect(0, 0, 40, 128);
+  const render = (effects) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0.25,
+      art: { cutout, popOutImage: null, regions: { left: region } },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, pins: [], effects },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    return pixels(target);
+  };
+  const still = render([{ id: 'flat', type: 'flicker', region: null, amount: 0 }]);
+  const windy = render([{ id: 'w', type: 'wind', region: 'left', strength: 6, scale: 40 }]);
+  let movedInside = 0;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const o = (y * size + x) * 4;
+      const diff = Math.abs(still[o] - windy[o]) + Math.abs(still[o + 2] - windy[o + 2]);
+      if (x >= 56) assert.ok(diff <= 4, `pixel ${x},${y} outside the region stays put`);
+      if (x < 32 && diff > 60) movedInside += 1;
+    }
+  }
+  assert.ok(movedInside > 200, `wind moves the region (${movedInside} pixels changed)`);
+});
+
+test('with no effects and no motion, renderAnimationFrame draws the plain still frame', () => {
+  const cutout = makeCutout();
+  const size = 48;
+  const view = { zoom: 1.3, offsetX: 0.1, offsetY: -0.05 };
+  const frame = { size, borderWidth: 3, fill: true, fillColor: '#203040' };
+  const drawFrame = (ctx, bent) =>
+    bent
+      ? drawTokenFrame(ctx, bent.art, frame)
+      : drawTokenFrame(ctx, cutout, {
+          ...frame,
+          zoom: view.zoom,
+          offsetX: view.offsetX * size,
+          offsetY: view.offsetY * size,
+        });
+  const expected = createCanvas(size, size);
+  drawFrame(expected.getContext('2d'), null);
+  const actual = createCanvas(size, size);
+  renderAnimationFrame({
+    context: actual.getContext('2d'),
+    size,
+    t: 0.4,
+    art: { cutout, popOutImage: null, regions: {} },
+    view,
+    animation: { duration: 2, fps: 30, pins: [pin([{ t: 0, dx: 0, dy: 0 }])], effects: [] },
+    createCanvas,
+    drawFrame,
+  });
+  assert.deepEqual(pixels(actual), pixels(expected));
+});
+
+test('a whole-figure glow is drawn behind the art, a region glow over it', () => {
+  const { cutout, region } = makeRegionArt();
+  const size = 64;
+  const render = (effect) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0,
+      art: { cutout, popOutImage: null, regions: { eyes: region } },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, pins: [], effects: [effect] },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    return pixels(target);
+  };
+  const glow = { id: 'g', type: 'glow', color: '#0000ff', size: 40, pulse: 0 };
+  const layout = getTokenFrameLayout({ imageWidth: 40, imageHeight: 20, size });
+  const scale = layout.width / 40;
+  const at = (data, x, y) => {
+    const o = (Math.floor(layout.y + y * scale) * size + Math.floor(layout.x + x * scale)) * 4;
+    return [...data.slice(o, o + 4)];
+  };
+  const behind = render({ ...glow, region: null });
+  // Inside the red body the art is opaque and unchanged; just outside it the aura shows.
+  assert.deepEqual(at(behind, 8.5, 8.5).slice(0, 3), [0xc0, 0x30, 0x20]);
+  const aura = at(behind, 3, 2);
+  assert.ok(aura[3] > 0 && aura[2] > aura[0], `aura outside the body (${aura})`);
+  const over = render({ ...glow, region: 'eyes' });
+  const eye = at(over, 17, 15);
+  assert.ok(eye[2] > 0x40, `region glow brightens the eye (${eye})`);
+  assert.deepEqual(at(over, 8.5, 8.5).slice(0, 3), [0xc0, 0x30, 0x20]);
+});
+
+test('a whole-figure glow stays inside the frame opening, between the fill and the art', () => {
+  const size = 128;
+  const glow = { id: 'g', type: 'glow', region: null, color: '#0000ff', size: 12, pulse: 0 };
+  const render = (cutout, fill) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0,
+      art: { cutout, popOutImage: null, regions: {} },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, pins: [], effects: [glow] },
+      createCanvas,
+      drawFrame: (ctx, bent) =>
+        drawTokenFrame(ctx, bent.art, { size, borderWidth: 4, fill, fillColor: '#000000' }),
+    });
+    return pixels(target);
+  };
+  const cover = createCanvas(200, 200);
+  cover.getContext('2d').fillStyle = '#c03020';
+  cover.getContext('2d').fillRect(0, 0, 200, 200);
+  for (const fill of [false, true]) {
+    const data = render(cover, fill);
+    for (const [x, y] of [
+      [0, 0],
+      [size - 1, 0],
+      [0, size - 1],
+      [size - 1, size - 1],
+    ])
+      assert.equal(data[(y * size + x) * 4 + 3], 0, `corner ${x},${y} stays transparent`);
+  }
+  // Art with an edge inside the opening: the aura shows just outside it, over the fill.
+  const figure = createCanvas(200, 200);
+  figure.getContext('2d').fillStyle = '#c03020';
+  figure.getContext('2d').fillRect(60, 60, 80, 80);
+  const data = render(figure, true);
+  const edge = Math.floor((56 / 200) * size);
+  const o = (Math.floor(size / 2) * size + edge) * 4;
+  assert.ok(
+    data[o + 2] > 10 && data[o + 2] > data[o],
+    `glow just outside the art (${data.slice(o, o + 4)})`,
+  );
+});
+
+test('no-op effects on the bent path still match the plain still frame', () => {
+  const cutout = makeCutout();
+  const size = 48;
+  const view = { zoom: 1.3, offsetX: 0.1, offsetY: -0.05 };
+  const frame = { size, borderWidth: 3, fill: true, fillColor: '#203040' };
+  const expected = createCanvas(size, size);
+  drawTokenFrame(expected.getContext('2d'), cutout, {
+    ...frame,
+    zoom: view.zoom,
+    offsetX: view.offsetX * size,
+    offsetY: view.offsetY * size,
+  });
+  const actual = createCanvas(size, size);
+  const bent = renderAnimationFrame({
+    context: actual.getContext('2d'),
+    size,
+    t: 0.4,
+    art: { cutout, popOutImage: null, regions: {} },
+    view,
+    animation: {
+      duration: 2,
+      fps: 30,
+      pins: [],
+      effects: [{ id: 'f', type: 'flicker', region: null, amount: 0, kind: 'opacity', speed: 3 }],
+    },
+    createCanvas,
+    drawFrame: (ctx, b) => drawTokenFrame(ctx, b.art, frame),
+  });
+  assert.ok(bent, 'the bent path ran');
+  const a = pixels(actual);
+  const e = pixels(expected);
+  for (let i = 0; i < a.length; i += 1)
+    assert.ok(Math.abs(a[i] - e[i]) <= 1, `channel ${i}: ${a[i]} vs ${e[i]}`);
+});
+
+test('glow size is given at the 480 px reference token', () => {
+  // A small dot in the middle of a square cut-out, so the aura never reaches the canvas edge.
+  const cutout = createCanvas(100, 100);
+  cutout.getContext('2d').fillStyle = '#c03020';
+  cutout.getContext('2d').fillRect(45, 45, 10, 10);
+  const reach = (size) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0,
+      art: { cutout, popOutImage: null, regions: {} },
+      view: VIEW,
+      animation: {
+        duration: 2,
+        fps: 30,
+        pins: [],
+        effects: [{ id: 'g', type: 'glow', region: null, color: '#0000ff', size: 40, pulse: 0 }],
+      },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    const data = pixels(target);
+    const y = Math.floor(size / 2);
+    let x = Math.ceil(size * 0.55);
+    while (x < size && data[(y * size + x) * 4 + 3] > 0) x += 1;
+    return (x - size * 0.55) / size;
+  };
+  // A size-40 glow reaches about 40/480 of the token, whatever the token size.
+  const small = reach(96);
+  const large = reach(480);
+  assert.ok(Math.abs(small - large) < 0.02, `${small} vs ${large}`);
+  assert.ok(large > 0.06 && large < 0.11, `reach ${large}`);
 });

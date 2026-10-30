@@ -78,6 +78,9 @@ export function warpImageData(source, grid, target) {
   const { width, height } = target;
   const src = source.data;
   const out = target.data;
+  // Read once: ImageData sizes can be slow accessors (node-canvas), and this loop is hot.
+  const sourceWidth = source.width;
+  const sourceHeight = source.height;
   for (let y = 0; y < height; y += 1) {
     const fj = y / step;
     const j0 = Math.floor(fj);
@@ -104,9 +107,9 @@ export function warpImageData(source, grid, target) {
       for (let n = 0; n < 4; n += 1) {
         const xx = x0 + (n & 1);
         const yy = y0 + (n >> 1);
-        if (xx < 0 || yy < 0 || xx >= source.width || yy >= source.height) continue;
+        if (xx < 0 || yy < 0 || xx >= sourceWidth || yy >= sourceHeight) continue;
         const weight = (n & 1 ? fx : 1 - fx) * (n >> 1 ? fy : 1 - fy);
-        const o = (yy * source.width + xx) * 4;
+        const o = (yy * sourceWidth + xx) * 4;
         const alpha = src[o + 3] * weight;
         r += src[o] * alpha;
         g += src[o + 1] * alpha;

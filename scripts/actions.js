@@ -1,4 +1,5 @@
 import { MODULE_ID } from './constants.js';
+import { getProjectFlagUpdate } from './creator-project.js';
 import { getCurrentSystemProfile } from './system-profile.js';
 import {
   getDocumentActor,
@@ -137,6 +138,10 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile, documen
     randomImg: false,
     ...buildBreakoutUpdate(breakout, tokenSrc, document, systemProfile),
   };
+  // Created tokens link to their Token Creator project so the creator can reopen it.
+  const projectSrc = getImageSource(candidate?.projectSrc);
+  if (projectSrc)
+    Object.assign(update, getProjectFlagUpdate({ path: projectSrc, output: tokenSrc }));
 
   if (!supportsDynamicTokenRing(systemProfile)) return update;
 
@@ -147,17 +152,23 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile, documen
       ringScaleOverride ??
       numberOr(candidate.subjectScale, Math.max(Math.abs(scaleX), Math.abs(scaleY)));
     applyRingColors(update, candidate);
+    applyRingEffects(update, candidate);
   } else if (candidate?.ringFromToken) {
     // Animated ring tokens: an empty subject makes Foundry use the token video as the subject.
     update['ring.enabled'] = true;
     update['ring.subject.texture'] = '';
     update['ring.subject.scale'] = ringScaleOverride ?? numberOr(candidate.subjectScale, breakout);
     applyRingColors(update, candidate);
+    applyRingEffects(update, candidate);
   } else {
     update['ring.enabled'] = false;
   }
 
   return update;
+}
+
+function applyRingEffects(update, candidate) {
+  if (Number.isFinite(candidate.ringEffects)) update['ring.effects'] = candidate.ringEffects;
 }
 
 function applyRingColors(update, candidate) {
@@ -444,6 +455,7 @@ function captureTokenState(documentLike, profile = resolveSystemProfile()) {
   if (supportsDynamicTokenRing(profile)) {
     state.ring = {
       enabled: Boolean(readDocumentPath(documentLike, 'ring.enabled')),
+      effects: numberOr(readDocumentPath(documentLike, 'ring.effects'), 1),
       subject: {
         texture: normalizePath(readDocumentPath(documentLike, 'ring.subject.texture')).trim(),
         scale: numberOr(readDocumentPath(documentLike, 'ring.subject.scale'), 1),
@@ -472,6 +484,7 @@ function tokenStateToUpdate(state, profile = resolveSystemProfile()) {
     update['ring.enabled'] = Boolean(state?.ring?.enabled);
     update['ring.subject.texture'] = subjectTexture;
     update['ring.subject.scale'] = numberOr(state?.ring?.subject?.scale, 1);
+    if (Number.isFinite(state?.ring?.effects)) update['ring.effects'] = state.ring.effects;
     if (isObject(state?.ring?.colors)) {
       update['ring.colors.ring'] = state.ring.colors.ring ?? null;
       update['ring.colors.background'] = state.ring.colors.background ?? null;

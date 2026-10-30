@@ -64,8 +64,15 @@ export function getPortraitRect({ size, aspect, imageWidth, imageHeight }) {
   return { x: (size - width) / 2, y: (size - height) / 2, width, height };
 }
 
-export function isPortraitUnchanged(options, view) {
+/**
+ * Whether the portrait is the original file untouched: original aspect and background, no zoom or
+ * offset, and its image not flipped (`flip` is the portrait source's `{ x, y }`), since the file
+ * on disk is never mirrored.
+ */
+export function isPortraitUnchanged(options, view, flip) {
   return (
+    !flip?.x &&
+    !flip?.y &&
     options?.portraitAspect === 'original' &&
     options?.portraitBackground === 'original' &&
     Number(view?.zoom ?? 1) === 1 &&
@@ -402,14 +409,26 @@ export function getCreatedTokenFolder({ worldId, configured } = {}) {
   return `worlds/${worldId || 'shared'}/${CREATED_TOKEN_FOLDER_NAME}`;
 }
 
+const RING_EFFECT_BITS = Object.freeze({ pulse: 2, gradient: 4, wave: 8, spectral: 16 });
+
+/** Foundry's `ring.effects` bit mask: ENABLED (1) plus one bit per selected effect. */
+export function getRingEffectsMask({ pulse, gradient, wave, spectral } = {}) {
+  const flags = { pulse, gradient, wave, spectral };
+  let mask = 1;
+  for (const [key, bit] of Object.entries(RING_EFFECT_BITS)) if (flags[key]) mask |= bit;
+  return mask;
+}
+
 export function buildCreatedTokenCandidate({
   label,
   tokenSrc,
   portraitSrc,
   subjectSrc,
   ringColors,
+  ringEffects,
   breakoutScale = 1,
   animated = false,
+  projectSrc,
 }) {
   const candidate = {
     id: `${CREATED_TOKEN_SOURCE_ID}:${tokenSrc}`,
@@ -420,6 +439,7 @@ export function buildCreatedTokenCandidate({
   };
   if (breakoutScale > 1) candidate.breakoutScale = breakoutScale;
   if (portraitSrc) candidate.portraitSrc = portraitSrc;
+  if (projectSrc) candidate.projectSrc = projectSrc;
   if (subjectSrc) {
     // An animated token is a video: Foundry's ring then uses the token texture itself as the
     // subject, so no separate subject image is set.
@@ -427,6 +447,7 @@ export function buildCreatedTokenCandidate({
     else candidate.subjectSrc = subjectSrc;
     candidate.subjectScale = breakoutScale;
     if (ringColors) candidate.ringColors = { ...ringColors };
+    if (ringEffects) candidate.ringEffects = getRingEffectsMask(ringEffects);
   }
   return candidate;
 }

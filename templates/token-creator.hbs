@@ -99,6 +99,16 @@
             aria-pressed='false'
             data-tooltip='{{labels.pinTooltip}}'
           ><i class='fas fa-thumbtack'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-token-only
+            data-animation-control
+            data-creator-action='mask-region'
+            aria-pressed='false'
+            data-tooltip='{{labels.regionTooltip}}'
+            hidden
+          ><i class='fas fa-highlighter'></i></button>
           <span class='pf2e-tokener-creator-divider'></span>
           <button
             type='button'
@@ -194,11 +204,33 @@
           </button>
           <button
             type='button'
+            class='pf2e-tokener-creator-button'
+            data-creator-action='open-project'
+            data-tooltip='{{labels.openProjectTooltip}}'
+          ><i class='fas fa-folder-tree'></i> {{labels.openProject}}</button>
+          <button
+            type='button'
             class='pf2e-tokener-creator-button is-secondary'
             data-token-only
             data-creator-action='token-from-portrait'
             data-tooltip='{{labels.fromPortraitTooltip}}'
           ><i class='fas fa-image-portrait'></i> {{labels.fromPortrait}}</button>
+        </div>
+        <div class='pf2e-tokener-creator-row pf2e-tokener-creator-flip'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='flip-x'
+            data-tooltip='{{labels.flipHorizontalTooltip}}'
+            {{#unless canFlip}}disabled{{/unless}}
+          ><i class='fas fa-left-right'></i> {{labels.flipHorizontal}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='flip-y'
+            data-tooltip='{{labels.flipVerticalTooltip}}'
+            {{#unless canFlip}}disabled{{/unless}}
+          ><i class='fas fa-up-down'></i> {{labels.flipVertical}}</button>
         </div>
         <p class='pf2e-tokener-creator-hint' data-portrait-separate-only>{{labels.portraitSeparateHint}}</p>
         <input type='file' name='upload' accept='image/*' hidden />
@@ -279,6 +311,16 @@
           <input type='color' name='portraitColor' value='{{options.portraitColor}}' />
           <span>{{labels.portraitBackground}}</span>
         </label>
+        <label
+          class='pf2e-tokener-creator-check'
+          data-portrait-animate
+          data-tooltip='{{labels.animatePortraitTooltip}}'
+          hidden
+        >
+          <input type='checkbox' name='animatePortrait' {{#if options.animatePortrait}}checked{{/if}} />
+          <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+          <span>{{labels.animatePortrait}}</span>
+        </label>
         <p class='pf2e-tokener-creator-hint'>{{labels.portraitHint}}</p>
       </section>
 
@@ -333,6 +375,31 @@
             <span>{{labels.ringBackgroundColor}}</span>
           </label>
         </div>
+
+        <div class='pf2e-tokener-creator-colors' data-frame-style='ring'>
+          <span>{{labels.ringEffectsTitle}}</span>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.pulse' {{#if options.ringEffects.pulse}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectPulse}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.gradient' {{#if options.ringEffects.gradient}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectGradient}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.wave' {{#if options.ringEffects.wave}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectWave}}</span>
+          </label>
+          <label class='pf2e-tokener-creator-check'>
+            <input type='checkbox' name='ringEffects.spectral' {{#if options.ringEffects.spectral}}checked{{/if}} />
+            <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+            <span>{{labels.ringEffectSpectral}}</span>
+          </label>
+        </div>
+        <p class='pf2e-tokener-creator-hint' data-frame-style='ring'>{{labels.ringEffectsHint}}</p>
 
         <label class='pf2e-tokener-creator-check'>
           <input type='checkbox' name='popOut' {{#if options.popOut}}checked{{/if}} />
@@ -398,7 +465,44 @@
             data-creator-action='keyframe-remove'
           ><i class='fas fa-minus'></i> {{labels.animateRemoveKeyframe}}</button>
         </div>
-        <div class='pf2e-tokener-creator-row'>
+        <div class='pf2e-tokener-creator-animate-keyframe'>
+          <label
+            class='pf2e-tokener-creator-slider pf2e-tokener-creator-animate-length'
+            data-tooltip='{{labels.animateEaseTooltip}}'
+          >
+            <span>{{labels.animateEase}}</span>
+            <select name='animationEase' data-animation-control data-keyframe-control>
+              {{#each animation.eases}}
+                <option value='{{value}}'>{{label}}</option>
+              {{/each}}
+            </select>
+          </label>
+          <label
+            class='pf2e-tokener-creator-slider'
+            data-tooltip='{{labels.animateRotationTooltip}}'
+          >
+            <span>{{labels.animateRotation}}</span>
+            <span class='pf2e-tokener-creator-value' data-animation-rotation>0°</span>
+            <input
+              type='range'
+              name='animationRotation'
+              min='-{{animation.rotationMax}}'
+              max='{{animation.rotationMax}}'
+              step='1'
+              value='0'
+              data-animation-control
+              data-keyframe-control
+            />
+          </label>
+        </div>
+        <button
+          type='button'
+          class='pf2e-tokener-creator-button'
+          data-animation-control
+          data-creator-action='animation-auto'
+          data-tooltip='{{labels.animateAutoTooltip}}'
+        ><i class='fas fa-wand-magic-sparkles'></i> {{labels.animateAuto}}</button>
+        <div class='pf2e-tokener-creator-animate-presets'>
           {{#each animation.presets}}
             <button
               type='button'
@@ -406,7 +510,23 @@
               data-animation-control
               data-creator-action='animation-preset'
               data-preset='{{value}}'
-            >{{label}}</button>
+              data-tooltip='{{tooltip}}'
+              aria-label='{{tooltip}}'
+            ><i class='fas {{icon}}'></i> {{label}}</button>
+          {{/each}}
+        </div>
+        <div class='pf2e-tokener-creator-segmented pf2e-tokener-creator-animate-mode'>
+          {{#each animation.modes}}
+            <label data-tooltip='{{tooltip}}'>
+              <input
+                type='radio'
+                name='animationMode'
+                value='{{value}}'
+                data-animation-control
+                {{#if selected}}checked{{/if}}
+              />
+              <span>{{label}}</span>
+            </label>
           {{/each}}
         </div>
         <label class='pf2e-tokener-creator-slider pf2e-tokener-creator-animate-length'>
@@ -417,6 +537,41 @@
             {{/each}}
           </select>
         </label>
+        <div class='pf2e-tokener-creator-effects' data-effects>
+          <h5>{{labels.effectsTitle}}</h5>
+          <div class='pf2e-tokener-creator-effects-add'>
+            <select
+              name='effectType'
+              aria-label='{{labels.effectsType}}'
+              data-animation-control
+            >
+              {{#each animation.effectTypes}}
+                <option value='{{value}}'>{{label}}</option>
+              {{/each}}
+            </select>
+            <select
+              name='effectKind'
+              aria-label='{{labels.effectsKind}}'
+              data-animation-control
+              data-effect-kind-picker
+              hidden
+            >
+              {{#each animation.particleKinds}}
+                <option value='{{value}}'>{{label}}</option>
+              {{/each}}
+            </select>
+            <button
+              type='button'
+              class='pf2e-tokener-creator-button is-secondary'
+              data-animation-control
+              data-creator-action='effect-add'
+              data-tooltip='{{labels.effectsAddTooltip}}'
+            ><i class='fas fa-plus'></i> {{labels.effectsAdd}}</button>
+          </div>
+          <ul class='pf2e-tokener-creator-effects-list' data-effects-list></ul>
+          <p class='pf2e-tokener-creator-hint' data-effects-empty>{{labels.effectsEmpty}}</p>
+          <div class='pf2e-tokener-creator-effect-params' data-effect-params hidden></div>
+        </div>
         <p class='pf2e-tokener-creator-hint' data-animation-available>{{labels.animateHint}}</p>
         <p class='pf2e-tokener-creator-hint' data-animation-unavailable>{{labels.animateUnavailable}}</p>
       </section>
