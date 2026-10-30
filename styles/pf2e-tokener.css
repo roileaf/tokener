@@ -2097,11 +2097,42 @@
   background: rgba(18, 20, 23, 0.94);
 }
 
+/* The creator fits the viewport; its columns scroll instead of running off the screen. */
+.pf2e-tokener-creator-app {
+  max-height: calc(100vh - 16px);
+}
+
+.pf2e-tokener-creator-app .window-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-layout {
   display: grid;
   grid-template-columns: 496px minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-stage,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-controls {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-controls {
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .pf2e-tokener-creator-app .pf2e-tokener-creator-stage,

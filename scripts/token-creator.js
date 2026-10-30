@@ -405,6 +405,8 @@ export function getTokenCreatorApplicationClass() {
     static PARTS = {
       main: {
         template: CREATOR_TEMPLATE,
+        // Keep the settings column's scroll position when the window re-renders.
+        scrollable: ['.pf2e-tokener-creator-controls', '.pf2e-tokener-creator-stage'],
       },
     };
 
