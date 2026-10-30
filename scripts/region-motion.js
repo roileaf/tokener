@@ -155,3 +155,38 @@ export function moveGridByRegions(grid, motions) {
     }
   return { gx: outX, gy: outY, cols, rows, step };
 }
+
+/**
+ * Fills the closed outline `points` (image px) into `mask` (RGBA image data) in place: 'paint'
+ * makes the pixels inside opaque white, 'erase' clears them. A pixel is inside when its centre is
+ * (even-odd rule). Returns false, leaving the mask alone, for an outline of fewer than 3 points.
+ */
+export function fillLasso(mask, points, mode) {
+  if (!Array.isArray(points) || points.length < 3) return false;
+  const { data, width, height } = mask;
+  const value = mode === 'erase' ? 0 : 255;
+  const crossings = [];
+  for (let y = 0; y < height; y += 1) {
+    const cy = y + 0.5;
+    crossings.length = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const a = points[index];
+      const b = points[(index + 1) % points.length];
+      if (a.y <= cy === b.y <= cy) continue;
+      crossings.push(a.x + ((cy - a.y) / (b.y - a.y)) * (b.x - a.x));
+    }
+    crossings.sort((left, right) => left - right);
+    for (let index = 0; index + 1 < crossings.length; index += 2) {
+      const start = Math.max(0, Math.ceil(crossings[index] - 0.5));
+      const end = Math.min(width - 1, Math.floor(crossings[index + 1] - 0.5));
+      for (let x = start; x <= end; x += 1) {
+        const offset = (y * width + x) * 4;
+        data[offset] = value;
+        data[offset + 1] = value;
+        data[offset + 2] = value;
+        data[offset + 3] = value;
+      }
+    }
+  }
+  return true;
+}
