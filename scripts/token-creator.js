@@ -1418,21 +1418,27 @@ function getTokenPoint(app, canvas, event) {
   return viewportPointToToken(getViewport(app, canvas.width), getCanvasPoint(canvas, event));
 }
 
-function drawCreatedToken(context, app, size, { preview = false } = {}) {
+function drawCreatedToken(context, app, size, { preview = false, bent = null } = {}) {
   const options = app.creatorOptions;
+  // A bent art canvas is already laid out in token space, so it draws at an identity layout.
+  const art = bent ? bent.art : app.cutout;
+  const popOutImage = bent ? bent.popOut : getPopOutImage(app);
+  const view = bent
+    ? { zoom: 1, offsetX: 0, offsetY: 0 }
+    : { zoom: app.view.zoom, offsetX: app.view.offsetX * size, offsetY: app.view.offsetY * size };
   const ringScale = getActiveRingScale(app);
   const ratio = (size / BORDER_REFERENCE_SIZE) * ringScale;
   if (options.frameStyle === 'ring') {
     const layers = preview ? getRingPreviewLayers(app, size) : null;
-    drawRingSubject(context, app.cutout, {
+    drawRingSubject(context, art, {
       size,
-      zoom: app.view.zoom,
-      offsetX: app.view.offsetX * size,
-      offsetY: app.view.offsetY * size,
+      zoom: view.zoom,
+      offsetX: view.offsetX,
+      offsetY: view.offsetY,
       clipRadius: getRingClipRadius(app),
       ringScale,
       popOut: isPopOutEnabled(app),
-      popOutImage: getPopOutImage(app),
+      popOutImage,
       popOutShadow: options.popOutShadow,
       layers: layers ?? [],
       guide:
@@ -1445,17 +1451,17 @@ function drawCreatedToken(context, app, size, { preview = false } = {}) {
     });
     return;
   }
-  drawTokenFrame(context, app.cutout, {
+  drawTokenFrame(context, art, {
     size,
-    zoom: app.view.zoom,
-    offsetX: app.view.offsetX * size,
-    offsetY: app.view.offsetY * size,
+    zoom: view.zoom,
+    offsetX: view.offsetX,
+    offsetY: view.offsetY,
     borderWidth: options.borderWidth * ratio,
     borderColor: options.borderColor,
     fill: options.fill,
     fillColor: options.fillColor,
     popOut: isPopOutEnabled(app),
-    popOutImage: getPopOutImage(app),
+    popOutImage,
     popOutShadow: options.popOutShadow,
     ringScale,
   });
