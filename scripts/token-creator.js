@@ -1133,6 +1133,7 @@ async function loadCreatorSource(app, { path, file }) {
     console.error(`${MODULE_ID} | Failed to load token creator image`, error);
     app.source = null;
     app.cutout = null;
+    syncAnimationControls(app);
     renderCreatorPreview(app);
     setCreatorStatus(
       app,
@@ -1217,6 +1218,7 @@ async function updateCutout(app, workspace = app.workspace) {
       true,
     );
   }
+  syncAnimationControls(app);
   renderCreatorPreview(app);
 }
 
