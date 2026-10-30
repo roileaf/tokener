@@ -33,7 +33,7 @@ function alphaAt(canvas, x, y) {
 }
 
 test('createEffect uses spec defaults and unique string ids', () => {
-  assert.deepEqual(EFFECT_TYPES, ['wind', 'wobble', 'flicker', 'glow', 'particles']);
+  assert.deepEqual(EFFECT_TYPES, ['wind', 'wobble', 'flicker', 'glow', 'particles', 'sequencer']);
   assert.deepEqual(PARTICLE_KINDS, ['embers', 'smoke', 'sparkles', 'snow', 'drips']);
   const wind = createEffect('wind', { region: 'r1' });
   assert.equal(wind.type, 'wind');
@@ -313,6 +313,7 @@ test('flicker is whole-figure only: normalizeEffects drops its region', () => {
     flicker: false,
     glow: true,
     particles: true,
+    sequencer: false,
   });
   for (const type of EFFECT_TYPES) assert.equal(typeof EFFECT_SUPPORTS_REGION[type], 'boolean');
   const [flicker, glow] = normalizeEffects([

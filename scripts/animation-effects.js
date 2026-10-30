@@ -1,8 +1,9 @@
 /**
  * Procedural, periodic, deterministic animation effects (wind, wobble, flicker, glow,
- * particles). Pure: only the canvas contexts / createCanvas passed in are touched.
+ * particles), plus `sequencer` clips: an animation from the Sequencer database played on a pin
+ * (see sequencer-clips.js). Pure: only the canvas contexts / createCanvas passed in are touched.
  */
-export const EFFECT_TYPES = ['wind', 'wobble', 'flicker', 'glow', 'particles'];
+export const EFFECT_TYPES = ['wind', 'wobble', 'flicker', 'glow', 'particles', 'sequencer'];
 export const PARTICLE_KINDS = ['embers', 'smoke', 'sparkles', 'snow', 'drips'];
 /** Whether an effect type can be limited to a painted region (flicker is whole-figure only). */
 export const EFFECT_SUPPORTS_REGION = Object.freeze({
@@ -11,7 +12,12 @@ export const EFFECT_SUPPORTS_REGION = Object.freeze({
   flicker: false,
   glow: true,
   particles: true,
+  sequencer: false,
 });
+/** Where a clip may show: inside the frame opening, or anywhere on the token (breakout room). */
+export const CLIP_PLACEMENTS = ['frame', 'free'];
+/** Where a clip sits on its pin: centred on it, or starting at it (a breath, a ray). */
+export const CLIP_ORIGINS = ['centre', 'start'];
 /** Effect ids and region keys allowed in a project (they end up in selectors and object keys). */
 const SAFE_KEY = /^[\w-]+$/;
 
@@ -32,6 +38,11 @@ export const PARTICLE_COLORS = {
   drips: '#7fb8ff',
 };
 const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** A Sequencer database path: dot-separated words. */
+const SEQUENCER_PATH = /^[\w-]+(?:\.[\w-]+)*$/;
+/** A clip file inside the Foundry data folder: a relative path to a video or animated image. */
+const CLIP_FILE =
+  /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!\w+:)[\w\-./ %()'&+]+\.(?:webm|mp4|webp|gif)$/i;
 
 let effectCounter = 0;
 
@@ -96,6 +107,21 @@ export function createEffect(type, { region = null } = {}) {
       return { ...base, color: DEFAULT_GLOW_COLOR, size: 10, pulse: 0.5 };
     case 'particles':
       return { ...base, kind: 'embers', count: 24, color: null, size: 3 };
+    case 'sequencer':
+      return {
+        ...base,
+        region: null,
+        path: '',
+        file: '',
+        pin: null,
+        size: 0.6,
+        angle: 0,
+        offsetX: 0,
+        offsetY: 0,
+        opacity: 1,
+        clip: 'frame',
+        origin: 'centre',
+      };
     default:
       throw new Error(`Unknown effect type: ${type}`);
   }
@@ -129,6 +155,18 @@ function normalizeEffect(raw, index) {
       effect.color = HEX_COLOR.test(raw.color) ? raw.color : DEFAULT_GLOW_COLOR;
       effect.size = clamp(raw.size, 1, 60, defaults.size);
       effect.pulse = clamp(raw.pulse, 0, 1, defaults.pulse);
+      break;
+    case 'sequencer':
+      effect.path = typeof raw.path === 'string' && SEQUENCER_PATH.test(raw.path) ? raw.path : '';
+      effect.file = typeof raw.file === 'string' && CLIP_FILE.test(raw.file) ? raw.file : '';
+      effect.pin = isSafeEffectKey(raw.pin) ? raw.pin : null;
+      effect.size = clamp(raw.size, 0.05, 2, defaults.size);
+      effect.angle = clamp(raw.angle, -180, 180, defaults.angle);
+      effect.offsetX = clamp(raw.offsetX, -1, 1, 0);
+      effect.offsetY = clamp(raw.offsetY, -1, 1, 0);
+      effect.opacity = clamp(raw.opacity, 0, 1, defaults.opacity);
+      effect.clip = pick(raw.clip, CLIP_PLACEMENTS, 'frame');
+      effect.origin = pick(raw.origin, CLIP_ORIGINS, 'centre');
       break;
     default:
       effect.kind = pick(raw.kind, PARTICLE_KINDS, 'embers');
@@ -167,6 +205,8 @@ export function isEffectActive(effect, regions) {
     if (!(Number(effect.amount) > 0)) return false;
   } else if (effect.type === 'particles') {
     if (!(Number(effect.count) > 0)) return false;
+  } else if (effect.type === 'sequencer') {
+    return Boolean(effect.file) && Number(effect.opacity) > 0;
   }
   if (!EFFECT_SUPPORTS_REGION[effect.type] || !effect.region) return true;
   return hasPaintedRegion(effect, regions);

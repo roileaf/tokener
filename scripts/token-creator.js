@@ -18,6 +18,8 @@ import {
   registerAiToolsSetting,
 } from './ai-tools.js';
 import { findPartClick, pickPartMask, toHingeKeyframes } from './auto-parts.js';
+import { getSequencerEntryName, guessClipOrigin, loadSequencerClip } from './sequencer-clips.js';
+import { hasSequencerCatalog, openSequencerPicker } from './sequencer-picker.js';
 import { loadComposeRankingModel, rerankComposeCandidates } from './compose-ai-ranking.js';
 import {
   DEFAULT_BACKGROUND_FEATHER,
@@ -212,6 +214,7 @@ const EFFECT_ICONS = {
   flicker: 'fa-lightbulb',
   glow: 'fa-sun',
   particles: 'fa-fire',
+  sequencer: 'fa-film',
 };
 const EFFECT_TYPE_LABELS = {
   wind: 'Wind',
@@ -219,6 +222,7 @@ const EFFECT_TYPE_LABELS = {
   flicker: 'Flicker',
   glow: 'Glow',
   particles: 'Particles',
+  sequencer: 'Animation (JB2A / Sequencer)',
 };
 const PARTICLE_KIND_LABELS = {
   embers: 'Embers',
@@ -238,7 +242,17 @@ const EFFECT_PARAM_LABELS = {
   size: 'Size',
   pulse: 'Pulse',
   count: 'Count',
+  pin: 'Follows',
+  angle: 'Angle',
+  offsetX: 'Shift right',
+  offsetY: 'Shift down',
+  opacity: 'Opacity',
+  clip: 'Shows',
+  origin: 'Anchor',
 };
+/** Decoded Sequencer clips by file, shared by the preview and the saved WebM. */
+const loadedClips = new Map();
+const loadingClips = new Set();
 const MAX_WARP_STRENGTH = 40;
 const WARP_STRENGTH_RATIO = 0.18;
 const REGION_COLOR = '#d38fff';
@@ -645,10 +659,13 @@ function prepareCreatorContext(app) {
         ),
       })),
       rotationMax: MAX_KEYFRAME_ROTATION,
-      effectTypes: EFFECT_TYPES.map((type) => ({
-        value: type,
-        label: getEffectTypeLabel(type),
-      })),
+      // Animations come from the Sequencer database, so they are offered only with Sequencer.
+      effectTypes: EFFECT_TYPES.filter((type) => type !== 'sequencer' || hasSequencerCatalog()).map(
+        (type) => ({
+          value: type,
+          label: getEffectTypeLabel(type),
+        }),
+      ),
       particleKinds: PARTICLE_KINDS.map((kind) => ({
         value: kind,
         label: getParticleKindLabel(kind),
@@ -1381,7 +1398,10 @@ async function handleCreatorClick(app, event) {
       clearPinRegion(app);
       return;
     case 'effect-add':
-      addCreatorEffect(app);
+      await addCreatorEffect(app);
+      return;
+    case 'effect-sequencer-pick':
+      await changeSequencerClip(app);
       return;
     case 'effect-select':
       selectCreatorEffect(app, button.dataset.effectId);
@@ -2527,7 +2547,7 @@ function getMaxWarpStrength(scale) {
  * The parameter controls of an effect, in display order: `{ param, input: 'range' | 'select' |
  * 'color', label, value, min, max, step, unit, options }`.
  */
-export function getEffectParamControls(effect) {
+export function getEffectParamControls(effect, { pins = [] } = {}) {
   if (!effect) return [];
   const label = (param) =>
     localize(`Creator.Animate.Effects.Params.${param}`, EFFECT_PARAM_LABELS[param] ?? param);
@@ -2579,6 +2599,50 @@ export function getEffectParamControls(effect) {
         range('count', 1, 200, 1),
         color(effect.color ?? PARTICLE_COLORS[effect.kind] ?? '#ffffff'),
         range('size', 1, 20, 0.5, 'px'),
+      ];
+    case 'sequencer':
+      return [
+        {
+          param: 'pin',
+          input: 'select',
+          label: label('pin'),
+          value: effect.pin ?? '',
+          options: [
+            { value: '', label: localize('Creator.Animate.Sequencer.Centre', 'Token centre') },
+            ...pins.map((pin, index) => ({
+              value: pin.id,
+              label: localize('Creator.Animate.Sequencer.Pin', 'Pin {n}').replace(
+                '{n}',
+                String(index + 1),
+              ),
+            })),
+          ].map((option) => ({ ...option, selected: option.value === (effect.pin ?? '') })),
+        },
+        select(
+          'origin',
+          ['centre', 'start'].map((value) => ({
+            value,
+            label:
+              value === 'start'
+                ? localize('Creator.Animate.Sequencer.Start', 'Starts at it (breath, rays)')
+                : localize('Creator.Animate.Sequencer.Centred', 'Centred on it'),
+          })),
+        ),
+        range('size', 0.05, 2, 0.05, '%'),
+        range('angle', -180, 180, 5, '°'),
+        range('offsetX', -1, 1, 0.01, '%'),
+        range('offsetY', -1, 1, 0.01, '%'),
+        range('opacity', 0, 1, 0.05, '%'),
+        select(
+          'clip',
+          ['frame', 'free'].map((value) => ({
+            value,
+            label:
+              value === 'frame'
+                ? localize('Creator.Animate.Sequencer.InFrame', 'Inside the frame')
+                : localize('Creator.Animate.Sequencer.Free', 'Past the frame (breakout room)'),
+          })),
+        ),
       ];
     default:
       return [];
@@ -2679,12 +2743,20 @@ function setAnimationEffects(app, animation) {
   if (app.maskTool === 'region' && !canPaintRegion(app)) setMaskTool(app, null);
 }
 
-function addCreatorEffect(app) {
+async function addCreatorEffect(app) {
   if (!canEditPins(app)) return;
   const root = getCreatorRoot(app);
   const type = root?.querySelector('select[name="effectType"]')?.value;
   if (!EFFECT_TYPES.includes(type)) return;
   const effect = createEffect(type);
+  if (type === 'sequencer') {
+    const picked = await openSequencerPicker();
+    if (!picked || !canEditPins(app)) return;
+    Object.assign(effect, picked, {
+      pin: getSelectedPin(app)?.id ?? null,
+      origin: guessClipOrigin(picked.path),
+    });
+  }
   if (type === 'particles') {
     const kind = root.querySelector('select[name="effectKind"]')?.value;
     if (PARTICLE_KINDS.includes(kind)) effect.kind = kind;
@@ -2695,6 +2767,63 @@ function addCreatorEffect(app) {
   syncAnimationControls(app);
   syncMaskControls(app);
   renderCreatorPreview(app);
+}
+
+/** Swaps the selected animation effect's clip for another from the catalog. */
+async function changeSequencerClip(app) {
+  const effect = getSelectedEffect(app);
+  if (effect?.type !== 'sequencer') return;
+  const picked = await openSequencerPicker({ path: effect.path });
+  if (!picked) return;
+  setAnimationEffects(
+    app,
+    updateEffect(app.animation, effect.id, { ...picked, origin: guessClipOrigin(picked.path) }),
+  );
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+/**
+ * Starts decoding every Sequencer clip the effects use that is not loaded yet; the preview is
+ * redrawn as each one arrives. Returns the clips loaded so far.
+ */
+function requestClips(app, effects) {
+  for (const effect of effects) {
+    const file = effect.type === 'sequencer' ? effect.file : '';
+    if (!file || loadedClips.has(file) || loadingClips.has(file)) continue;
+    loadingClips.add(file);
+    setCreatorStatus(app, localize('Creator.Animate.Sequencer.Loading', 'Loading animation...'));
+    loadSequencerClip(file, { createCanvas })
+      .then((clip) => {
+        loadedClips.set(file, clip);
+        setCreatorStatus(app, '');
+        renderCreatorPreview(app);
+      })
+      .catch((error) => {
+        console.warn(`${MODULE_ID} | Could not load animation ${file}`, error);
+        setCreatorStatus(
+          app,
+          localize('Creator.Animate.Sequencer.LoadFailed', 'Could not load that animation.'),
+          true,
+        );
+      })
+      .finally(() => loadingClips.delete(file));
+  }
+  return loadedClips;
+}
+
+/** Waits for every Sequencer clip the effects use (for the saved WebM). */
+async function loadAllClips(effects) {
+  const files = new Set(
+    effects.filter((effect) => effect.type === 'sequencer' && effect.file).map((e) => e.file),
+  );
+  await Promise.all(
+    [...files].map(async (file) => {
+      if (!loadedClips.has(file))
+        loadedClips.set(file, await loadSequencerClip(file, { createCanvas }));
+    }),
+  );
+  return loadedClips;
 }
 
 function selectCreatorEffect(app, id) {
@@ -2756,7 +2885,7 @@ function updateEffectParam(app, input) {
   const updated = getSelectedEffect(app);
   const panel = input.closest?.('[data-effect-params]');
   if (panel && updated) {
-    for (const control of getEffectParamControls(updated)) {
+    for (const control of getEffectParamControls(updated, { pins: app.animation.pins })) {
       const field = panel.querySelector(`[data-effect-param="${control.param}"]`);
       if (!field) continue;
       if (control.input === 'range') {
@@ -2919,7 +3048,10 @@ function drawEffectRegionOverlay(context, app, size) {
 
 function describeEffect(effect) {
   const type = getEffectTypeLabel(effect.type);
-  const name = effect.type === 'particles' ? `${type}: ${getParticleKindLabel(effect.kind)}` : type;
+  let name = type;
+  if (effect.type === 'particles') name = `${type}: ${getParticleKindLabel(effect.kind)}`;
+  else if (effect.type === 'sequencer')
+    name = getSequencerEntryName(effect.path) || effect.file.split('/').pop() || type;
   if (!getEffectRegionKey(effect)) return name;
   return `${name} (${localize('Creator.Animate.Effects.RegionShort', 'region')})`;
 }
@@ -2945,6 +3077,8 @@ function syncEffectControls(app) {
     app.animation.effects,
     app.selectedEffectId,
     Object.keys(app.effectRegions ?? {}),
+    // An animation's "Follows" choice lists the pins.
+    app.animation.pins.map((pin) => pin.id),
   ]);
   if (panel.dataset.signature === signature) return;
   panel.dataset.signature = signature;
@@ -3028,7 +3162,18 @@ function syncEffectControls(app) {
   if (supportsRegion(selected)) params.append(modes);
 
   const grid = make('div', { className: 'pf2e-tokener-creator-effect-controls' });
-  for (const control of getEffectParamControls(selected)) {
+  if (selected.type === 'sequencer') {
+    const change = make('button', {
+      type: 'button',
+      className: 'pf2e-tokener-creator-button is-secondary',
+      textContent: ` ${localize('Creator.Animate.Sequencer.Change', 'Change animation')}`,
+    });
+    change.prepend(make('i', { className: 'fas fa-film' }));
+    change.dataset.creatorAction = 'effect-sequencer-pick';
+    change.dataset.animationControl = '';
+    params.append(change);
+  }
+  for (const control of getEffectParamControls(selected, { pins: app.animation.pins })) {
     const field = make('label', { className: 'pf2e-tokener-creator-slider' });
     field.append(make('span', { textContent: control.label }));
     let input;
@@ -3461,6 +3606,7 @@ function drawPreviewToken(context, app, size) {
       drawCreatedToken(frameContext, app, size, { preview: true, bent: frameBent }),
     bent: reuse,
     effectClip: getEffectClip(app, size),
+    clips: requestClips(app, app.animation.effects),
   });
   app._previewBend = { key, bent };
 }
@@ -5016,6 +5162,7 @@ function snapshotTokenAnimation(app) {
  */
 async function encodeTokenAnimation(app, size) {
   const { snapshot, popOutImage, regions, animation } = snapshotTokenAnimation(app);
+  const clips = await loadAllClips(animation.effects);
   const times = getFrameTimes(animation);
   const canvas = createCanvas(size, size);
   const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -5033,6 +5180,7 @@ async function encodeTokenAnimation(app, size) {
       createCanvas,
       drawFrame: (frameContext, bent) => drawCreatedToken(frameContext, snapshot, size, { bent }),
       effectClip: getEffectClip(snapshot, size),
+      clips,
     });
     frames.push(context.getImageData(0, 0, size, size));
     if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();

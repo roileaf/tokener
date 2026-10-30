@@ -2989,3 +2989,59 @@
   width: 100%;
   height: 100%;
 }
+
+/* Token Creator: picking an animation from the Sequencer database. */
+.pf2e-tokener-sequencer-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pf2e-tokener-sequencer-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 10px;
+  height: 360px;
+}
+
+.pf2e-tokener-sequencer-results {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.pf2e-tokener-sequencer-results button {
+  width: 100%;
+  margin: 0 0 2px;
+  padding: 3px 6px;
+  text-align: left;
+  font-size: var(--font-size-12, 12px);
+  line-height: 1.3;
+}
+
+.pf2e-tokener-sequencer-results button[aria-pressed='true'] {
+  background: rgba(31, 77, 101, 0.95);
+  color: var(--color-text-light-highlight, #f5f2e8);
+}
+
+.pf2e-tokener-sequencer-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pf2e-tokener-sequencer-preview video {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  background: repeating-conic-gradient(#444 0% 25%, #333 0% 50%) 50% / 20px 20px;
+  border-radius: 4px;
+}
+
+.pf2e-tokener-sequencer-preview p {
+  margin: 0;
+  font-size: var(--font-size-11, 11px);
+  overflow-wrap: anywhere;
+}
