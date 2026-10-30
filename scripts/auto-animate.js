@@ -19,6 +19,9 @@ const MAX_TIPS = 2;
 const MIN_TIP_AREA = 2;
 // Tips this close (in head radii) to the head belong to the head, not to a held item.
 const HEAD_CLEARANCE = 1.2;
+// Tips closer than this share of the figure's longest side are two pieces of one part (a wing cut
+// by the frame twice), so only the farther one gets a pin.
+const MIN_TIP_SPACING = 0.15;
 
 /**
  * `alpha` is the grid from getAlphaGrid ({ alpha, width, height, scale }); the pins come back in
@@ -51,7 +54,18 @@ export function buildAutoRig({
     make((bounds.x + bounds.width * share) * toSourceX, bottom * toSourceY),
   );
 
-  const tipPins = findTips({ alpha, view, clipRadius, gridSize, head, make, toSourceX, toSourceY });
+  const spacing = MIN_TIP_SPACING * Math.max(bounds.width, bounds.height);
+  const tipPins = findTips({
+    alpha,
+    view,
+    clipRadius,
+    gridSize,
+    head,
+    spacing,
+    make,
+    toSourceX,
+    toSourceY,
+  });
 
   const amplitude = getPresetAmplitude('bob', size);
   const bodyIds = [headPin.id, chestPin.id];
@@ -71,7 +85,8 @@ export function buildAutoRig({
   } else if (tipPins.length === 1) {
     pins = layerPreset(pins, [tipPins[0].id], 'sway', amplitude, mode);
   }
-  return { pins, selectedPinIds: pins.map((pin) => pin.id) };
+  // Nothing stays selected: a preset clicked next would otherwise land on every pin at once.
+  return { pins, selectedPinIds: [] };
 }
 
 /**
@@ -111,7 +126,17 @@ function layerPreset(pins, ids, preset, amplitude, mode) {
   );
 }
 
-function findTips({ alpha, view, clipRadius, gridSize, head, make, toSourceX, toSourceY }) {
+function findTips({
+  alpha,
+  view,
+  clipRadius,
+  gridSize,
+  head,
+  spacing,
+  make,
+  toSourceX,
+  toSourceY,
+}) {
   const layout = getTokenFrameLayout({
     imageWidth: alpha.width,
     imageHeight: alpha.height,
@@ -137,6 +162,11 @@ function findTips({ alpha, view, clipRadius, gridSize, head, make, toSourceX, to
       ({ point }) => Math.hypot(point.x - head.x, point.y - head.y) > head.radius * HEAD_CLEARANCE,
     )
     .sort((a, b) => b.distance - a.distance)
-    .slice(0, MAX_TIPS)
+    .reduce((kept, tip) => {
+      const apart = kept.every(
+        (other) => Math.hypot(other.point.x - tip.point.x, other.point.y - tip.point.y) >= spacing,
+      );
+      return apart && kept.length < MAX_TIPS ? [...kept, tip] : kept;
+    }, [])
     .map(({ point }) => make(point.x * toSourceX, point.y * toSourceY));
 }

@@ -441,6 +441,9 @@ export function getTokenCreatorApplicationClass() {
       // preview falls back to the frozen EMPTY_REGIONS only when it is missing.
       this.effectRegions = {};
       this.selectedEffectId = null;
+      // What the region brush paints: the selected effect's region, or the selected pin's (a
+      // region pin moves its painted area as one piece).
+      this.regionTarget = 'effect';
       this._regionVersion = 0;
       this.animationPlaying = false;
       this._animationFrame = null;
@@ -672,6 +675,16 @@ function prepareCreatorContext(app) {
       animateUnavailable: localize(
         'Creator.Animate.Unavailable',
         'Animated tokens need Foundry opened over https or localhost.',
+      ),
+      pinRegion: localize('Creator.Animate.PinRegion', 'Move a region'),
+      pinRegionTooltip: localize(
+        'Creator.Animate.PinRegionTooltip',
+        'Paint the part this pin moves (F): the whole painted area shifts and turns with the pin as one piece, blending into the art around it',
+      ),
+      pinRegionClear: localize('Creator.Animate.PinRegionClear', 'Plain pin'),
+      pinRegionClearTooltip: localize(
+        'Creator.Animate.PinRegionClearTooltip',
+        'Forget the painted region: the pin bends the art around it again',
       ),
       pinTooltip: localize(
         'Creator.Animate.PinTooltip',
@@ -1318,6 +1331,12 @@ async function handleCreatorClick(app, event) {
       return;
     case 'mask-region':
       selectRegionTool(app);
+      return;
+    case 'pin-region':
+      selectPinRegionTool(app);
+      return;
+    case 'pin-region-clear':
+      clearPinRegion(app);
       return;
     case 'effect-add':
       addCreatorEffect(app);
@@ -2337,6 +2356,7 @@ export function clearAnimationPins(app) {
   app.selectedPinIds = [];
   app.effectRegions = {};
   app.selectedEffectId = null;
+  app.regionTarget = 'effect';
   app._regionVersion += 1;
   app._maskHistory.undo = app._maskHistory.undo.filter((entry) => entry.layer !== 'region');
   app._maskHistory.redo = app._maskHistory.redo.filter((entry) => entry.layer !== 'region');
@@ -2505,12 +2525,63 @@ function supportsRegion(effect) {
  * The region brush works on the token art of the selected effect, where animation is possible,
  * when that effect can use a region.
  */
-function canPaintRegion(app) {
+function canPaintEffectRegion(app) {
   return canEditPins(app) && supportsRegion(getSelectedEffect(app));
 }
 
+/**
+ * What the region brush paints now: `{ kind: 'pin', pin, key }` for the selected pin while the
+ * brush targets pins, otherwise `{ kind: 'effect', effect, key }` for the selected effect (key
+ * null while it still covers the whole figure); null when neither can be painted.
+ */
+function getRegionTarget(app) {
+  const pin = canEditPins(app) ? getSelectedPin(app) : null;
+  if (app.regionTarget === 'pin' && pin) return { kind: 'pin', pin, key: pin.region ?? null };
+  if (canPaintEffectRegion(app)) {
+    const effect = getSelectedEffect(app);
+    return { kind: 'effect', effect, key: getEffectRegionKey(effect) };
+  }
+  return null;
+}
+
+function canPaintRegion(app) {
+  return Boolean(getRegionTarget(app));
+}
+
+/** The toolbar brush paints the effect's region, or the selected pin's when no effect can use one. */
 function selectRegionTool(app) {
+  if (app.regionTarget === 'pin' && !getSelectedPin(app)) app.regionTarget = 'effect';
+  if (!canPaintEffectRegion(app) && getSelectedPin(app)) app.regionTarget = 'pin';
   if (canPaintRegion(app)) setMaskTool(app, 'region');
+}
+
+/** "Move a region" reads as pressed while the brush paints the selected pin's region. */
+function syncPinRegionButton(app) {
+  const button = getCreatorRoot(app)?.querySelector?.('[data-creator-action="pin-region"]');
+  button?.setAttribute(
+    'aria-pressed',
+    String(app.maskTool === 'region' && getRegionTarget(app)?.kind === 'pin'),
+  );
+}
+
+/** Region brush on the selected pin: what it paints moves with the pin as one piece. */
+function selectPinRegionTool(app) {
+  if (!canEditPins(app) || !getSelectedPin(app)) return;
+  app.regionTarget = 'pin';
+  setMaskTool(app, 'region');
+}
+
+/** The selected pin bends the art again; its painted region is dropped (undoable). */
+function clearPinRegion(app) {
+  const pin = canEditPins(app) ? getSelectedPin(app) : null;
+  if (!pin?.region) return;
+  stopAnimationPlayback(app);
+  pushMaskHistory(app, 'region', { regionKey: pin.region, pinId: pin.id });
+  delete app.effectRegions[pin.region];
+  updateAnimationPin(app, pin.id, ({ region: _region, ...rest }) => rest);
+  if (app.maskTool === 'region' && app.regionTarget === 'pin') setMaskTool(app, 'pin');
+  app._regionVersion += 1;
+  finishRegionStroke(app);
 }
 
 /** Replaces the animation after an effect change and keeps the selection and tools valid. */
@@ -2533,6 +2604,7 @@ function addCreatorEffect(app) {
   }
   setAnimationEffects(app, addEffect(app.animation, effect));
   app.selectedEffectId = effect.id;
+  app.regionTarget = 'effect';
   syncAnimationControls(app);
   syncMaskControls(app);
   renderCreatorPreview(app);
@@ -2541,6 +2613,7 @@ function addCreatorEffect(app) {
 function selectCreatorEffect(app, id) {
   if (!app.animation.effects.some((effect) => effect.id === id)) return;
   app.selectedEffectId = id;
+  app.regionTarget = 'effect';
   syncAnimationControls(app);
   // The region brush follows the selection; an effect without regions (flicker) cannot use it.
   if (app.maskTool === 'region' && !canPaintRegion(app)) setMaskTool(app, null);
@@ -2619,9 +2692,21 @@ function updateEffectParam(app, input) {
  * whole figure, records an undo step and returns the region key (null when it cannot paint).
  */
 function startRegionStroke(app) {
-  if (!canPaintRegion(app)) return null;
+  const target = getRegionTarget(app);
+  if (!target) return null;
   stopAnimationPlayback(app);
-  const effect = getSelectedEffect(app);
+  if (target.kind === 'pin') {
+    const { pin } = target;
+    const key = pin.region ?? pin.id;
+    // Recorded before the switch, so undoing the first stroke also makes it a plain pin again.
+    pushMaskHistory(app, 'region', { regionKey: key, pinId: pin.id });
+    if (!pin.region) {
+      updateAnimationPin(app, pin.id, (item) => ({ ...item, region: key }));
+      syncAnimationControls(app);
+    }
+    return key;
+  }
+  const { effect } = target;
   const key = getEffectRegionKey(effect) ?? effect.id;
   // Recorded before the switch, so undoing the first stroke also returns to the whole figure.
   pushMaskHistory(app, 'region', { regionKey: key, effectId: effect.id });
@@ -2690,8 +2775,11 @@ function finishRegionStroke(app) {
 
 /** While the region brush is active, the selected effect's region is tinted over the art. */
 function drawEffectRegionOverlay(context, app, size) {
-  if (app.maskTool !== 'region' || !app.cutout) return;
-  const key = getEffectRegionKey(getSelectedEffect(app));
+  if (!app.cutout) return;
+  let key = null;
+  if (app.maskTool === 'region') key = getRegionTarget(app)?.key ?? null;
+  // The pin tool shows the region the selected pin moves.
+  else if (app.maskTool === 'pin' && canEditPins(app)) key = getSelectedPin(app)?.region ?? null;
   const region = key ? app.effectRegions[key] : null;
   if (!region) return;
   // One tint canvas is reused (reallocated only for a new size) and redrawn when the region or
@@ -2738,7 +2826,8 @@ function syncEffectControls(app) {
   const panel = root?.querySelector?.('[data-effects]');
   const selected = getSelectedEffect(app);
   const regionButton = root?.querySelector?.('[data-creator-action="mask-region"]');
-  if (regionButton) regionButton.hidden = !supportsRegion(selected);
+  if (regionButton)
+    regionButton.hidden = !supportsRegion(selected) && !(canEditPins(app) && getSelectedPin(app));
   if (!panel) return;
   const type = panel.querySelector('select[name="effectType"]')?.value;
   const kindPicker = panel.querySelector('[data-effect-kind-picker]');
@@ -3203,12 +3292,20 @@ function drawPins(context, app, viewport, size) {
     mode: app.animation.mode,
     selectedIds: app.selectedPinIds,
   });
+  const regionPins = new Set(
+    app.animation.pins
+      .filter((pin) => pin.region && Object.hasOwn(app.effectRegions, pin.region))
+      .map((pin) => pin.id),
+  );
   for (const point of points) {
     const x = viewport.x + point.x * viewport.scale;
     const y = viewport.y + point.y * viewport.scale;
     context.save();
     context.beginPath();
-    context.arc(x, y, PIN_RADIUS, 0, Math.PI * 2);
+    // A pin that moves a painted region is a square; one that bends the art is a dot.
+    if (regionPins.has(point.id))
+      context.rect(x - PIN_RADIUS, y - PIN_RADIUS, PIN_RADIUS * 2, PIN_RADIUS * 2);
+    else context.arc(x, y, PIN_RADIUS, 0, Math.PI * 2);
     context.lineWidth = 3.5;
     context.strokeStyle = 'rgba(0, 0, 0, 0.75)';
     context.stroke();
@@ -3251,8 +3348,9 @@ function syncAnimationControls(app) {
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
     let disabled = !enabled;
-    if (action === 'keyframe-add') disabled ||= !pin;
+    if (action === 'keyframe-add' || action === 'pin-region') disabled ||= !pin;
     if (action === 'keyframe-remove') disabled ||= !atKeyframe;
+    if (action === 'pin-region-clear') disabled ||= !pin?.region;
     if (action === 'animation-preset')
       disabled ||= !isPresetAvailable(
         app.animation.pins,
@@ -3263,6 +3361,8 @@ function syncAnimationControls(app) {
     if (action === 'animation-play') disabled ||= !moving && !app.animationPlaying;
     control.disabled = disabled;
   });
+
+  syncPinRegionButton(app);
 
   const play = root.querySelector('[data-creator-action="animation-play"]');
   if (play) {
@@ -3370,6 +3470,7 @@ function setMaskTool(app, tool) {
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
   if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool === 'region' ? 'paint' : tool;
   syncMaskControls(app);
+  syncPinRegionButton(app);
   syncBrushCursor(app);
   renderCreatorPreview(app);
 }
@@ -3412,13 +3513,14 @@ function setBrushSize(app, size) {
   renderCreatorPreview(app);
 }
 
-/** `target` names the region step's canvas key and effect: `{ regionKey, effectId }`. */
+/** `target` names the region step's canvas key and owner: `{ regionKey, effectId | pinId }`. */
 function pushMaskHistory(app, layer = 'popout', target = null) {
   const history = app._maskHistory;
   const entry = {
     layer,
     regionKey: target?.regionKey ?? null,
     effectId: target?.effectId ?? null,
+    pinId: target?.pinId ?? null,
     workspace: app.workspace,
   };
   entry.snapshot = snapshotLayer(app, layer, app.workspace, entry);
@@ -3428,13 +3530,18 @@ function pushMaskHistory(app, layer = 'popout', target = null) {
   syncMaskControls(app);
 }
 
-/** A region step keeps the canvas and the effect's region mode (whole figure or painted). */
+/**
+ * A region step keeps the canvas and its owner's region mode: the effect's (whole figure or
+ * painted) or the pin's (plain or moving a region).
+ */
 function snapshotLayer(app, layer, workspace = app.workspace, entry = null) {
   if (layer === 'region') {
     const effect = app.animation.effects.find((item) => item.id === entry?.effectId);
+    const pin = app.animation.pins.find((item) => item.id === entry?.pinId);
     return {
       canvas: cloneMask(app.effectRegions[entry?.regionKey]),
       effectRegion: effect ? getEffectRegionKey(effect) : null,
+      pinRegion: pin?.region ?? null,
     };
   }
   if (layer === 'cleanup')
@@ -3467,7 +3574,10 @@ function redoMask(app) {
   restoreLayer(app, entry);
 }
 
-function restoreLayer(app, { layer, snapshot, regionKey, effectId, workspace = app.workspace }) {
+function restoreLayer(
+  app,
+  { layer, snapshot, regionKey, effectId, pinId, workspace = app.workspace },
+) {
   if (layer === 'region') {
     // A restored region is a new canvas, but the regions object keeps its identity, so the
     // preview bend and the effect caches are reset by hand.
@@ -3476,6 +3586,11 @@ function restoreLayer(app, { layer, snapshot, regionKey, effectId, workspace = a
     const effect = app.animation.effects.find((item) => item.id === effectId);
     if (effect && getEffectRegionKey(effect) !== snapshot.effectRegion)
       app.animation = updateEffect(app.animation, effectId, { region: snapshot.effectRegion });
+    const pin = app.animation.pins.find((item) => item.id === pinId);
+    if (pin && (pin.region ?? null) !== snapshot.pinRegion)
+      updateAnimationPin(app, pinId, ({ region: _region, ...rest }) =>
+        snapshot.pinRegion ? { ...rest, region: snapshot.pinRegion } : rest,
+      );
     app._regionVersion += 1;
     clearEffectCaches();
     app._previewBend = null;

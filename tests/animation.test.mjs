@@ -355,3 +355,16 @@ test('ping-pong wave delays each pin start and keeps the follow-through order', 
     assert.ok(values[38] > values[36], 'still moving near the apex');
   }
 });
+
+test('normalizeAnimation keeps a safe pin region key and drops an unsafe one', () => {
+  const out = normalizeAnimation({
+    pins: [
+      { id: 'a', x: 1, y: 2, region: 'a', keyframes: [] },
+      { id: 'b', x: 1, y: 2, region: '../x', keyframes: [] },
+      { id: 'c', x: 1, y: 2, keyframes: [] },
+    ],
+  });
+  assert.equal(out.pins[0].region, 'a');
+  assert.equal('region' in out.pins[1], false);
+  assert.equal('region' in out.pins[2], false);
+});

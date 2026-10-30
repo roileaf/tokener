@@ -25,6 +25,8 @@ const SHIVER_SCALE = 0.25;
 const PINGPONG_WAVE_MAX_HOLD = 0.9;
 const EASES = ['smooth', 'linear', 'hold'];
 const MODES = ['loop', 'pingpong'];
+/** Region keys name painted canvases: letters, digits, `_` and `-` only (as effect regions). */
+const SAFE_REGION_KEY = /^[\w-]+$/;
 let pinCounter = 0;
 
 function newPinId() {
@@ -95,6 +97,8 @@ export function normalizeAnimation(value) {
         ),
       };
       if (Number.isFinite(arm) && arm > 0) out.arm = arm;
+      if (typeof pin.region === 'string' && SAFE_REGION_KEY.test(pin.region))
+        out.region = pin.region;
       return out;
     });
   return {

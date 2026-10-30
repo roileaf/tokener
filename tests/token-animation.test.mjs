@@ -527,3 +527,64 @@ test('glow size is given at the 480 px reference token', () => {
   assert.ok(Math.abs(small - large) < 0.02, `${small} vs ${large}`);
   assert.ok(large > 0.06 && large < 0.11, `reach ${large}`);
 });
+
+test('a region pin moves its painted area as one piece and leaves the rest still', () => {
+  const size = 128;
+  const cutout = createCanvas(128, 128);
+  const context = cutout.getContext('2d');
+  for (let x = 0; x < 128; x += 4) {
+    context.fillStyle = x % 8 ? '#2040c0' : '#e0d020';
+    context.fillRect(x, 0, 4, 128);
+  }
+  const region = createCanvas(128, 128);
+  const regionContext = region.getContext('2d');
+  regionContext.fillStyle = '#ffffff';
+  regionContext.fillRect(0, 0, 40, 40);
+  const render = (pins) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0.5,
+      art: { cutout, popOutImage: null, regions: { wing: region } },
+      view: VIEW,
+      animation: {
+        duration: 2,
+        fps: 30,
+        pins,
+        // A no-op effect keeps both renders on the bent path.
+        effects: [{ id: 'flat', type: 'flicker', region: null, amount: 0 }],
+      },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    return pixels(target);
+  };
+  const keyframes = [
+    { t: 0, dx: 0, dy: 0 },
+    { t: 0.5, dx: 4, dy: 0 },
+  ];
+  const still = render([{ id: 'p', x: 20, y: 20, keyframes: [] }]);
+  const moved = render([{ id: 'p', x: 20, y: 20, region: 'wing', keyframes }]);
+  let shifted = 0;
+  for (let y = 0; y < size; y += 1)
+    for (let x = 0; x < size; x += 1) {
+      const o = (y * size + x) * 4;
+      // Far from the region the art stays exactly where it was (a plain pin would move it all).
+      if (x >= 96 || y >= 96) assert.ok(Math.abs(still[o] - moved[o]) <= 4, `${x},${y} stays`);
+      // Inside, the stripes are shifted by 4 px, which swaps their colours.
+      if (x >= 8 && x < 32 && y >= 8 && y < 32 && Math.abs(still[o] - moved[o]) > 100) shifted += 1;
+    }
+  assert.ok(shifted > 400, `the region moved (${shifted} pixels)`);
+});
+
+test('a region pin without paint yet bends like a plain pin', () => {
+  const cutout = makeCutout();
+  const keyframes = [
+    { t: 0, dx: 0, dy: 0 },
+    { t: 0.5, dx: 0, dy: -6 },
+  ];
+  const plain = bend(cutout, null, [pin(keyframes)], 0.5);
+  const unpainted = bend(cutout, null, [{ ...pin(keyframes), region: 'missing' }], 0.5);
+  assert.deepEqual(pixels(unpainted.art), pixels(plain.art));
+});

@@ -16,7 +16,8 @@ import {
   getFlickerFactor,
   isEffectActive,
 } from './animation-effects.js';
-import { buildWarpGrid, warpImageData } from './puppet-warp.js';
+import { buildWarpGrid, sampleGrid, warpImageData } from './puppet-warp.js';
+import { buildRegionField, moveGridByRegions } from './region-motion.js';
 import { getTokenFrameLayout } from './token-composer.js';
 
 /** Largest edge, in pixels, of a saved animated token: VP9 + per-frame warps get slow beyond it. */
@@ -42,6 +43,9 @@ function drawLayout(image, layout, size, margin, createCanvas) {
     .drawImage(image, layout.x + margin, layout.y + margin, layout.width, layout.height);
   return canvas;
 }
+
+/** Share of the token over which a moved region blends into the still art around it. */
+const REGION_FEATHER = 0.08;
 
 /** Grid spacing of the warp mesh, in token pixels. */
 const WARP_STEP = 8;
@@ -128,6 +132,7 @@ function drawAuras(art, effects, { t, size, createCanvas }) {
 
 let paddedCache = new WeakMap();
 let emitterCache = new WeakMap();
+let regionFieldCache = new WeakMap();
 
 /**
  * Forgets the cached padded layouts and particle emitters. Caches are keyed by canvas identity,
@@ -136,6 +141,7 @@ let emitterCache = new WeakMap();
 export function clearEffectCaches() {
   paddedCache = new WeakMap();
   emitterCache = new WeakMap();
+  regionFieldCache = new WeakMap();
 }
 
 /**
@@ -165,29 +171,6 @@ function getArtLayout(cutout, view, size) {
     offsetX: (view?.offsetX ?? 0) * size,
     offsetY: (view?.offsetY ?? 0) * size,
   });
-}
-
-/**
- * Source position of a warp grid at padded point (x, y): bilinear inside the grid, linear
- * extrapolation of the edge cells outside it.
- */
-function sampleGrid(grid, x, y) {
-  const { gx, gy, cols, rows, step } = grid;
-  const fi = x / step;
-  const fj = y / step;
-  const i0 = Math.min(cols - 2, Math.max(0, Math.floor(fi)));
-  const j0 = Math.min(rows - 2, Math.max(0, Math.floor(fj)));
-  const ti = fi - i0;
-  const tj = fj - j0;
-  const k = j0 * cols + i0;
-  return {
-    x:
-      (gx[k] * (1 - ti) + gx[k + 1] * ti) * (1 - tj) +
-      (gx[k + cols] * (1 - ti) + gx[k + cols + 1] * ti) * tj,
-    y:
-      (gy[k] * (1 - ti) + gy[k + 1] * ti) * (1 - tj) +
-      (gy[k + cols] * (1 - ti) + gy[k + cols + 1] * ti) * tj,
-  };
 }
 
 /** Alpha (0..1) of padded image data at (x, y), nearest pixel; 0 outside. */
@@ -246,6 +229,29 @@ function getRegionCanvas(effect, regions) {
   return own(effect.region) ?? own(effect.id) ?? null;
 }
 
+/** The canvas painted for a region pin, or null for a plain pin / no paint yet (own keys only). */
+function getPinRegionCanvas(pin, regions) {
+  const key = pin?.region;
+  if (!key || !regions || !Object.hasOwn(regions, key)) return null;
+  return regions[key] ?? null;
+}
+
+/**
+ * The warp-mesh weight field of a pin's region at this layout. It only changes with the paint or
+ * the layout, so the last one per region canvas is cached (cleared with the effect caches).
+ */
+function getRegionField(canvas, paddedData, { layout, size, margin }) {
+  const key = [size, margin, layout.x, layout.y, layout.width, layout.height].join('|');
+  const cached = regionFieldCache.get(canvas);
+  if (cached?.key === key) return cached.field;
+  const field = buildRegionField(paddedData(canvas), {
+    step: WARP_STEP,
+    feather: size * REGION_FEATHER,
+  });
+  regionFieldCache.set(canvas, { key, field });
+  return field;
+}
+
 /**
  * Bends the cut-out, pop-out image, optional background (an image of the cut-out's size, such as
  * the uncut source) and effect regions with one warp: the pins at `t`, plus the wind / wobble
@@ -275,7 +281,13 @@ function bendLayers({
   const margin =
     Math.ceil((getBendMargin(animation.pins, scale, size) + reach) / WARP_STEP) * WARP_STEP;
   const full = size + margin * 2;
-  const { rest, moved } = samplePins(animation.pins ?? [], t, animation.mode);
+  // A pin with a painted region moves that area as one piece; it stays out of the MLS warp,
+  // where a single pin would drag the whole art along.
+  const regionPins = [];
+  const warpPins = [];
+  for (const pin of animation.pins ?? [])
+    (getPinRegionCanvas(pin, regions) ? regionPins : warpPins).push(pin);
+  const { rest, moved } = samplePins(warpPins, t, animation.mode);
   const toPadded = (point) => ({
     x: layout.x + margin + point.x * scale,
     y: layout.y + margin + point.y * scale,
@@ -296,6 +308,24 @@ function bendLayers({
   }
 
   let displaced = false;
+  const motions = [];
+  for (const pin of regionPins) {
+    const { dx, dy, rot } = samplePinOffset(pin, t, animation.mode);
+    if (!dx && !dy && !rot) continue;
+    const pivot = toPadded(pin);
+    motions.push({
+      field: getRegionField(getPinRegionCanvas(pin, regions), paddedData, { layout, size, margin }),
+      cx: pivot.x,
+      cy: pivot.y,
+      dx: dx * scale,
+      dy: dy * scale,
+      rot,
+    });
+  }
+  if (motions.length) {
+    grid = moveGridByRegions(grid, motions);
+    displaced = true;
+  }
   if (displacementEffects.length) {
     const displacements = [];
     for (const effect of displacementEffects) {

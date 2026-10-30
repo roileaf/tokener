@@ -69,6 +69,29 @@ export function buildWarpGrid({ width, height, rest, moved, step = 8 }) {
 }
 
 /**
+ * Source position of a warp grid at point (x, y): bilinear inside the grid, linear
+ * extrapolation of the edge cells outside it.
+ */
+export function sampleGrid(grid, x, y) {
+  const { gx, gy, cols, rows, step } = grid;
+  const fi = x / step;
+  const fj = y / step;
+  const i0 = Math.min(cols - 2, Math.max(0, Math.floor(fi)));
+  const j0 = Math.min(rows - 2, Math.max(0, Math.floor(fj)));
+  const ti = fi - i0;
+  const tj = fj - j0;
+  const k = j0 * cols + i0;
+  return {
+    x:
+      (gx[k] * (1 - ti) + gx[k + 1] * ti) * (1 - tj) +
+      (gx[k + cols] * (1 - ti) + gx[k + cols + 1] * ti) * tj,
+    y:
+      (gy[k] * (1 - ti) + gy[k + 1] * ti) * (1 - tj) +
+      (gy[k + cols] * (1 - ti) + gy[k + cols + 1] * ti) * tj,
+  };
+}
+
+/**
  * Fills `target` by sampling `source` through the warp grid. The grid is interpolated bilinearly
  * per pixel; the source is sampled bilinearly with premultiplied alpha so edges do not fringe.
  * Taps outside the source contribute nothing, so those pixels end up transparent.
