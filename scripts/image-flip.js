@@ -25,6 +25,19 @@ export function flipCanvas(canvas, axis, createCanvas) {
 }
 
 /**
+ * `canvas` mirrored by a whole `{ x, y }` flip state (the same canvas when nothing is flipped).
+ * Each axis is its own inverse and they commute, so this both applies and undoes a flip.
+ */
+export function applyFlip(canvas, flip, createCanvas) {
+  if (!canvas) return null;
+  const { x, y } = normalizeFlip(flip);
+  let out = canvas;
+  if (x) out = flipCanvas(out, 'x', createCanvas);
+  if (y) out = flipCanvas(out, 'y', createCanvas);
+  return out;
+}
+
+/**
  * Pins mirrored inside a `width` × `height` source: `x → width − x` (or `y → height − y`),
  * keyframe offsets negated along the axis, and rotation reversed (a mirror turns clockwise
  * into counter-clockwise). The rotation arm is symmetric, so it is kept.

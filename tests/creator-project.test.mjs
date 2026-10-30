@@ -587,14 +587,20 @@ const readPixels = (canvas) =>
 const pixelAt = (canvas, x, y) => Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data);
 
 /** Loads a one-workspace project whose token has a pop-out mask, a removed area, pins and a region. */
-async function loadFlipFixture(app, loadCreatorProject, createCanvas, source) {
+async function loadFlipFixture(
+  app,
+  loadCreatorProject,
+  createCanvas,
+  source,
+  options = { backgroundMode: 'none', popOut: true },
+) {
   const mask = (x) => {
     const canvas = createCanvas(40, 20);
     canvas.getContext('2d').fillRect(x, 0, 6, 20);
     return canvas;
   };
   const masks = { popout: mask(2), remove: mask(30), region1: mask(12) };
-  const project = savedProject({ options: { backgroundMode: 'none', popOut: true } });
+  const project = savedProject({ options });
   const loaded = await loadCreatorProject(app, PROJECT_PATH, {
     fetchJson: async () => JSON.parse(JSON.stringify(project)),
     loadImage: async (src) => {
@@ -766,10 +772,14 @@ test('a flipped project reopens with the same cut-out, masks, regions and pins',
   });
 });
 
-test('a source without a path is saved already flipped, so its project flip is none', async () => {
+test('a source without a path is saved unflipped, with its real flip in the project', async () => {
   const { createCanvas } = await import('canvas');
-  const { flipWorkspace, normalizeTokenCreatorOptions, snapshotProjectState } =
-    await import('../scripts/token-creator.js');
+  const {
+    flipWorkspace,
+    getProjectSourceCanvas,
+    normalizeTokenCreatorOptions,
+    snapshotProjectState,
+  } = await import('../scripts/token-creator.js');
   await withCanvasDocument(async () => {
     const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
     const canvas = asymmetricCanvas(createCanvas);
@@ -777,7 +787,104 @@ test('a source without a path is saved already flipped, so its project flip is n
     app.workspaces.token.autoCutout = canvas;
     app.workspaces.token.cutout = canvas;
     flipWorkspace(app, 'x');
-    assert.deepEqual(app.workspaces.token.source.flip, { x: true, y: false });
-    assert.deepEqual(snapshotProjectState(app).token.flip, { x: false, y: false });
+    flipWorkspace(app, 'y');
+    const source = app.workspaces.token.source;
+    assert.deepEqual(source.flip, { x: true, y: true });
+    assert.deepEqual(snapshotProjectState(app).token.flip, { x: true, y: true });
+    // What gets uploaded is the image as it was given, before any flip.
+    assert.deepEqual(readPixels(getProjectSourceCanvas(source)), readPixels(canvas));
   });
+});
+
+/** Backdrop on top, subject colour on the bottom corners: auto removal depends on orientation. */
+function topBottomCanvas(createCanvas) {
+  const canvas = createCanvas(40, 20);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#20c020';
+  context.fillRect(0, 0, 40, 20);
+  context.fillStyle = '#d02020';
+  context.fillRect(0, 12, 40, 8);
+  context.fillRect(16, 4, 8, 8);
+  return canvas;
+}
+
+test('an auto cut-out flipped vertically reopens with the same pixels', async () => {
+  const { createCanvas } = await import('canvas');
+  const {
+    flipWorkspace,
+    loadCreatorProject,
+    normalizeTokenCreatorOptions,
+    serializeProjectSnapshot,
+    snapshotProjectState,
+  } = await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const original = topBottomCanvas(createCanvas);
+    const options = { backgroundMode: 'auto', popOut: true };
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(app, loadCreatorProject, createCanvas, original, options);
+    flipWorkspace(app, 'y');
+    const before = captureFlipState(app);
+    // The subject (bottom band, now on top) is kept; the green backdrop is removed.
+    assert.equal(pixelAt(app.workspaces.token.autoCutout, 2, 2)[3], 255);
+    assert.equal(pixelAt(app.workspaces.token.autoCutout, 2, 17)[3], 0);
+
+    const stored = new Map();
+    const project = serializeProjectSnapshot(snapshotProjectState(app), {
+      tokenPath: app.workspaces.token.source.path,
+      output: 'worlds/w/tokener/dragon.webm',
+      toDataUrl: (canvas) => {
+        const url = `data:image/png;base64,m${stored.size}`;
+        stored.set(url, canvas);
+        return url;
+      },
+    });
+    const reopened = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    const loaded = await loadCreatorProject(reopened, PROJECT_PATH, {
+      fetchJson: async () => JSON.parse(JSON.stringify(project)),
+      loadImage: async (src) => {
+        if (src === 'worlds/w/tokener/dragon-source.png') return original;
+        if (stored.has(src)) return stored.get(src);
+        throw new Error(`unexpected ${src}`);
+      },
+    });
+    assert.equal(loaded, true);
+    assert.deepEqual(captureFlipState(reopened), before);
+  });
+});
+
+test('a tolerance recompute after a vertical flip equals the mirrored cut-out', async () => {
+  const { createCanvas } = await import('canvas');
+  const { flipCanvas } = await import('../scripts/image-flip.js');
+  const { flipWorkspace, loadCreatorProject, normalizeTokenCreatorOptions, updateAllCutouts } =
+    await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(app, loadCreatorProject, createCanvas, topBottomCanvas(createCanvas), {
+      backgroundMode: 'auto',
+      popOut: true,
+    });
+    app.creatorOptions = { ...app.creatorOptions, tolerance: 40 };
+    await updateAllCutouts(app);
+    const token = app.workspaces.token;
+    const auto = readPixels(flipCanvas(token.autoCutout, 'y', createCanvas));
+    const cutout = readPixels(flipCanvas(token.cutout, 'y', createCanvas));
+    flipWorkspace(app, 'y');
+    assert.deepEqual(readPixels(token.autoCutout), auto, 'a live flip mirrors the cut-out');
+    await updateAllCutouts(app);
+    assert.deepEqual(readPixels(token.autoCutout), auto, 'a recompute agrees with the flip');
+    assert.deepEqual(readPixels(token.cutout), cutout);
+  });
+});
+
+test('flip is unavailable while click-to-select is busy or without an image', async () => {
+  const { canFlip, normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+  assert.equal(canFlip(app), false);
+  app.workspaces.token.source = { canvas: { width: 1, height: 1 }, path: 'a.png' };
+  assert.equal(canFlip(app), true);
+  app._samBusy = true;
+  assert.equal(canFlip(app), false);
+  app._samBusy = false;
+  app.busy = true;
+  assert.equal(canFlip(app), false);
 });

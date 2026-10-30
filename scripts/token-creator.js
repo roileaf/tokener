@@ -90,7 +90,14 @@ import {
   serializeProject,
   shouldLoadProject,
 } from './creator-project.js';
-import { flipCanvas, flipPins, flipView, normalizeFlip, toggleFlip } from './image-flip.js';
+import {
+  applyFlip,
+  flipCanvas,
+  flipPins,
+  flipView,
+  normalizeFlip,
+  toggleFlip,
+} from './image-flip.js';
 import { registerCreatedTokenSubjectPath } from './ring-video.js';
 import {
   colorizeRingBackground,
@@ -1286,7 +1293,7 @@ async function handleCreatorClick(app, event) {
       return;
     case 'flip-x':
     case 'flip-y':
-      flipWorkspace(app, button.dataset.creatorAction === 'flip-x' ? 'x' : 'y');
+      if (canFlip(app)) flipWorkspace(app, button.dataset.creatorAction === 'flip-x' ? 'x' : 'y');
       return;
     case 'portrait': {
       const portrait = getDocumentActor(app.tokenDocument)?.img;
@@ -1588,11 +1595,9 @@ async function decodeProject(project, loadImage) {
   // The source file is unflipped; the saved flip is applied to it here. Masks and regions are
   // saved already flipped, so they are restored as they are.
   const loadSource = async (path, flip) => {
-    let canvas = drawToWorkingCanvas(await loadImage(path));
+    const canvas = drawToWorkingCanvas(await loadImage(path));
     canvas.getContext('2d').getImageData(0, 0, 1, 1);
-    if (flip.x) canvas = flipCanvas(canvas, 'x', createCanvas);
-    if (flip.y) canvas = flipCanvas(canvas, 'y', createCanvas);
-    return canvas;
+    return applyFlip(canvas, flip, createCanvas);
   };
   // Masks and regions are stored at source resolution; drawing them at the source size keeps
   // them aligned even if a mask was saved at a slightly different working size.
@@ -1728,16 +1733,33 @@ async function updateCutout(app, workspace = app.workspace) {
   const context = cutout.getContext('2d');
   let failure = null;
 
+  // Removal always runs on the image as it was given (un-flipped) and the result is mirrored
+  // back, so a live flip, a recompute and a reopened project all give the same cut-out.
+  const flip = workspace.source.flip;
   try {
     if (backgroundMode === 'auto') {
       setCreatorStatus(app, localize('Creator.Removing', 'Removing background...'));
-      const imageData = source.getContext('2d').getImageData(0, 0, source.width, source.height);
+      const original = applyFlip(source, flip, createCanvas);
+      const imageData = original
+        .getContext('2d')
+        .getImageData(0, 0, original.width, original.height);
       removeImageBackground(imageData, { tolerance, feather });
-      context.putImageData(imageData, 0, 0);
+      const removed = createCanvas(original.width, original.height);
+      removed.getContext('2d').putImageData(imageData, 0, 0);
+      context.drawImage(applyFlip(removed, flip, createCanvas), 0, 0);
     } else if (backgroundMode === 'ai') {
       setCreatorStatus(app, localize('Creator.AiRunning', 'Running AI background removal...'));
-      workspace.source.aiCutout ??= await removeBackgroundWithModel(source);
-      context.drawImage(workspace.source.aiCutout, 0, 0, source.width, source.height);
+      // Cached in the original orientation, so flipping never runs the model again.
+      workspace.source.aiCutout ??= await removeBackgroundWithModel(
+        applyFlip(source, flip, createCanvas),
+      );
+      context.drawImage(
+        applyFlip(workspace.source.aiCutout, flip, createCanvas),
+        0,
+        0,
+        source.width,
+        source.height,
+      );
     } else {
       context.drawImage(source, 0, 0);
     }
@@ -1762,7 +1784,7 @@ async function updateCutout(app, workspace = app.workspace) {
 }
 
 /** Rebuilds every workspace's cut-out; resolves the failure messages (null where it worked). */
-async function updateAllCutouts(app) {
+export async function updateAllCutouts(app) {
   const workspaces = [app.workspaces.token, app.workspaces.portrait].filter(
     (workspace) => workspace?.source,
   );
@@ -1821,7 +1843,8 @@ export function flipWorkspace(app, axis) {
     label: previous.label,
     flip: toggleFlip(previous.flip, axis),
   };
-  if (previous.aiCutout) source.aiCutout = flip(previous.aiCutout);
+  // The AI cut-out is cached in the original orientation and stays valid.
+  if (previous.aiCutout) source.aiCutout = previous.aiCutout;
 
   const { token, portrait } = app.workspaces;
   const flipped = [token, portrait].filter((workspace) => workspace?.source === previous);
@@ -2066,9 +2089,9 @@ function renderPortraitCanvas(app) {
   return canvas;
 }
 
-/** Flip needs an image in the workspace being edited and an idle creator. */
-function canFlip(app) {
-  return Boolean(app.workspace?.source?.canvas) && !app.busy;
+/** Flip needs an image in the workspace being edited and an idle creator (click-to-select too). */
+export function canFlip(app) {
+  return Boolean(app.workspace?.source?.canvas) && !app.busy && !app._samBusy;
 }
 
 function syncFlipControls(app) {
@@ -3636,6 +3659,7 @@ async function selectPopOutPart(app, tokenPoint, { remove = false } = {}) {
     return;
 
   app._samBusy = true;
+  syncFlipControls(app);
   if (source.samReady) setCreatorStatus(app, localize('Creator.Selecting', 'Selecting...'));
   try {
     const select = await prepareSamSelector(app);
@@ -3667,6 +3691,7 @@ async function selectPopOutPart(app, tokenPoint, { remove = false } = {}) {
     );
   } finally {
     app._samBusy = false;
+    syncFlipControls(app);
   }
 }
 
@@ -4461,8 +4486,9 @@ export function snapshotProjectState(app) {
     keep: copyCanvas(workspace.cleanup?.keep),
     remove: copyCanvas(workspace.cleanup?.remove),
   });
-  // A source without a path is uploaded as it is now (already mirrored), so it has no flip.
-  const flip = (source) => (source?.path ? normalizeFlip(source.flip) : normalizeFlip(null));
+  // A source without a path is uploaded un-flipped (getProjectSourceCanvas), so every
+  // source records its real flip.
+  const flip = (source) => normalizeFlip(source?.flip);
   return {
     label: token.source?.label ?? '',
     options: structuredClone(app.creatorOptions),
@@ -4500,7 +4526,8 @@ async function saveCreatorProject(state, { folder, tokenSrc }) {
   const tokenFileName = String(tokenSrc).split('/').pop();
   const stem = tokenFileName.replace(/\.[^.]+$/, '');
   const uploadSource = async (source, fileName) =>
-    source.path || uploadBlob(await canvasToBlob(source.canvas, 'image/png'), folder, fileName);
+    source.path ||
+    uploadBlob(await canvasToBlob(getProjectSourceCanvas(source), 'image/png'), folder, fileName);
   const tokenPath = await uploadSource(state.token.source, `${stem}-source.png`);
   let portraitPath = null;
   if (state.portrait)
@@ -4519,6 +4546,11 @@ async function saveCreatorProject(state, { folder, tokenSrc }) {
     folder,
     buildProjectFileName(tokenFileName),
   );
+}
+
+/** The source image as it was given, before any flip: what a project stores and reloads. */
+export function getProjectSourceCanvas(source) {
+  return applyFlip(source.canvas, source.flip, createCanvas);
 }
 
 /**
