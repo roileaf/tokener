@@ -13,6 +13,12 @@
 - **Animation (JB2A / Sequencer)** effect in the Animate card, offered when Sequencer is active: pick any animation from your own Sequencer database (JB2A and any other module that registers effects there) with a search and a looping preview, and it plays in the animated token. It follows a pin (fire breath from a moving head, flames on a swaying sword) or sits on the token centre, with its size, angle, shift and opacity; breath, cones and rays start at the pin, others are centred on it. It can stay inside the frame or reach past it into the breakout room, and it is baked into the saved WebM. The picker browses your catalog by category as a grid of thumbnails that play on hover, with a search and a large preview. Pins are numbered on the canvas to match the **Follows** list, and while an animation is selected the pin it follows is ringed. JB2A art keeps its own license, so tokens with it baked in are for your own games.
 - **Auto animate** with AI tools on cuts out the part behind each moving tip (a wing, a head, a tail) with the selection model and makes it a region pin: the pin sits where the part joins the body and the whole part turns there, instead of only the art near the tip bending. Parts the model gets wrong (most of the figure, or the body itself) are left as plain pins, and without AI tools Auto animate works as before.
 
+### Fixed
+
+- A region pin moved or turned a long way now carries its region whole; before, any move past a small blend distance squashed the region in place instead of moving it.
+- **Auto animate** no longer gives one limb two parts (a strip along a wing's edge as well as the whole wing), which made the strip flap on its own.
+- A region's tint now moves with the art while it animates, instead of staying where it was painted; while painting, the art holds still as before.
+
 ## 2.3.3 - 2026-10-30
 
 ### Added
@@ -23,9 +29,6 @@
 
 ### Fixed
 
-- A region pin moved or turned a long way now carries its region whole; before, any move past a small blend distance squashed the region in place instead of moving it.
-- **Auto animate** no longer gives one limb two parts (a strip along a wing's edge as well as the whole wing), which made the strip flap on its own.
-- A region's tint now moves with the art while it animates, instead of staying where it was painted; while painting, the art holds still as before.
 - With **Keep background** on, the pop-out brushes (**B** / **E**) and click-to-select are greyed out instead of looking usable and doing nothing.
 
 ## 2.3.2 - 2026-10-30
