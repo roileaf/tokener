@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildRegionField, moveGridByRegions, sampleField } from '../scripts/region-motion.js';
+import {
+  buildRegionField,
+  fillLasso,
+  moveGridByRegions,
+  sampleField,
+} from '../scripts/region-motion.js';
 import { buildWarpGrid, sampleGrid } from '../scripts/puppet-warp.js';
 
 /** RGBA image data with alpha 255 inside the axis-aligned box, 0 elsewhere. */
@@ -91,4 +96,55 @@ test('region motion runs on top of the pin warp grid', () => {
   const grid = moveGridByRegions(shifted, [{ field, cx: 60, cy: 60, dx: 0, dy: 0, rot: 0 }]);
   const point = sampleGrid(grid, 120, 120);
   assert.ok(Math.abs(point.x - 116) < 1e-6);
+});
+
+test('lasso fills the outlined polygon and erases it again', () => {
+  const mask = boxMask(40, 40, { x0: 0, y0: 0, x1: 0, y1: 0 });
+  // A right triangle with the corner at (10, 10) and legs 20 px long.
+  const triangle = [
+    { x: 10, y: 10 },
+    { x: 30, y: 10 },
+    { x: 10, y: 30 },
+  ];
+  assert.equal(fillLasso(mask, triangle, 'paint'), true);
+  const alpha = (x, y) => mask.data[(y * 40 + x) * 4 + 3];
+  assert.equal(alpha(12, 12), 255);
+  assert.equal(alpha(25, 12), 255);
+  assert.equal(alpha(12, 25), 255);
+  assert.equal(alpha(25, 25), 0, 'outside the hypotenuse');
+  assert.equal(alpha(5, 5), 0);
+
+  fillLasso(mask, triangle, 'erase');
+  assert.equal(alpha(12, 12), 0);
+});
+
+test('lasso ignores an outline with fewer than three points', () => {
+  const mask = boxMask(10, 10, { x0: 0, y0: 0, x1: 0, y1: 0 });
+  assert.equal(
+    fillLasso(
+      mask,
+      [
+        { x: 1, y: 1 },
+        { x: 8, y: 8 },
+      ],
+      'paint',
+    ),
+    false,
+  );
+  assert.ok(mask.data.every((value) => value === 0));
+});
+
+test('lasso clips an outline that runs past the image', () => {
+  const mask = boxMask(10, 10, { x0: 0, y0: 0, x1: 0, y1: 0 });
+  fillLasso(
+    mask,
+    [
+      { x: -5, y: -5 },
+      { x: 20, y: -5 },
+      { x: 20, y: 20 },
+      { x: -5, y: 20 },
+    ],
+    'paint',
+  );
+  assert.ok(mask.data.filter((_, index) => index % 4 === 3).every((value) => value === 255));
 });

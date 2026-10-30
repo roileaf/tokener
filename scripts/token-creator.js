@@ -83,6 +83,7 @@ import {
   toggleSelection,
   updateKeyframeAt,
 } from './token-animation.js';
+import { fillLasso } from './region-motion.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
 import { encodeAnimatedWebp } from './webp-anim.js';
 import {
@@ -239,6 +240,8 @@ const EFFECT_PARAM_LABELS = {
 const MAX_WARP_STRENGTH = 40;
 const WARP_STRENGTH_RATIO = 0.18;
 const REGION_COLOR = '#d38fff';
+/** Preview px the pointer moves before a lasso outline gains another point. */
+const LASSO_SPACING = 2;
 const REGION_OVERLAY_ALPHA = 0.45;
 const KEYFRAME_EASES = ['smooth', 'linear', 'hold'];
 const ANIMATION_MODES = ['loop', 'pingpong'];
@@ -444,6 +447,8 @@ export function getTokenCreatorApplicationClass() {
       // What the region brush paints: the selected effect's region, or the selected pin's (a
       // region pin moves its painted area as one piece).
       this.regionTarget = 'effect';
+      // The region tool draws a freehand outline (lasso) instead of brushing when on.
+      this.regionLasso = false;
       this._regionVersion = 0;
       this.animationPlaying = false;
       this._animationFrame = null;
@@ -685,6 +690,11 @@ function prepareCreatorContext(app) {
       pinRegionClearTooltip: localize(
         'Creator.Animate.PinRegionClearTooltip',
         'Forget the painted region: the pin bends the art around it again',
+      ),
+      pinRegionLasso: localize('Creator.Animate.PinRegionLasso', 'Lasso a region'),
+      pinRegionLassoTooltip: localize(
+        'Creator.Animate.PinRegionLassoTooltip',
+        'Draw an outline around the part this pin moves; everything inside joins its region. Right or Alt drag cuts the outline out of it',
       ),
       pinTooltip: localize(
         'Creator.Animate.PinTooltip',
@@ -968,8 +978,14 @@ function bindPreviewInteractions(app, canvas) {
         altKey: event.altKey,
       });
       const point = getTokenPoint(app, canvas, event);
-      drag = { mode, region: key, last: point };
-      paintEffectRegion(app, key, point, point, mode);
+      if (app.regionLasso) {
+        drag = { mode, region: key, lasso: [point] };
+        app._lasso = drag;
+        renderCreatorPreview(app);
+      } else {
+        drag = { mode, region: key, last: point };
+        paintEffectRegion(app, key, point, point, mode);
+      }
       canvas.setPointerCapture?.(event.pointerId);
       return;
     }
@@ -1048,6 +1064,15 @@ function bindPreviewInteractions(app, canvas) {
       dragPin(app, drag, getTokenPoint(app, canvas, event));
       return;
     }
+    if (drag.lasso) {
+      const point = getTokenPoint(app, canvas, event);
+      const last = drag.lasso.at(-1);
+      if (Math.hypot(point.x - last.x, point.y - last.y) >= LASSO_SPACING) {
+        drag.lasso.push(point);
+        renderCreatorPreview(app);
+      }
+      return;
+    }
     if (drag.mode) {
       const point = getTokenPoint(app, canvas, event);
       if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
@@ -1069,6 +1094,8 @@ function bindPreviewInteractions(app, canvas) {
       app.selectedPinIds = [drag.pinId];
       renderCreatorPreview(app);
     }
+    if (drag?.lasso) fillEffectRegionLasso(app, drag.region, drag.lasso, drag.mode);
+    app._lasso = null;
     if (drag?.region) finishRegionStroke(app);
     drag = null;
     syncMaskControls(app);
@@ -1334,6 +1361,9 @@ async function handleCreatorClick(app, event) {
       return;
     case 'pin-region':
       selectPinRegionTool(app);
+      return;
+    case 'pin-region-lasso':
+      selectPinRegionTool(app, { lasso: true });
       return;
     case 'pin-region-clear':
       clearPinRegion(app);
@@ -2036,6 +2066,32 @@ function renderCreatorPreview(app) {
   if (isFramed) drawTokenBounds(context, viewport);
   drawPins(context, app, viewport, size);
   drawBrushCursor(context, app, viewport);
+  drawLassoOutline(context, app, viewport);
+}
+
+/** The lasso outline being drawn, closed back to its start so the fill to come reads. */
+function drawLassoOutline(context, app, viewport) {
+  const points = app._lasso?.lasso;
+  if (!points?.length) return;
+  context.save();
+  context.beginPath();
+  for (const point of points)
+    context.lineTo(viewport.x + point.x * viewport.scale, viewport.y + point.y * viewport.scale);
+  context.closePath();
+  if (app._lasso.mode !== 'erase') {
+    context.globalAlpha = 0.2;
+    context.fillStyle = REGION_COLOR;
+    context.fill();
+    context.globalAlpha = 1;
+  }
+  context.lineWidth = 3;
+  context.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+  context.stroke();
+  context.lineWidth = 1.5;
+  context.strokeStyle = REGION_COLOR;
+  if (app._lasso.mode === 'erase') context.setLineDash([4, 3]);
+  context.stroke();
+  context.restore();
 }
 
 function getActiveView(app) {
@@ -2550,24 +2606,31 @@ function canPaintRegion(app) {
 
 /** The toolbar brush paints the effect's region, or the selected pin's when no effect can use one. */
 function selectRegionTool(app) {
+  app.regionLasso = false;
   if (app.regionTarget === 'pin' && !getSelectedPin(app)) app.regionTarget = 'effect';
   if (!canPaintEffectRegion(app) && getSelectedPin(app)) app.regionTarget = 'pin';
   if (canPaintRegion(app)) setMaskTool(app, 'region');
 }
 
-/** "Move a region" reads as pressed while the brush paints the selected pin's region. */
+/** "Move a region" or "Lasso a region" reads as pressed while it edits the selected pin's region. */
 function syncPinRegionButton(app) {
-  const button = getCreatorRoot(app)?.querySelector?.('[data-creator-action="pin-region"]');
-  button?.setAttribute(
-    'aria-pressed',
-    String(app.maskTool === 'region' && getRegionTarget(app)?.kind === 'pin'),
-  );
+  const root = getCreatorRoot(app);
+  const active = app.maskTool === 'region' && getRegionTarget(app)?.kind === 'pin';
+  root
+    ?.querySelector?.('[data-creator-action="pin-region"]')
+    ?.setAttribute('aria-pressed', String(active && !app.regionLasso));
+  root
+    ?.querySelector?.('[data-creator-action="pin-region-lasso"]')
+    ?.setAttribute('aria-pressed', String(active && app.regionLasso));
 }
 
-/** Region brush on the selected pin: what it paints moves with the pin as one piece. */
-function selectPinRegionTool(app) {
+/**
+ * Region brush (or lasso) on the selected pin: what it covers moves with the pin as one piece.
+ */
+function selectPinRegionTool(app, { lasso = false } = {}) {
   if (!canEditPins(app) || !getSelectedPin(app)) return;
   app.regionTarget = 'pin';
+  app.regionLasso = lasso;
   setMaskTool(app, 'region');
 }
 
@@ -2763,6 +2826,27 @@ function paintEffectRegion(app, key, from, to, mode) {
   context.restore();
   app._regionVersion += 1;
   renderCreatorPreview(app);
+}
+
+/** Fills (or cuts) a lasso outline, drawn in preview px, into the region canvas for `key`. */
+function fillEffectRegionLasso(app, key, points, mode) {
+  if (!app.cutout || points.length < 3) return;
+  const region = ensureEffectRegion(app, key);
+  const layout = getPreviewLayout(app);
+  const outline = points.map((point) =>
+    previewPointToImage({
+      layout,
+      imageWidth: app.cutout.width,
+      imageHeight: app.cutout.height,
+      x: point.x,
+      y: point.y,
+    }),
+  );
+  const context = region.getContext('2d');
+  const image = context.getImageData(0, 0, region.width, region.height);
+  if (!fillLasso(image, outline, mode)) return;
+  context.putImageData(image, 0, 0);
+  app._regionVersion += 1;
 }
 
 /** The region canvas changed in place: forget everything cached by its identity. */
@@ -3348,7 +3432,8 @@ function syncAnimationControls(app) {
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
     let disabled = !enabled;
-    if (action === 'keyframe-add' || action === 'pin-region') disabled ||= !pin;
+    if (action === 'keyframe-add' || action === 'pin-region' || action === 'pin-region-lasso')
+      disabled ||= !pin;
     if (action === 'keyframe-remove') disabled ||= !atKeyframe;
     if (action === 'pin-region-clear') disabled ||= !pin?.region;
     if (action === 'animation-preset')
@@ -3795,7 +3880,12 @@ function syncBrushCursor(app) {
   stage?.classList.toggle('is-brushing', Boolean(canShowBrush(app) && app._pointer?.mode));
   stage?.classList.toggle(
     'is-selecting',
-    Boolean(app.cutout && (app.maskTool === 'wand' || (canMask(app) && app.maskTool === 'select'))),
+    Boolean(
+      app.cutout &&
+      (app.maskTool === 'wand' ||
+        (canMask(app) && app.maskTool === 'select') ||
+        (app.maskTool === 'region' && app.regionLasso && canPaintRegion(app))),
+    ),
   );
   stage?.classList.toggle('is-pinning', app.maskTool === 'pin' && canEditPins(app));
 }
@@ -3916,7 +4006,7 @@ function formatDownloadStatus(key, percent) {
 }
 
 function canShowBrush(app) {
-  if (app.maskTool === 'region') return canPaintRegion(app);
+  if (app.maskTool === 'region') return !app.regionLasso && canPaintRegion(app);
   return isCleanupTool(app.maskTool) ? Boolean(app.cutout) : canMask(app);
 }
 
