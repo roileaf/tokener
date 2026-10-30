@@ -882,9 +882,15 @@ test('a new token image clears pins but keeps the loop length', async () => {
     pins: [{ id: 'a', x: 1, y: 2, keyframes: [{ t: 0, dx: 1, dy: 0 }] }],
   };
   const reset = resetAnimationForNewSource(animation);
-  assert.deepEqual(reset, { duration: 3.5, fps: 30, pins: [] });
+  assert.deepEqual(reset, { duration: 3.5, fps: 30, mode: 'loop', pins: [], effects: [] });
   assert.equal(animation.pins.length, 1);
-  assert.deepEqual(resetAnimationForNewSource(undefined), { duration: 2, fps: 30, pins: [] });
+  assert.deepEqual(resetAnimationForNewSource(undefined), {
+    duration: 2,
+    fps: 30,
+    mode: 'loop',
+    pins: [],
+    effects: [],
+  });
 });
 
 test('pin dots map from source to preview space with the current layout', async () => {

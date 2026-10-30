@@ -16,12 +16,12 @@ import {
 } from '../scripts/animation.js';
 
 test('a pin without keyframes never moves', () =>
-  assert.deepEqual(samplePinOffset(createPin({ x: 1, y: 2 }), 0.3), { dx: 0, dy: 0 }));
+  assert.deepEqual(samplePinOffset(createPin({ x: 1, y: 2 }), 0.3), { dx: 0, dy: 0, rot: 0 }));
 
 test('offsets ease between keyframes and wrap around the loop', () => {
   let pin = setKeyframe(createPin({ x: 0, y: 0 }), 0, { dx: 0, dy: 0 });
   pin = setKeyframe(pin, 0.5, { dx: 0, dy: -10 });
-  assert.deepEqual(samplePinOffset(pin, 0.5), { dx: 0, dy: -10 });
+  assert.deepEqual(samplePinOffset(pin, 0.5), { dx: 0, dy: -10, rot: 0 });
   assert.ok(Math.abs(samplePinOffset(pin, 0.25).dy + 5) < 1e-9);
   assert.ok(Math.abs(samplePinOffset(pin, 0.75).dy + 5) < 1e-9);
 });
@@ -80,7 +80,16 @@ test('bob, sway and breathe presets fill keyframes for the selected pins only', 
   assert.ok(Math.abs(breathe[0].keyframes[1].dx - -1.5) < 1e-9);
   assert.ok(Math.abs(breathe[1].keyframes[1].dx - 1.5) < 1e-9);
   assert.deepEqual(breathe[2], p3);
-  assert.deepEqual(ANIMATION_PRESETS, ['bob', 'sway', 'breathe']);
+  assert.deepEqual(ANIMATION_PRESETS, [
+    'bob',
+    'sway',
+    'breathe',
+    'flap',
+    'wave',
+    'hover',
+    'shiver',
+    'look',
+  ]);
 });
 
 test('animation settings clamp duration to 1-4 s in half steps and keep 30 fps', () => {
@@ -123,4 +132,134 @@ test('keyframe merging wraps the loop seam', () => {
   assert.deepEqual(pin.keyframes, [{ t: 0.999, dx: 2, dy: 2 }]);
   pin = setKeyframe(pin, 0, { dx: 3, dy: 3 });
   assert.equal(removeKeyframe(pin, 0.999).keyframes.length, 0);
+});
+
+const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
+
+function pinWith(keys, extra = {}) {
+  let pin = createPin({ x: 0, y: 0, ...extra });
+  for (const [t, v] of keys) pin = setKeyframe(pin, t, v);
+  return pin;
+}
+
+test("'hold' keeps the previous value until the next keyframe", () => {
+  const pin = pinWith([
+    [0, { dx: 0, dy: 0, ease: 'hold' }],
+    [0.5, { dx: 0, dy: -10 }],
+  ]);
+  assert.equal(samplePinOffset(pin, 0.49).dy, 0);
+  assert.equal(samplePinOffset(pin, 0.5).dy, -10);
+});
+
+test("'linear' interpolates evenly", () => {
+  const pin = pinWith([
+    [0, { dx: 0, dy: 0, ease: 'linear' }],
+    [0.5, { dx: 0, dy: -10 }],
+  ]);
+  near(samplePinOffset(pin, 0.25).dy, -5);
+  near(samplePinOffset(pin, 0.1).dy, -2);
+});
+
+test('ping-pong mirrors the first half and holds without wrapping', () => {
+  const pin = pinWith([
+    [0.1, { dx: 0, dy: 0 }],
+    [0.6, { dx: 0, dy: -10 }],
+  ]);
+  for (const t of [0.05, 0.2, 0.3, 0.45]) {
+    near(samplePinOffset(pin, t, 'pingpong').dy, samplePinOffset(pin, 1 - t, 'pingpong').dy);
+  }
+  near(samplePinOffset(pin, 0.5, 'pingpong').dy, -10);
+  near(samplePinOffset(pin, 0, 'pingpong').dy, 0);
+  assert.equal(samplePinOffset(pin, 0.25, 'loop').dy, samplePinOffset(pin, 0.25).dy);
+});
+
+test('rotation adds two satellite control points about the pin', () => {
+  const pin = pinWith([[0.5, { dx: 0, dy: 0, rot: Math.PI / 2 }]], { x: 5, y: 7, arm: 10 });
+  const { rest, moved } = samplePins([pin], 0.5);
+  assert.equal(rest.length, 3);
+  assert.deepEqual(rest.slice(1), [
+    { x: 15, y: 7 },
+    { x: -5, y: 7 },
+  ]);
+  near(moved[1].x, 5);
+  near(moved[1].y, 17);
+  near(moved[2].x, 5);
+  near(moved[2].y, -3);
+});
+
+test('pins without rotation (or without an arm) add no satellites', () => {
+  const plain = pinWith([[0.5, { dx: 1, dy: 1 }]], { arm: 10 });
+  assert.equal(samplePins([plain], 0.5).moved.length, 1);
+  const noArm = pinWith([[0.5, { dx: 0, dy: 0, rot: 1 }]]);
+  assert.equal(samplePins([noArm], 0.5).moved.length, 1);
+});
+
+test('flap moves selected pins down together and toward their centroid', () => {
+  const a = createPin({ x: 0, y: 0 });
+  const b = createPin({ x: 100, y: 0 });
+  const c = createPin({ x: 50, y: 50 });
+  const out = applyPreset([a, b, c], [a.id, b.id], 'flap', { amplitude: 10 });
+  const end = (pin) => pin.keyframes.at(-1);
+  assert.equal(end(out[0]).dy, 10);
+  near(end(out[0]).dx, 3);
+  near(end(out[1]).dx, -3);
+  assert.deepEqual(out[2], c);
+});
+
+test('wave delays each selected pin by 0.12', () => {
+  const a = createPin({ x: 0, y: 0 });
+  const b = createPin({ x: 10, y: 0 });
+  const out = applyPreset([a, b], [a.id, b.id], 'wave', { amplitude: 5 });
+  near(samplePinOffset(out[0], 0.5).dx, 5);
+  near(samplePinOffset(out[1], 0.62).dx, 5);
+  near(samplePinOffset(out[1], 0.12).dx, -5);
+  assert.deepEqual(applyPreset([a, b], [a.id], 'wave', { amplitude: 5 }), [a, b]);
+});
+
+test('hover moves every pin up together', () => {
+  const a = createPin({ x: 0, y: 0 });
+  const b = createPin({ x: 10, y: 0 });
+  const out = applyPreset([a, b], [a.id], 'hover', { amplitude: 6 });
+  for (const pin of out) near(samplePinOffset(pin, 0.5).dy, -6);
+});
+
+test('shiver alternates small linear jitter', () => {
+  const a = createPin({ x: 0, y: 0 });
+  const [pin] = applyPreset([a], [a.id], 'shiver', { amplitude: 8 });
+  assert.equal(pin.keyframes.length, 8);
+  assert.ok(pin.keyframes.every((k) => k.ease === 'linear'));
+  assert.ok(pin.keyframes.every((k) => Math.abs(k.dx) <= 2 + 1e-9 && Math.abs(k.dy) <= 2 + 1e-9));
+  assert.ok(pin.keyframes[0].dx * pin.keyframes[1].dx < 0);
+});
+
+test('look rotates the selected pin by +-0.18', () => {
+  const a = createPin({ x: 0, y: 0, arm: 10 });
+  const [pin] = applyPreset([a], [a.id], 'look', { amplitude: 8 });
+  near(samplePinOffset(pin, 0).rot, -0.18);
+  near(samplePinOffset(pin, 0.5).rot, 0.18);
+});
+
+test('old animations normalize to loop/smooth/[] and keep their data', () => {
+  const out = normalizeAnimation({
+    pins: [{ id: 'a', x: 1, y: 2, keyframes: [{ t: 0.2, dx: 1, dy: 1 }] }],
+  });
+  assert.equal(out.mode, 'loop');
+  assert.deepEqual(out.effects, []);
+  assert.equal(normalizeAnimation({ mode: 'pingpong' }).mode, 'pingpong');
+  assert.equal(normalizeAnimation({ mode: 'bogus' }).mode, 'loop');
+  const rich = normalizeAnimation({
+    pins: [
+      { id: 'a', x: 1, y: 2, arm: 4, keyframes: [{ t: 0, dx: 0, dy: 0, rot: 1, ease: 'hold' }] },
+    ],
+  });
+  assert.equal(rich.pins[0].arm, 4);
+  assert.equal(rich.pins[0].keyframes[0].rot, 1);
+  assert.equal(rich.pins[0].keyframes[0].ease, 'hold');
+});
+
+test('hasMotion counts rotation and effects', () => {
+  const rot = pinWith([[0, { dx: 0, dy: 0, rot: 0.2 }]]);
+  assert.equal(hasMotion({ pins: [rot] }), true);
+  assert.equal(hasMotion({ pins: [], effects: [{ id: 'e', type: 'wind' }] }), true);
+  assert.equal(hasMotion({ pins: [], effects: [] }), false);
 });
