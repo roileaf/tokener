@@ -64,8 +64,15 @@ export function getPortraitRect({ size, aspect, imageWidth, imageHeight }) {
   return { x: (size - width) / 2, y: (size - height) / 2, width, height };
 }
 
-export function isPortraitUnchanged(options, view) {
+/**
+ * Whether the portrait is the original file untouched: original aspect and background, no zoom or
+ * offset, and its image not flipped (`flip` is the portrait source's `{ x, y }`), since the file
+ * on disk is never mirrored.
+ */
+export function isPortraitUnchanged(options, view, flip) {
   return (
+    !flip?.x &&
+    !flip?.y &&
     options?.portraitAspect === 'original' &&
     options?.portraitBackground === 'original' &&
     Number(view?.zoom ?? 1) === 1 &&

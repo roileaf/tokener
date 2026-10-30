@@ -731,6 +731,36 @@ function fakeWebpStill(width, height) {
   return new Uint8Array([...Buffer.from('RIFF'), size & 0xff, (size >> 8) & 0xff, 0, 0, ...body]);
 }
 
+/** A WebCodecs stand-in whose encoder emits a tiny chunk per frame, so WebM saves run in node. */
+function fakeVideoCodecs() {
+  class VideoFrame {
+    constructor(_data, init) {
+      Object.assign(this, init);
+    }
+    close() {}
+  }
+  class VideoEncoder {
+    constructor({ output }) {
+      this.output = output;
+      this.state = 'configured';
+    }
+    configure() {}
+    encode(frame, { keyFrame }) {
+      this.output({
+        type: keyFrame ? 'key' : 'delta',
+        timestamp: frame.timestamp,
+        byteLength: 1,
+        copyTo: (target) => target.set([1]),
+      });
+    }
+    async flush() {}
+    close() {
+      this.state = 'closed';
+    }
+  }
+  return { VideoEncoder, VideoFrame };
+}
+
 async function runCreatorSave({
   sourcePath,
   failJson = false,
@@ -738,17 +768,28 @@ async function runCreatorSave({
   regions = {},
   options = {},
   webp = false,
+  action = null,
+  source = null,
+  flip = null,
+  portrait = null,
+  pins = [],
+  animationSupported = false,
+  failPortraitEncode = false,
 }) {
   const { createCanvas } = await import('canvas');
   const { createToken, normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
-  const toBlobFor = (element) => (callback, type) =>
+  const toBlobFor = (element) => (callback, type, quality) => {
+    // Animated portrait frames are the only multi-pixel WebP exports at 0.85 quality.
+    if (failPortraitEncode && type === 'image/webp' && quality === 0.85 && element.width > 1)
+      throw new Error('encoder exploded');
     callback(
       webp && type === 'image/webp'
         ? new Blob([fakeWebpStill(element.width, element.height)], { type: 'image/webp' })
         : new Blob([element.toBuffer('image/png')], { type: type ?? 'image/png' }),
     );
-  const canvas = createCanvas(32, 32);
-  canvas.getContext('2d').fillRect(0, 0, 32, 32);
+  };
+  const canvas = source ?? createCanvas(32, 32);
+  if (!source) canvas.getContext('2d').fillRect(0, 0, 32, 32);
   canvas.toBlob = toBlobFor(canvas);
   const uploads = [];
   const notices = { info: [], error: [] };
@@ -757,7 +798,10 @@ async function runCreatorSave({
     foundry: globalThis.foundry,
     game: globalThis.game,
     ui: globalThis.ui,
+    VideoEncoder: globalThis.VideoEncoder,
+    VideoFrame: globalThis.VideoFrame,
   };
+  if (animationSupported) Object.assign(globalThis, fakeVideoCodecs());
   globalThis.document = {
     createElement: () => {
       const element = createCanvas(1, 1);
@@ -792,11 +836,16 @@ async function runCreatorSave({
       error: (message) => notices.error.push(message),
     },
   };
+  const statusElement = { textContent: '', classList: { toggle: () => {} } };
   const warn = console.warn;
+  const error = console.error;
+  const errors = [];
   console.warn = () => {};
+  // Applying to an actor needs a live picker; the uploads before it are what these tests check.
+  console.error = (...args) => errors.push(args);
   try {
     const workspace = {
-      source: { canvas, path: sourcePath, file: null, label: 'Hero' },
+      source: { canvas, path: sourcePath, file: null, label: 'Hero', ...(flip ? { flip } : {}) },
       autoCutout: canvas,
       cutout: canvas,
       cleanup: { keep: null, remove: null },
@@ -807,22 +856,36 @@ async function runCreatorSave({
       view: { zoom: 1, offsetX: 0, offsetY: 0 },
       portraitView: { zoom: 1, offsetX: 0, offsetY: 0 },
       editTarget: 'token',
-      workspaces: { token: workspace, portrait: null },
+      workspaces: { token: workspace, portrait },
       popOutMask: null,
       _maskVersion: 0,
-      animation: { duration: 2, fps: 30, mode: 'loop', pins: [], effects },
+      animation: { duration: 2, fps: 30, mode: 'loop', pins, effects },
       effectRegions: regions,
+      animationSupported,
+      selectedPinIds: [],
+      animationTime: 0,
+      element: {
+        nodeType: 1,
+        querySelector: (selector) =>
+          selector === '.pf2e-tokener-creator-status' ? statusElement : null,
+        querySelectorAll: () => [],
+      },
     };
+    const current = () =>
+      app.editTarget === 'portrait' && app.workspaces.portrait
+        ? app.workspaces.portrait
+        : workspace;
     Object.defineProperties(app, {
-      workspace: { get: () => workspace },
-      source: { get: () => workspace.source },
-      cutout: { get: () => workspace.cutout },
-      cleanup: { get: () => workspace.cleanup },
+      workspace: { get: current },
+      source: { get: () => current().source },
+      cutout: { get: () => current().cutout },
+      cleanup: { get: () => current().cleanup },
     });
-    await createToken(app, null);
-    return { uploads, notices };
+    await createToken(app, action);
+    return { uploads, notices, errors, status: statusElement.textContent };
   } finally {
     console.warn = warn;
+    console.error = error;
     Object.assign(globalThis, previous);
   }
 }
@@ -1686,11 +1749,14 @@ test('saving with Animate portrait uploads an animated <stem>-portrait.webp at 1
     effects: [createEffect('wind')],
     options: { animatePortrait: true },
     webp: true,
+    animationSupported: true,
   });
-  const token = uploads.find(
-    (entry) => entry.name.endsWith('.webp') && !entry.name.includes('portrait'),
+  assert.ok(
+    uploads.some((entry) => entry.name.endsWith('.webm')),
+    'the token is an animated WebM',
   );
-  const stem = token.name.replace(/\.webp$/, '');
+  const token = uploads.find((entry) => entry.name.endsWith('.webm'));
+  const stem = token.name.replace(/\.webm$/, '');
   const portrait = uploads.find((entry) => entry.name === `${stem}-portrait.webp`);
   assert.ok(portrait, 'animated portrait uploaded');
   assert.equal(portrait.type, 'image/webp');
@@ -1768,6 +1834,285 @@ test('portrait animation frames line up with the still portrait layout', async (
         `frame matches the portrait (effects: ${effects.length}, worst ${worst})`,
       );
     }
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test('Animate portrait saves a still portrait when the token animation cannot be made', async () => {
+  const { createEffect } = await import('../scripts/animation-effects.js');
+  const { uploads, notices } = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    effects: [createEffect('wind')],
+    options: { animatePortrait: true },
+    webp: true,
+    animationSupported: false,
+  });
+  assert.equal(
+    uploads.some((entry) => entry.name.includes('portrait')),
+    false,
+    'no animated portrait without animation support',
+  );
+  assert.equal(notices.error.length, 0);
+});
+
+test('a failing animated-portrait encoder falls back to the still portrait with a note', async () => {
+  const { createEffect } = await import('../scripts/animation-effects.js');
+  const { uploads, notices, status } = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    effects: [createEffect('wind')],
+    options: { animatePortrait: true },
+    webp: true,
+    animationSupported: true,
+    failPortraitEncode: true,
+  });
+  assert.ok(
+    uploads.some((entry) => entry.name.endsWith('.webm')),
+    'the token is still saved',
+  );
+  assert.ok(
+    uploads.some((entry) => entry.name.endsWith('.tokener.json')),
+    'and its project',
+  );
+  assert.equal(
+    uploads.some((entry) => entry.name.includes('portrait')),
+    false,
+    'the untouched portrait falls back to its original path',
+  );
+  assert.equal(notices.error.length, 0);
+  assert.equal(notices.info.length, 1);
+  assert.match(status, /animated portrait could not be made/);
+});
+
+/** A 40x20 opaque red image with a blue top-left corner, so a mirror is visible. */
+async function cornerCanvas() {
+  const { createCanvas } = await import('canvas');
+  const canvas = createCanvas(40, 20);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ff0000';
+  context.fillRect(0, 0, 40, 20);
+  context.fillStyle = '#0000ff';
+  context.fillRect(0, 0, 10, 8);
+  return canvas;
+}
+
+async function decodeUpload(upload) {
+  const { createCanvas, loadImage } = await import('canvas');
+  const image = await loadImage(upload.buffer);
+  const canvas = createCanvas(image.width, image.height);
+  canvas.getContext('2d').drawImage(image, 0, 0);
+  return canvas;
+}
+
+const cornerPixel = (canvas, right, bottom) => [
+  ...canvas
+    .getContext('2d')
+    .getImageData(right ? canvas.width - 2 : 1, bottom ? canvas.height - 2 : 1, 1, 1).data,
+];
+
+test('a flipped image is saved as a rendered, mirrored actor portrait', async () => {
+  // Unflipped and untouched: the actor portrait reuses the file on disk.
+  const plain = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    source: await cornerCanvas(),
+    action: 'actor',
+  });
+  assert.equal(
+    plain.uploads.some((entry) => entry.name.includes('-portrait')),
+    false,
+  );
+
+  // In the creator a flipped source holds the mirrored canvas; the file on disk is unflipped.
+  const { createCanvas } = await import('canvas');
+  const { flipCanvas } = await import('../scripts/image-flip.js');
+  const flipped = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    source: flipCanvas(await cornerCanvas(), 'x', createCanvas),
+    flip: { x: true, y: false },
+    action: 'actor',
+  });
+  const upload = flipped.uploads.find((entry) => entry.name.includes('-portrait'));
+  assert.ok(upload, 'the flipped portrait is rendered and uploaded');
+  const portrait = await decodeUpload(upload);
+  assert.deepEqual(cornerPixel(portrait, true, false), [0, 0, 255, 255], 'blue moved right');
+  assert.deepEqual(cornerPixel(portrait, false, false), [255, 0, 0, 255]);
+});
+
+test('a flipped separate portrait image is saved as a rendered, mirrored portrait', async () => {
+  const { createCanvas } = await import('canvas');
+  const { flipCanvas } = await import('../scripts/image-flip.js');
+  const portraitCanvas = flipCanvas(await cornerCanvas(), 'y', createCanvas);
+  const { uploads } = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    action: 'actor',
+    portrait: {
+      source: {
+        canvas: portraitCanvas,
+        path: 'art/portrait.webp',
+        file: null,
+        label: 'Portrait',
+        flip: { x: false, y: true },
+      },
+      autoCutout: portraitCanvas,
+      cutout: portraitCanvas,
+      cleanup: { keep: null, remove: null },
+      cutoutToken: 0,
+    },
+  });
+  const upload = uploads.find((entry) => entry.name.includes('-portrait'));
+  assert.ok(upload, 'the flipped portrait is rendered and uploaded');
+  const portrait = await decodeUpload(upload);
+  assert.deepEqual(cornerPixel(portrait, false, true), [0, 0, 255, 255], 'blue moved down');
+  assert.deepEqual(cornerPixel(portrait, false, false), [255, 0, 0, 255]);
+});
+
+test('isPortraitUnchanged counts any flip of the portrait image as an edit', async () => {
+  const { isPortraitUnchanged } = await import('../scripts/token-composer.js');
+  const options = { portraitAspect: 'original', portraitBackground: 'original' };
+  const view = { zoom: 1, offsetX: 0, offsetY: 0 };
+  assert.equal(isPortraitUnchanged(options, view), true);
+  assert.equal(isPortraitUnchanged(options, view, { x: false, y: false }), true);
+  assert.equal(isPortraitUnchanged(options, view, { x: true, y: false }), false);
+  assert.equal(isPortraitUnchanged(options, view, { x: false, y: true }), false);
+});
+
+/**
+ * A 40x30 opaque source (a horizontal gradient up to column 16, flat beyond it, so resampling
+ * the figure's cut edge adds no colour difference) and its cut-out: the figure is the left 24
+ * columns, the rest transparent.
+ */
+async function portraitFixture() {
+  const { createCanvas } = await import('canvas');
+  const source = createCanvas(40, 30);
+  const context = source.getContext('2d');
+  for (let x = 0; x < 40; x += 1) {
+    const step = Math.min(x, 16);
+    context.fillStyle = `rgb(${step * 12}, ${255 - step * 12}, ${(step * 37) % 255})`;
+    context.fillRect(x, 0, 1, 30);
+  }
+  const cutout = createCanvas(40, 30);
+  cutout.getContext('2d').drawImage(source, 0, 0, 24, 30, 0, 0, 24, 30);
+  return { source, cutout };
+}
+
+function worstDifference(a, b, width, height, inset = 2) {
+  const left = a.getContext('2d').getImageData(0, 0, width, height).data;
+  const right = b.getContext('2d').getImageData(0, 0, width, height).data;
+  let worst = 0;
+  for (let y = inset; y < height - inset; y += 1)
+    for (let x = inset; x < width - inset; x += 1)
+      for (let c = 0; c < 4; c += 1) {
+        const i = (y * width + x) * 4 + c;
+        worst = Math.max(worst, Math.abs(left[i] - right[i]));
+      }
+  return worst;
+}
+
+test('portrait animation frames match the still portrait for every background', async () => {
+  const { createCanvas } = await import('canvas');
+  const { renderPortraitAnimationFrame } = await import('../scripts/token-creator.js');
+  const { drawPortrait } = await import('../scripts/token-composer.js');
+  const previous = globalThis.document;
+  globalThis.document = { createElement: () => createCanvas(1, 1) };
+  try {
+    const { source, cutout } = await portraitFixture();
+    const view = { zoom: 1.2, offsetX: 0.05, offsetY: 0 };
+    for (const background of ['original', 'transparent', 'color']) {
+      const expected = createCanvas(30, 40);
+      drawPortrait(expected.getContext('2d'), {
+        source,
+        cutout,
+        width: 30,
+        height: 40,
+        ...view,
+        background,
+        color: '#336699',
+      });
+      // No motion (the plain still path) and a no-op effect (the bent path).
+      for (const effects of [[], [{ id: 'still', type: 'wind', strength: 0, scale: 24 }]]) {
+        const output = createCanvas(30, 40);
+        renderPortraitAnimationFrame(output, {
+          image: cutout,
+          backdrop: source,
+          regions: {},
+          animation: { duration: 1, fps: 15, mode: 'loop', pins: [], effects },
+          view,
+          background,
+          color: '#336699',
+          t: 0,
+        });
+        const worst = worstDifference(output, expected, 30, 40);
+        assert.ok(worst <= 2, `${background} (effects ${effects.length}): worst ${worst}`);
+      }
+    }
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
+test('an animated original-background portrait bends the source under the cut-out figure', async () => {
+  const { createCanvas } = await import('canvas');
+  const { renderPortraitAnimationFrame } = await import('../scripts/token-creator.js');
+  const { createEffect } = await import('../scripts/animation-effects.js');
+  const previous = globalThis.document;
+  globalThis.document = { createElement: () => createCanvas(1, 1) };
+  try {
+    const { source, cutout } = await portraitFixture();
+    const empty = createCanvas(40, 30);
+    const glow = { ...createEffect('glow'), id: 'glow', color: '#00ff00', size: 40, pulse: 0 };
+    const particles = { ...createEffect('particles'), id: 'sparks', count: 12 };
+    const animation = {
+      duration: 1,
+      fps: 15,
+      mode: 'loop',
+      pins: [
+        {
+          id: 'p',
+          x: 20,
+          y: 15,
+          keyframes: [
+            { t: 0, dx: 0, dy: 0 },
+            { t: 0.5, dx: 0, dy: -2 },
+          ],
+        },
+      ],
+      effects: [glow, particles],
+    };
+    const view = { zoom: 1.3, offsetX: 0, offsetY: 0 };
+    const render = (options, frameAnimation = animation) => {
+      const output = createCanvas(30, 40);
+      renderPortraitAnimationFrame(output, {
+        regions: {},
+        animation: frameAnimation,
+        view,
+        t: 0.25,
+        ...options,
+      });
+      return output;
+    };
+    const original = render({ image: cutout, backdrop: source, background: 'original' });
+    // The same frame put together by hand: the bent source alone (an empty figure has no glow
+    // or particles), with the transparent-background frame (figure, glow, particles) over it.
+    const composed = render({ image: empty, backdrop: source, background: 'original' });
+    composed.getContext('2d').drawImage(render({ image: cutout, background: 'transparent' }), 0, 0);
+    const worst = worstDifference(original, composed, 30, 40, 0);
+    assert.ok(worst <= 3, `figure, glow and particles over the bent source (worst ${worst})`);
+
+    // The bend stays inside the zoomed-in overflow, so no edge strip opens up.
+    const data = original.getContext('2d').getImageData(0, 0, 30, 40).data;
+    let clear = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] !== 255) clear += 1;
+    assert.equal(clear, 0, 'opaque everywhere');
+
+    // The glow comes from the figure, not from the edge of the opaque source rectangle.
+    const withoutGlow = render(
+      { image: cutout, backdrop: source, background: 'original' },
+      { ...animation, effects: [particles] },
+    );
+    assert.ok(
+      worstDifference(original, withoutGlow, 30, 40, 0) > 20,
+      'the glow around the figure shows over the background',
+    );
   } finally {
     globalThis.document = previous;
   }

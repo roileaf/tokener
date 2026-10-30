@@ -670,10 +670,14 @@ test('flipping the token mirrors the art, masks, regions, pins and view; twice r
   });
 });
 
-test('a portrait sharing the token image flips both; its own image flips only the portrait', async () => {
+test('a linked portrait flips the token too; a separate portrait flips on its own', async () => {
   const { createCanvas } = await import('canvas');
-  const { flipWorkspace, loadCreatorProject, normalizeTokenCreatorOptions } =
-    await import('../scripts/token-creator.js');
+  const {
+    flipWorkspace,
+    loadCreatorProject,
+    normalizeTokenCreatorOptions,
+    wantsPortraitAnimation,
+  } = await import('../scripts/token-creator.js');
   await withCanvasDocument(async () => {
     // Linked ("Same as token"): Portrait mode flips the shared image and so the token too.
     const linked = createFakeCreatorApp(normalizeTokenCreatorOptions);
@@ -685,22 +689,42 @@ test('a portrait sharing the token image flips both; its own image flips only th
     assert.deepEqual(linked.view, { zoom: 1.5, offsetX: 12, offsetY: 7 });
     assert.deepEqual(linked.portraitView, { zoom: 2, offsetX: -0.1, offsetY: -0.2 });
 
-    // A separate portrait that still shares the token's source object: both workspaces flip.
+    // A separate portrait that still shares the token's source object: only the portrait flips,
+    // onto its own mirrored source, so it can no longer follow the token animation.
     const cloned = createFakeCreatorApp(normalizeTokenCreatorOptions);
     await loadFlipFixture(cloned, loadCreatorProject, createCanvas, asymmetricCanvas(createCanvas));
     const tokenWorkspace = cloned.workspaces.token;
+    const sharedSource = tokenWorkspace.source;
     cloned.workspaces.portrait = {
       ...tokenWorkspace,
       cleanup: { keep: null, remove: null },
       cutout: tokenWorkspace.autoCutout,
       cutoutToken: 0,
     };
+    const clonedTokenBefore = captureFlipState(cloned);
+    cloned.animationSupported = true;
+    cloned.creatorOptions = { ...cloned.creatorOptions, animatePortrait: true };
+    assert.equal(wantsPortraitAnimation(cloned), true, 'shared before the flip');
     cloned.editTarget = 'portrait';
     flipWorkspace(cloned, 'y');
-    assert.equal(cloned.workspaces.portrait.source, cloned.workspaces.token.source);
-    assert.deepEqual(cloned.workspaces.token.source.flip, { x: false, y: true });
-    assert.equal(cloned.workspaces.portrait.autoCutout, cloned.workspaces.token.autoCutout);
-    assert.equal(cloned.animation.pins[0].y, 0);
+    assert.equal(cloned.workspaces.token.source, sharedSource, 'the token keeps its source');
+    assert.notEqual(cloned.workspaces.portrait.source, sharedSource);
+    assert.deepEqual(cloned.workspaces.token.source.flip ?? { x: false, y: false }, {
+      x: false,
+      y: false,
+    });
+    assert.deepEqual(cloned.workspaces.portrait.source.flip, { x: false, y: true });
+    assert.notEqual(cloned.workspaces.portrait.autoCutout, cloned.workspaces.token.autoCutout);
+    // Blue corner: top-left in the token, bottom-left in the portrait.
+    assert.deepEqual(pixelAt(cloned.workspaces.token.source.canvas, 0, 0), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(cloned.workspaces.portrait.source.canvas, 0, 19), [0, 0, 255, 255]);
+    assert.deepEqual(
+      { ...captureFlipState(cloned), portraitView: clonedTokenBefore.portraitView },
+      clonedTokenBefore,
+      'the token workspace, pins, pop-out, regions and token view are untouched',
+    );
+    assert.deepEqual(cloned.portraitView, { zoom: 2, offsetX: 0.1, offsetY: 0.2 });
+    assert.equal(wantsPortraitAnimation(cloned), false, 'Animate portrait is unavailable');
 
     // The portrait's own image: only the portrait and its framing flip.
     const own = createFakeCreatorApp(normalizeTokenCreatorOptions);

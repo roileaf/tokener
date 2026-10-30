@@ -702,12 +702,12 @@ function prepareCreatorContext(app) {
       flipHorizontal: localize('Creator.FlipHorizontal', 'Flip horizontal'),
       flipHorizontalTooltip: localize(
         'Creator.FlipHorizontalTooltip',
-        'Mirror the image left to right, with its touch-ups, pop-out, effect regions and pins. In Portrait mode this flips the token too while the portrait uses the same image.',
+        'Mirror the image left to right, with its touch-ups, pop-out, effect regions and pins. In Portrait mode a separate portrait image flips on its own; a portrait linked to the token flips the token too.',
       ),
       flipVertical: localize('Creator.FlipVertical', 'Flip vertical'),
       flipVerticalTooltip: localize(
         'Creator.FlipVerticalTooltip',
-        'Mirror the image top to bottom, with its touch-ups, pop-out, effect regions and pins. In Portrait mode this flips the token too while the portrait uses the same image.',
+        'Mirror the image top to bottom, with its touch-ups, pop-out, effect regions and pins. In Portrait mode a separate portrait image flips on its own; a portrait linked to the token flips the token too.',
       ),
       portrait: localize('Creator.UsePortrait', 'Use portrait'),
       dropHint: localize(
@@ -1827,7 +1827,10 @@ function cloneWorkspace(workspace) {
  * Flip horizontal (`axis` 'x') / vertical ('y') for the workspace being edited. Its source is
  * replaced by a mirrored copy (dropping per-image caches such as the click-to-select analysis),
  * and every workspace showing that same source flips with it: its cut-out and touch-ups, and
- * for the token workspace also the pop-out mask, effect regions, pins and token framing. The
+ * for the token workspace also the pop-out mask, effect regions, pins and token framing. In
+ * Portrait mode with a separate portrait image (even one still showing the token's image) only
+ * the portrait flips: it gets its own mirrored source, so the token, its pins, pop-out, regions
+ * and view are untouched. A linked portrait ("same as token") flips the shared image. The
  * portrait framing flips when the portrait shows the flipped image. Flipping twice restores
  * everything exactly. Undo steps for the flipped image no longer line up, so they are cleared.
  * Returns false when there is nothing to flip.
@@ -1855,7 +1858,10 @@ export function flipWorkspace(app, axis) {
   if (previous.aiCutout) source.aiCutout = previous.aiCutout;
 
   const { token, portrait } = app.workspaces;
-  const flipped = [token, portrait].filter((workspace) => workspace?.source === previous);
+  const portraitOnly = app.editTarget === 'portrait' && Boolean(portrait);
+  const flipped = (portraitOnly ? [portrait] : [token, portrait]).filter(
+    (workspace) => workspace?.source === previous,
+  );
   for (const workspace of flipped) {
     workspace.source = source;
     workspace.autoCutout = flip(workspace.autoCutout);
@@ -2131,8 +2137,9 @@ function syncPortraitControls(app) {
 }
 
 /**
- * Animate portrait shows only while the token animation can be made and moves; a separate
- * portrait image cannot follow it (its pins and effects belong to the token image).
+ * Animate portrait shows only while the token animation can be made and moves; a portrait that
+ * does not show the token's image (its own image, or its own flip) cannot follow it, since the
+ * pins and effects belong to the token image.
  */
 function syncPortraitAnimateControl(app) {
   const label = getCreatorRoot(app)?.querySelector?.('[data-portrait-animate]');
@@ -2151,7 +2158,7 @@ function syncPortraitAnimateControl(app) {
       )
     : localize(
         'Creator.AnimatePortraitSeparate',
-        'Only a portrait that uses the token image can be animated. Switch the portrait image back to the token image to animate it.',
+        "Only a portrait that shows the token's image can be animated. A portrait with its own image or its own flip cannot follow the token animation; link the portrait to the token image to animate it.",
       );
 }
 
@@ -4431,7 +4438,11 @@ export async function createToken(app, action) {
 
     const portraitPlan = getPortraitSavePlan({
       action,
-      edited: !isPortraitUnchanged(app.creatorOptions, app.portraitView),
+      edited: !isPortraitUnchanged(
+        app.creatorOptions,
+        app.portraitView,
+        portraitWorkspace.source?.flip,
+      ),
       sourcePath: portraitWorkspace.source?.path,
       hasFile: Boolean(portraitWorkspace.source?.file),
     });
@@ -4440,8 +4451,21 @@ export async function createToken(app, action) {
     // Animate portrait: the shared image, bent like the token, saved as an animated WebP.
     let portraitNote = '';
     if (action !== 'token' && wantsPortraitAnimation(app)) {
-      const blob = (await canEncodeWebp()) ? await encodePortraitAnimation(app) : null;
-      if (blob) {
+      // The token is already uploaded: a failed animated portrait falls back to the still one.
+      let blob = null;
+      let failed = false;
+      try {
+        blob = (await canEncodeWebp()) ? await encodePortraitAnimation(app) : null;
+      } catch (error) {
+        console.warn(`${MODULE_ID} | Failed to encode the animated portrait`, error);
+        failed = true;
+      }
+      if (failed)
+        portraitNote = localize(
+          'Creator.AnimatePortraitFailed',
+          'The animated portrait could not be made, so the portrait was saved as a still image.',
+        );
+      else if (blob) {
         portraitSrc = await uploadBlob(
           blob,
           folder,
@@ -4720,9 +4744,13 @@ export function getPortraitAnimationPlan({
   return options?.animatePortrait && sharedSource && moving && canEncode ? 'animated' : 'still';
 }
 
-/** Everything but WebP support: what the Animate portrait checkbox asks for applies now. */
-function wantsPortraitAnimation(app) {
+/**
+ * Everything but WebP support: what the Animate portrait checkbox asks for applies now. The
+ * checkbox only shows while the token animation can be made, so the save follows that too.
+ */
+export function wantsPortraitAnimation(app) {
   return (
+    Boolean(app.animationSupported) &&
     getPortraitAnimationPlan({
       options: app.creatorOptions,
       sharedSource: isPortraitShared(app),
@@ -4765,13 +4793,15 @@ async function canEncodeWebp() {
  * it as an animated WebP. Null when WebP cannot be encoded.
  */
 async function encodePortraitAnimation(app) {
-  const { image, background, color, regions, animation, view } = withEditTarget(
+  const { image, backdrop, background, color, regions, animation, view } = withEditTarget(
     app,
     'portrait',
     () => ({
-      image: copyCanvas(
-        app.creatorOptions.portraitBackground === 'original' ? app.source.canvas : app.cutout,
-      ),
+      // The figure is always the cut-out, so effects find its silhouette; with the 'original'
+      // background the uncut image is bent with it underneath.
+      image: copyCanvas(app.cutout),
+      backdrop:
+        app.creatorOptions.portraitBackground === 'original' ? copyCanvas(app.source.canvas) : null,
       background: app.creatorOptions.portraitBackground,
       color: app.creatorOptions.portraitColor,
       regions: Object.fromEntries(
@@ -4798,6 +4828,7 @@ async function encodePortraitAnimation(app) {
     for (const t of times) {
       renderPortraitAnimationFrame(output, {
         image,
+        backdrop,
         regions,
         animation,
         view,
@@ -4830,11 +4861,13 @@ async function encodePortraitAnimation(app) {
  * One portrait frame at loop time `t` into `output` (the portrait size). The animation renderer
  * works on a square, so the frame is rendered on a square as large as the portrait's long side,
  * with the art laid out so the centred portrait rect matches `drawPortrait` exactly, then cropped.
- * The portrait `background` is 'original' (`image` is the source), 'transparent' or 'color'.
+ * `image` is the cut-out (the figure the effects act on). The portrait `background` is 'original'
+ * (`backdrop`, the uncut image of the same size, is bent with the same warp and drawn under the
+ * figure), 'transparent' or 'color'.
  */
 export function renderPortraitAnimationFrame(
   output,
-  { image, regions, animation, view, background, color, t },
+  { image, backdrop = null, regions, animation, view, background, color, t },
 ) {
   const { width, height } = output;
   const size = Math.max(width, height);
@@ -4849,12 +4882,13 @@ export function renderPortraitAnimationFrame(
     offsetX: ((Number(view?.offsetX) || 0) * width) / size,
     offsetY: ((Number(view?.offsetY) || 0) * height) / size,
   };
+  const under = background === 'original' ? backdrop : null;
   const square = createCanvas(size, size);
   renderAnimationFrame({
     context: square.getContext('2d'),
     size,
     t,
-    art: { cutout: image, popOutImage: null, regions },
+    art: { cutout: image, popOutImage: null, background: under, regions },
     view: squareView,
     animation,
     createCanvas,
@@ -4864,6 +4898,7 @@ export function renderPortraitAnimationFrame(
         frameContext.fillRect(left, top, width, height);
       }
       if (bent) {
+        if (bent.background) frameContext.drawImage(bent.background, 0, 0, size, size);
         frameContext.drawImage(bent.art, 0, 0, size, size);
         return;
       }
@@ -4875,7 +4910,8 @@ export function renderPortraitAnimationFrame(
         offsetX: squareView.offsetX * size,
         offsetY: squareView.offsetY * size,
       });
-      frameContext.drawImage(image, layout.x, layout.y, layout.width, layout.height);
+      // Nothing moves: the uncut image alone is exactly the still portrait.
+      frameContext.drawImage(under ?? image, layout.x, layout.y, layout.width, layout.height);
     },
   });
   const outputContext = output.getContext('2d');

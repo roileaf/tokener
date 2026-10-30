@@ -247,10 +247,21 @@ function getRegionCanvas(effect, regions) {
 }
 
 /**
- * Bends the cut-out, pop-out image and effect regions with one warp: the pins at `t`, plus the
- * wind / wobble effects. Returns size x size token-space canvases `{ art, popOut, regions }`.
+ * Bends the cut-out, pop-out image, optional background (an image of the cut-out's size, such as
+ * the uncut source) and effect regions with one warp: the pins at `t`, plus the wind / wobble
+ * effects. Returns size x size token-space canvases `{ art, popOut, background, regions }`.
  */
-function bendLayers({ cutout, popOutImage, regions, view, size, animation, t, createCanvas }) {
+function bendLayers({
+  cutout,
+  popOutImage,
+  background = null,
+  regions,
+  view,
+  size,
+  animation,
+  t,
+  createCanvas,
+}) {
   const layout = getArtLayout(cutout, view, size);
   const effects = animation.effects ?? [];
   const scale = layout.width / Math.max(1, cutout.width);
@@ -319,6 +330,7 @@ function bendLayers({ cutout, popOutImage, regions, view, size, animation, t, cr
   return {
     art: bend(cutout),
     popOut: popOutImage ? bend(popOutImage) : null,
+    background: background ? bend(background) : null,
     regions: bentRegions,
   };
 }
@@ -415,16 +427,18 @@ function getEmitter({ effect, source, isRegion, layout, size, createCanvas }) {
  * the art, pop-out image and effect regions (source-image px canvases keyed by `effect.region`)
  * bent with one warp (pins + wind / wobble, weighted by their regions) -> flicker -> whole-figure
  * glow drawn under the art (inside it, so the frame clips it) -> `drawFrame(context, bent)` (the
- * caller's frame or ring) -> region glow over -> particles on top. With no pin motion
- * and no effects, `drawFrame(context, null)` draws the plain still token. Returns `bent`
- * (`{ art, popOut, regions }` or null), which callers may pass back as `bent` to skip bending
- * an identical pose again.
+ * caller's frame or ring) -> region glow over -> particles on top. An optional `art.background`
+ * (an image of the cut-out's size, e.g. the uncut source behind a portrait) is bent with the same
+ * warp but gets no flicker, glow or particles: it is returned as `bent.background` for
+ * `drawFrame` to draw first. With no pin motion and no effects, `drawFrame(context, null)` draws
+ * the plain still token. Returns `bent` (`{ art, popOut, background, regions }` or null), which
+ * callers may pass back as `bent` to skip bending an identical pose again.
  */
 export function renderAnimationFrame({
   context,
   size,
   t,
-  art: { cutout, popOutImage = null, regions = {} },
+  art: { cutout, popOutImage = null, background = null, regions = {} },
   view,
   animation,
   createCanvas,
@@ -441,6 +455,7 @@ export function renderAnimationFrame({
     const layers = bendLayers({
       cutout,
       popOutImage,
+      background,
       regions,
       view,
       size,
@@ -456,6 +471,7 @@ export function renderAnimationFrame({
         createCanvas,
       }),
       popOut: applyFlicker(layers.popOut, flicker, size, createCanvas),
+      background: layers.background,
       regions: layers.regions,
     };
   }
