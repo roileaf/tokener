@@ -1008,3 +1008,30 @@ test('pop-out never draws semi-transparent art twice inside the frame opening', 
     assert.equal(alphaAt(frame, 50, 20), alphaAt(frame, 50, 80));
   }
 });
+
+test('the frame opening maps from token space onto the source image', async () => {
+  const { getOpeningInImage } = await import('../scripts/token-composer.js');
+  // 200x100 image drawn at twice its size, shifted 10px right: a 400x200 layout at (10, 0).
+  const layout = { x: 10, y: 0, width: 400, height: 200 };
+  assert.deepEqual(
+    getOpeningInImage({ layout, imageWidth: 200, imageHeight: 100, size: 200, radius: 60 }),
+    { x: 45, y: 50, radius: 30 },
+  );
+});
+
+test('pop-out brushes only reach outside the frame opening', async () => {
+  const { createCanvas } = await import('canvas');
+  const { clipOutsideOpening } = await import('../scripts/token-composer.js');
+  const canvas = createCanvas(40, 40);
+  const context = canvas.getContext('2d');
+  context.save();
+  clipOutsideOpening(context, { x: 20, y: 20, radius: 10 }, 40, 40);
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, 40, 40);
+  context.restore();
+  const alphaAt = (x, y) => context.getImageData(x, y, 1, 1).data[3];
+  assert.equal(alphaAt(20, 20), 0);
+  assert.equal(alphaAt(20, 13), 0);
+  assert.equal(alphaAt(20, 5), 255);
+  assert.equal(alphaAt(2, 2), 255);
+});

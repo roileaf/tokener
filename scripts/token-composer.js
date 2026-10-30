@@ -131,6 +131,26 @@ export function previewPointToImage({ layout, imageWidth, imageHeight, x, y }) {
   };
 }
 
+/** The frame opening (centred on a `size` token, `radius` in token pixels) in source-image pixels. */
+export function getOpeningInImage({ layout, imageWidth, imageHeight, size, radius }) {
+  const center = previewPointToImage({
+    layout,
+    imageWidth,
+    imageHeight,
+    x: size / 2,
+    y: size / 2,
+  });
+  return { x: center.x, y: center.y, radius: radius * center.scale };
+}
+
+/** Restricts drawing to everything outside a circle, the only place popped parts show. */
+export function clipOutsideOpening(context, { x, y, radius }, width, height) {
+  context.beginPath();
+  context.rect(0, 0, width, height);
+  context.arc(x, y, radius, 0, Math.PI * 2, true);
+  context.clip('evenodd');
+}
+
 // How far below the token centre the automatic pop-out reaches, as a fraction of the frame
 // opening radius. Hair, horns and raised weapons pop out; the lower body stays cropped.
 export const AUTO_POP_OUT_DEPTH = 0.35;
@@ -268,10 +288,7 @@ function clipToPopOutArea(context, { center, radius, popOutImage }) {
     context.rect(0, 0, size, getAutoPopOutCutoff(size, radius));
     context.clip();
   }
-  context.beginPath();
-  context.rect(0, 0, size, size);
-  context.arc(center, center, radius, 0, Math.PI * 2, true);
-  context.clip('evenodd');
+  clipOutsideOpening(context, { x: center, y: center, radius }, size, size);
 }
 
 /**

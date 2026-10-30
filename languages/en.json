@@ -155,7 +155,7 @@
   "PF2ETokener.Creator.MaskAutoTooltip": "Go back to popping out everything above the lower part of the frame (A)",
   "PF2ETokener.Creator.MaskClearTooltip": "Remove all pop-out areas.",
   "PF2ETokener.Creator.BrushSize": "Brush size",
-  "PF2ETokener.Creator.MaskHint": "With a mask tool active, faded parts stay inside the frame and outlined parts pop out.",
+  "PF2ETokener.Creator.MaskHint": "Only the art outside the frame can pop out, so brush strokes may cross the frame edge. With a mask tool active, outlined parts pop out and faded parts stay inside.",
   "PF2ETokener.Creator.BackgroundModeShort.auto": "Auto",
   "PF2ETokener.Creator.BackgroundModeShort.ai": "AI",
   "PF2ETokener.Creator.BackgroundModeShort.none": "Keep",

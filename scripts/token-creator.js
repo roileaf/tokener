@@ -76,7 +76,9 @@ import {
   drawRingSubject,
   drawTokenFrame,
   getPortraitSavePlan,
+  clipOutsideOpening,
   getAutoPopOutRect,
+  getOpeningInImage,
   getCreatedTokenFolder,
   getPortraitAspectRatio,
   getPortraitRect,
@@ -556,7 +558,7 @@ function prepareCreatorContext(app) {
       brushSize: localize('Creator.BrushSize', 'Brush size'),
       maskHint: localize(
         'Creator.MaskHint',
-        'With a mask tool active, faded parts stay inside the frame and outlined parts pop out.',
+        'Only the art outside the frame can pop out, so brush strokes may cross the frame edge. With a mask tool active, outlined parts pop out and faded parts stay inside.',
       ),
       shortcutsHeading: localize('Creator.Shortcuts', 'Shortcuts'),
       shortcuts: [
@@ -2473,6 +2475,19 @@ function paintPopOutMask(app, from, to, mode = app.maskTool) {
   const end = toImage(to);
   const context = app.popOutMask.getContext('2d');
   context.save();
+  // Popped parts only ever show outside the opening, so strokes can cross the frame edge freely.
+  clipOutsideOpening(
+    context,
+    getOpeningInImage({
+      layout,
+      imageWidth: app.cutout.width,
+      imageHeight: app.cutout.height,
+      size: PREVIEW_SIZE,
+      radius: getPopOutRadius(app, PREVIEW_SIZE),
+    }),
+    app.popOutMask.width,
+    app.popOutMask.height,
+  );
   context.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
   context.strokeStyle = '#ffffff';
   context.fillStyle = '#ffffff';
@@ -2520,8 +2535,16 @@ function drawMaskOverlay(context, app, size) {
   const imagePixelsPerPreviewPixel = app.cutout.width / Math.max(1, layout.width);
   const layers = getMaskHighlightLayers(app, imagePixelsPerPreviewPixel);
   if (!layers) return;
+  context.save();
+  clipOutsideOpening(
+    context,
+    { x: size / 2, y: size / 2, radius: getPopOutRadius(app, size) },
+    size,
+    size,
+  );
   context.drawImage(layers.tint, layout.x, layout.y, layout.width, layout.height);
   context.drawImage(layers.outline, layout.x, layout.y, layout.width, layout.height);
+  context.restore();
 }
 
 function getMaskHighlightLayers(app, imagePixelsPerPreviewPixel) {

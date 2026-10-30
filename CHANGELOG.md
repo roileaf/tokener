@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Pop-out brushes only work outside the frame opening: **Paint** and **Erase** strokes can cross the frame edge freely, and the outline and tint of popped parts are shown only where they actually pop out.
+
 ## 2.3.1 - 2026-10-30
 
 ### Fixed
