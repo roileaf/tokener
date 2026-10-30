@@ -635,3 +635,49 @@ test('particles and region glow stay inside the effect clip', () => {
   assert.ok(outside(render(null)) > 0, 'unclipped particles reach the corners');
   assert.equal(outside(render(clip)), 0);
 });
+
+test('a region pin hands back its region moved with the art, for the preview tint', () => {
+  const size = 160;
+  // A green square in the art, and the same square painted as the pin's region.
+  const cutout = createCanvas(size, size);
+  const art = cutout.getContext('2d');
+  art.fillStyle = '#c03020';
+  art.fillRect(0, 0, size, size);
+  art.fillStyle = '#00ff00';
+  art.fillRect(60, 60, 40, 40);
+  const region = createCanvas(size, size);
+  region.getContext('2d').fillStyle = '#ffffff';
+  region.getContext('2d').fillRect(60, 60, 40, 40);
+  const pin = {
+    id: 'p',
+    x: 80,
+    y: 80,
+    arm: 0,
+    region: 'p',
+    keyframes: [
+      { t: 0, dx: 8, dy: 0 },
+      { t: 0.5, dx: 8, dy: 0 },
+    ],
+  };
+  const bent = renderAnimationFrame({
+    context: createCanvas(size, size).getContext('2d'),
+    size,
+    t: 0.25,
+    art: { cutout, popOutImage: null, regions: { p: region } },
+    view: VIEW,
+    animation: { duration: 2, fps: 30, mode: 'loop', pins: [pin], effects: [] },
+    createCanvas,
+    drawFrame: () => {},
+  });
+  assert.ok(bent.regions.p, 'the pin region is bent too');
+  const regionRow = bent.regions.p.getContext('2d').getImageData(0, 80, size, 1).data;
+  const artRow = bent.art.getContext('2d').getImageData(0, 80, size, 1).data;
+  const inRegion = (x) => regionRow[x * 4 + 3] > 128;
+  const green = (x) => artRow[x * 4 + 1] > 128 && artRow[x * 4] < 128;
+  let left = -1;
+  for (let x = 0; x < size; x += 1) {
+    assert.equal(inRegion(x), green(x), `tint and art agree at x ${x}`);
+    if (left < 0 && inRegion(x)) left = x;
+  }
+  assert.ok(left >= 64, `the region moved right with the pin (left edge ${left})`);
+});

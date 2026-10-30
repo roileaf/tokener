@@ -3033,8 +3033,15 @@ function drawEffectRegionOverlay(context, app, size) {
   if (app.maskTool === 'region') key = getRegionTarget(app)?.key ?? null;
   // The pin tool shows the region the selected pin moves.
   else if (app.maskTool === 'pin' && canEditPins(app)) key = getSelectedPin(app)?.region ?? null;
-  const region = key ? app.effectRegions[key] : null;
-  if (!region) return;
+  const painted = key ? app.effectRegions[key] : null;
+  if (!painted) return;
+  // While the art moves, tint the region where the art has taken it (the bent copy from this
+  // frame, in token space); while painting, the preview is still, so tint the paint as it is.
+  const bent =
+    app.maskTool !== 'region' && shouldAnimatePreview(app) && app._previewBend?.key.size === size
+      ? app._previewBend.bent?.regions?.[key]
+      : null;
+  const region = bent ?? painted;
   // One tint canvas is reused (reallocated only for a new size) and redrawn when the region or
   // its paint changes, so strokes do not allocate a full-resolution canvas per move.
   let cached = app._regionTint;
@@ -3055,7 +3062,7 @@ function drawEffectRegionOverlay(context, app, size) {
     cached.region = region;
     cached.version = app._regionVersion;
   }
-  const layout = getPreviewLayout(app, size);
+  const layout = bent ? { x: 0, y: 0, width: size, height: size } : getPreviewLayout(app, size);
   context.save();
   context.globalAlpha = REGION_OVERLAY_ALPHA;
   context.drawImage(tint, layout.x, layout.y, layout.width, layout.height);

@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- A region's tint now moves with the art while it animates, instead of staying where it was painted; while painting, the art holds still as before.
 - With **Keep background** on, the pop-out brushes (**B** / **E**) and click-to-select are greyed out instead of looking usable and doing nothing.
 
 ## 2.3.2 - 2026-10-30
