@@ -40,6 +40,8 @@ import {
   createPin,
   getFrameTimes,
   hasMotion,
+  KEYFRAME_MERGE,
+  loopDistance,
   normalizeAnimation,
   removeKeyframe,
   samplePinOffset,
@@ -50,12 +52,17 @@ import {
   getAnimatedOutputSize,
   getAnimatedSavePlan,
   getPinHitRadius,
+  ensurePinArm,
   getKeyframeAt,
+  getKeyframeMarkerTimes,
+  getKeyframeTime,
+  getPinToolEscapeAction,
   getPinPreviewPoints,
   getPinDragMode,
   getPresetAmplitude,
   getPresetTargets,
   getRotationArm,
+  isPastDragDeadZone,
   isPresetAvailable,
   renderAnimationFrame,
   resetAnimationForNewSource,
@@ -170,8 +177,6 @@ const KEYFRAME_EASES = ['smooth', 'linear', 'hold'];
 const ANIMATION_MODES = ['loop', 'pingpong'];
 const MAX_KEYFRAME_ROTATION = 45;
 const LOOP_LENGTHS = [1, 1.5, 2, 2.5, 3, 3.5, 4];
-// Keyframes closer than this to the current time count as "at" it (matches animation.js merging).
-const KEYFRAME_TOLERANCE = 1 / 120;
 const TEXT_ENTRY_SELECTOR =
   'input:not([type]), input[type="text"], input[type="search"], input[type="number"], textarea, select, [contenteditable="true"]';
 
@@ -767,7 +772,10 @@ function bindPreviewInteractions(app, canvas) {
       event.preventDefault();
       if (!canEditPins(app)) return;
       drag = startPinDrag(app, getTokenPoint(app, canvas, event), event.button, event.shiftKey);
-      if (drag) canvas.setPointerCapture?.(event.pointerId);
+      if (drag) {
+        drag.press = { x: event.clientX, y: event.clientY };
+        canvas.setPointerCapture?.(event.pointerId);
+      }
       return;
     }
     if (isCleanupTool(app.maskTool) && app.cutout) {
@@ -839,6 +847,9 @@ function bindPreviewInteractions(app, canvas) {
       return;
     }
     if (drag.pinId) {
+      // A small tremor on a press is still a click: it neither keyframes nor keeps the selection.
+      if (!drag.moved && !isPastDragDeadZone(drag.press, { x: event.clientX, y: event.clientY }))
+        return;
       dragPin(app, drag, getTokenPoint(app, canvas, event));
       return;
     }
@@ -923,6 +934,18 @@ function handleCreatorKeyDown(app, event) {
       selectMaskTool(app, command.replace('tool-', ''));
       return;
     case 'tool-move':
+      if (
+        event.key === 'Escape' &&
+        getPinToolEscapeAction({
+          maskTool: app.maskTool,
+          selectedCount: app.selectedPinIds.length,
+        }) === 'clear-selection'
+      ) {
+        app.selectedPinIds = [];
+        syncAnimationControls(app);
+        renderCreatorPreview(app);
+        return;
+      }
       setMaskTool(app, null);
       return;
     case 'tool-pin':
@@ -1710,8 +1733,9 @@ function selectPinTool(app) {
   if (canEditPins(app)) setMaskTool(app, 'pin');
 }
 
-function isAtTime(keyTime, t) {
-  return Math.abs(keyTime - t) < KEYFRAME_TOLERANCE;
+/** Whether keyframe time `keyTime` is the keyframe time `keyT` (seam-aware, as setKeyframe merges). */
+function isAtTime(keyTime, keyT) {
+  return loopDistance(keyTime, keyT) < KEYFRAME_MERGE;
 }
 
 function formatLoopPercent(t) {
@@ -1885,11 +1909,7 @@ function setPrimaryKeyframe(app, changes) {
   stopAnimationPlayback(app);
   updateAnimationPin(app, pin.id, (entry) => {
     const next = updateKeyframeAt(entry, app.animationTime, changes, app.animation.mode);
-    if (!(next.arm > 0) && 'rot' in changes) {
-      const arm = getRotationArm(app.cutout);
-      if (arm > 0) next.arm = arm;
-    }
-    return next;
+    return 'rot' in changes ? ensurePinArm(next, app.cutout) : next;
   });
   syncAnimationControls(app);
   renderCreatorPreview(app);
@@ -1899,7 +1919,9 @@ function removeKeyframeAtTime(app) {
   const pin = getSelectedPin(app);
   if (!pin || !canEditPins(app)) return;
   stopAnimationPlayback(app);
-  updateAnimationPin(app, pin.id, (entry) => removeKeyframe(entry, app.animationTime));
+  updateAnimationPin(app, pin.id, (entry) =>
+    removeKeyframe(entry, getKeyframeTime(app.animationTime, app.animation.mode)),
+  );
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
@@ -1910,7 +1932,12 @@ function applyAnimationPreset(app, preset) {
   // Selection order matters: Wave staggers its sway along it.
   const ids = getPresetTargets(app.animation.pins, app.selectedPinIds, preset);
   const amplitude = getPresetAmplitude(preset, app.cutout);
-  setAnimationPins(app, applyPreset(app.animation.pins, ids, preset, { amplitude }));
+  // Pins made before rotation existed get an arm so Look (and later rotation) visibly turns them.
+  const targets = new Set(ids);
+  const pins = app.animation.pins.map((pin) =>
+    targets.has(pin.id) ? ensurePinArm(pin, app.cutout) : pin,
+  );
+  setAnimationPins(app, applyPreset(pins, ids, preset, { amplitude }));
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
@@ -2056,7 +2083,7 @@ function syncAnimationControls(app) {
   const available = Boolean(app.animationSupported);
   getAnimationSection(app)?.setAttribute('data-available', available ? 'true' : 'false');
   const pin = getSelectedPin(app);
-  const atKeyframe = Boolean(pin?.keyframes.some((key) => isAtTime(key.t, app.animationTime)));
+  const atKeyframe = Boolean(pin && getKeyframeAt(pin, app.animationTime, app.animation.mode));
   const moving = hasMotion(app.animation);
   const enabled = available && Boolean(app.cutout) && !app.busy;
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
@@ -2097,15 +2124,19 @@ function syncAnimationControls(app) {
   if (row) {
     row.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => marker.remove());
     for (const key of pin?.keyframes ?? []) {
-      const marker = row.ownerDocument.createElement('button');
-      marker.type = 'button';
-      marker.className = 'pf2e-tokener-creator-keyframe';
-      marker.dataset.creatorAction = 'keyframe-seek';
-      marker.dataset.time = String(key.t);
-      marker.style.left = `${key.t * 100}%`;
-      marker.setAttribute('aria-label', formatLoopPercent(key.t));
-      marker.disabled = !enabled;
-      row.append(marker);
+      // In ping-pong each keyframe is passed twice per loop, so it gets a marker on both legs.
+      for (const time of getKeyframeMarkerTimes(key.t, app.animation.mode)) {
+        const marker = row.ownerDocument.createElement('button');
+        marker.type = 'button';
+        marker.className = 'pf2e-tokener-creator-keyframe';
+        marker.dataset.creatorAction = 'keyframe-seek';
+        marker.dataset.time = String(time);
+        marker.dataset.key = String(key.t);
+        marker.style.left = `${time * 100}%`;
+        marker.setAttribute('aria-label', formatLoopPercent(time));
+        marker.disabled = !enabled;
+        row.append(marker);
+      }
     }
   }
   syncAnimationTime(app);
@@ -2122,8 +2153,9 @@ function syncAnimationTime(app) {
   if (label) label.textContent = formatLoopPercent(t);
   const playhead = root.querySelector('[data-animation-playhead]');
   if (playhead) playhead.style.left = `${t * 100}%`;
+  const keyT = getKeyframeTime(t, app.animation.mode);
   root.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => {
-    marker.classList.toggle('is-current', isAtTime(Number(marker.dataset.time), t));
+    marker.classList.toggle('is-current', isAtTime(Number(marker.dataset.key), keyT));
   });
   syncKeyframeControls(app, root);
 }
@@ -2134,7 +2166,7 @@ function syncAnimationTime(app) {
  */
 function syncKeyframeControls(app, root) {
   const pin = getSelectedPin(app);
-  const key = pin ? getKeyframeAt(pin, app.animationTime) : null;
+  const key = pin ? getKeyframeAt(pin, app.animationTime, app.animation.mode) : null;
   const rot = key
     ? (key.rot ?? 0)
     : pin

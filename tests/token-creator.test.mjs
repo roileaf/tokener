@@ -1135,3 +1135,93 @@ test('a pin that only rotates is not drawn as an anchor', async () => {
     false,
   );
 });
+
+test('ping-pong keyframe time folds the scrub time; loop keeps it', async () => {
+  const { getKeyframeTime } = await import('../scripts/token-animation.js');
+  assert.equal(getKeyframeTime(0.3, 'loop'), 0.3);
+  assert.equal(getKeyframeTime(0.25, 'pingpong'), 0.5);
+  assert.equal(getKeyframeTime(0.75, 'pingpong'), 0.5);
+  assert.equal(getKeyframeTime(0, 'pingpong'), 0);
+  // The apex stays clear of the seam so it never merges with a keyframe at 0.
+  const apex = getKeyframeTime(0.5, 'pingpong');
+  assert.ok(apex < 1 && apex > 0.95);
+  const { loopDistance, KEYFRAME_MERGE } = await import('../scripts/animation.js');
+  assert.ok(loopDistance(apex, 0) >= KEYFRAME_MERGE);
+});
+
+test('ping-pong: adding keyframes at any time leaves the motion unchanged', async () => {
+  const { updateKeyframeAt } = await import('../scripts/token-animation.js');
+  const { createPin, samplePinOffset, setKeyframe } = await import('../scripts/animation.js');
+  let pin = setKeyframe(createPin({ x: 0, y: 0 }), 0, { dx: 0, dy: 0, ease: 'linear' });
+  pin = setKeyframe(pin, 0.5, { dx: 10, dy: -4, ease: 'linear' });
+  pin = setKeyframe(pin, 0.8, { dx: 4, dy: 2, ease: 'linear' });
+  const grid = Array.from({ length: 41 }, (_, i) => i / 40);
+  const before = grid.map((t) => samplePinOffset(pin, t, 'pingpong'));
+  for (const t of [0.1, 0.2, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9]) {
+    const next = updateKeyframeAt(pin, t, {}, 'pingpong');
+    grid.forEach((s, i) => {
+      const pose = samplePinOffset(next, s, 'pingpong');
+      assert.ok(Math.abs(pose.dx - before[i].dx) < 1e-9, `add ${t}, sample ${s}`);
+      assert.ok(Math.abs(pose.dy - before[i].dy) < 1e-9, `add ${t}, sample ${s}`);
+    });
+  }
+  // Reviewer repro: smooth keys 0 -> 0.5; adding at t = 0.25 hits the existing 0.5 key.
+  let smooth = setKeyframe(createPin({ x: 0, y: 0 }), 0, { dx: 0, dy: 0 });
+  smooth = setKeyframe(smooth, 0.5, { dx: 10, dy: 0 });
+  const at = samplePinOffset(smooth, 0.125, 'pingpong').dx;
+  const added = updateKeyframeAt(smooth, 0.25, {}, 'pingpong');
+  assert.equal(added.keyframes.length, 2);
+  assert.equal(samplePinOffset(added, 0.125, 'pingpong').dx, at);
+});
+
+test('ping-pong: a drag at scrub time t keyframes getKeyframeTime(t)', async () => {
+  const { updateKeyframeAt, getKeyframeAt, getKeyframeTime } =
+    await import('../scripts/token-animation.js');
+  const { createPin, samplePinOffset, setKeyframe } = await import('../scripts/animation.js');
+  let pin = setKeyframe(createPin({ x: 0, y: 0 }), 0, { dx: 0, dy: 0 });
+  pin = setKeyframe(pin, 0.9, { dx: 2, dy: 0 });
+  const moved = updateKeyframeAt(pin, 0.3, { dx: 7, dy: 1 }, 'pingpong');
+  assert.ok(moved.keyframes.some((k) => Math.abs(k.t - getKeyframeTime(0.3, 'pingpong')) < 1e-9));
+  assert.equal(samplePinOffset(moved, 0.3, 'pingpong').dx, 7);
+  assert.equal(samplePinOffset(moved, 0.7, 'pingpong').dx, 7);
+  assert.equal(getKeyframeAt(moved, 0.7, 'pingpong').dx, 7);
+  assert.equal(getKeyframeAt(moved, 0.3, 'loop'), null);
+});
+
+test('keyframe lookup is seam-aware like setKeyframe merging', async () => {
+  const { getKeyframeAt } = await import('../scripts/token-animation.js');
+  const pin = { id: 'a', x: 0, y: 0, keyframes: [{ t: 0, dx: 1, dy: 0 }] };
+  assert.equal(getKeyframeAt(pin, 0.998)?.dx, 1);
+  assert.equal(getKeyframeAt(pin, 0.98), null);
+});
+
+test('keyframe markers: once in loop, on both legs in ping-pong', async () => {
+  const { getKeyframeMarkerTimes } = await import('../scripts/token-animation.js');
+  assert.deepEqual(getKeyframeMarkerTimes(0.4, 'loop'), [0.4]);
+  assert.deepEqual(getKeyframeMarkerTimes(0.4, 'pingpong'), [0.2, 0.8]);
+  assert.deepEqual(getKeyframeMarkerTimes(0, 'pingpong'), [0]);
+});
+
+test('ensurePinArm backfills a missing rotation arm only', async () => {
+  const { ensurePinArm } = await import('../scripts/token-animation.js');
+  const cutout = { width: 100, height: 200 };
+  const old = { id: 'a', x: 0, y: 0, keyframes: [] };
+  assert.equal(ensurePinArm(old, cutout).arm, 24);
+  assert.equal(old.arm, undefined);
+  const armed = { ...old, arm: 7 };
+  assert.equal(ensurePinArm(armed, cutout), armed);
+  assert.equal(ensurePinArm(old, { width: 0, height: 0 }), old);
+});
+
+test('pin presses need 3 px of movement before they drag', async () => {
+  const { isPastDragDeadZone } = await import('../scripts/token-animation.js');
+  assert.equal(isPastDragDeadZone({ x: 10, y: 10 }, { x: 12, y: 11 }), false);
+  assert.equal(isPastDragDeadZone({ x: 10, y: 10 }, { x: 13, y: 10 }), true);
+});
+
+test('Escape with the pin tool clears a selection first, then switches to Move', async () => {
+  const { getPinToolEscapeAction } = await import('../scripts/token-animation.js');
+  assert.equal(getPinToolEscapeAction({ maskTool: 'pin', selectedCount: 2 }), 'clear-selection');
+  assert.equal(getPinToolEscapeAction({ maskTool: 'pin', selectedCount: 0 }), 'move');
+  assert.equal(getPinToolEscapeAction({ maskTool: 'paint', selectedCount: 2 }), 'move');
+});

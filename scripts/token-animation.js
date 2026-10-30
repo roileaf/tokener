@@ -1,6 +1,8 @@
 import {
   DEFAULT_ANIMATION,
+  KEYFRAME_MERGE,
   hasMotion,
+  loopDistance,
   samplePinOffset,
   samplePins,
   setKeyframe,
@@ -515,8 +517,44 @@ const PRESET_AMPLITUDE = 0.03;
 const SHIVER_AMPLITUDE = 0.01;
 /** Rotation arm of a new pin as a share of the cut-out's long side. */
 export const ROTATION_ARM_RATIO = 0.12;
-/** Keyframes within this loop distance of the current time count as "at" it (as in setKeyframe). */
-const KEYFRAME_TOLERANCE = 1 / 120;
+/** Ping-pong keyframes stop short of 1 so the apex never merges with a keyframe at 0. */
+const PINGPONG_MAX_KEY = 1 - 2 * KEYFRAME_MERGE;
+/** Screen pixels a press on a pin must travel before it counts as a drag. */
+const PIN_DRAG_DEAD_ZONE = 3;
+
+/**
+ * The keyframe time edited at scrub time t: t itself in a loop; in ping-pong the folded time
+ * `u = 1 - |1 - 2t|` that the preview samples (kept just below 1).
+ */
+export function getKeyframeTime(t, mode = 'loop') {
+  const value = Number(t) || 0;
+  if (mode !== 'pingpong') return value;
+  const raw = Math.min(1, Math.max(0, value));
+  return Math.min(PINGPONG_MAX_KEY, 1 - Math.abs(1 - 2 * raw));
+}
+
+/** Scrub times where a keyframe at `keyT` sits on the timeline: twice in ping-pong (out and back). */
+export function getKeyframeMarkerTimes(keyT, mode = 'loop') {
+  if (mode !== 'pingpong' || keyT <= 0) return [keyT];
+  return [keyT / 2, 1 - keyT / 2];
+}
+
+/** Gives a pin without a rotation arm (made before rotation existed) one sized to the cut-out. */
+export function ensurePinArm(pin, cutout) {
+  if (pin.arm > 0) return pin;
+  const arm = getRotationArm(cutout ?? {});
+  return arm > 0 ? { ...pin, arm } : pin;
+}
+
+/** Whether a press moved far enough (screen px) to count as a drag rather than a click. */
+export function isPastDragDeadZone(start, point, threshold = PIN_DRAG_DEAD_ZONE) {
+  return Math.hypot(point.x - start.x, point.y - start.y) >= threshold;
+}
+
+/** Escape under the pin tool first clears a selection, then switches to Move. */
+export function getPinToolEscapeAction({ maskTool, selectedCount }) {
+  return maskTool === 'pin' && selectedCount > 0 ? 'clear-selection' : 'move';
+}
 
 /**
  * Whether a preset can run: Breathe scales pins about their centre (2+ pins), Hover lifts every
@@ -548,26 +586,38 @@ export function getRotationArm({ width, height }) {
   return Math.round(ROTATION_ARM_RATIO * Math.max(width || 0, height || 0));
 }
 
-function loopGap(a, b) {
-  const gap = Math.abs(a - b);
-  return Math.min(gap, 1 - gap);
+function findKeyAt(pin, keyT) {
+  return pin?.keyframes?.find((key) => loopDistance(key.t, keyT) < KEYFRAME_MERGE) ?? null;
 }
 
-/** The pin's keyframe at loop time t (within 1/120), or null. */
-export function getKeyframeAt(pin, t) {
-  return pin?.keyframes?.find((key) => loopGap(key.t, t) < KEYFRAME_TOLERANCE) ?? null;
+/** The pin's keyframe edited at scrub time t (see getKeyframeTime), within 1/120, or null. */
+export function getKeyframeAt(pin, t, mode = 'loop') {
+  return findKeyAt(pin, getKeyframeTime(t, mode));
+}
+
+/** Easing of the segment that a new keyframe at keyT splits, so inserting it keeps the motion. */
+function segmentEase(keys, keyT, mode) {
+  let prev = null;
+  for (const key of keys) if (key.t <= keyT) prev = key;
+  if (!prev && mode !== 'pingpong') prev = keys[keys.length - 1];
+  return prev?.ease ?? 'smooth';
 }
 
 /**
- * Changes `rot` and/or `ease` of the pin's keyframe at t, creating the keyframe from the sampled
- * pose when there is none. Returns a new pin.
+ * Changes the pin's keyframe edited at scrub time t (`dx`/`dy`/`rot`/`ease`), creating it from
+ * the pose at that keyframe time when there is none (inheriting the easing of the segment it
+ * splits). Returns a new pin.
  */
 export function updateKeyframeAt(pin, t, changes, mode = 'loop') {
-  const key = getKeyframeAt(pin, t);
-  const base = key
-    ? { dx: key.dx, dy: key.dy, rot: key.rot ?? 0, ease: key.ease ?? 'smooth' }
-    : { ...samplePinOffset(pin, t, mode), ease: 'smooth' };
-  return setKeyframe(pin, key ? key.t : t, { ...base, ...changes });
+  const keyT = getKeyframeTime(t, mode);
+  const key = findKeyAt(pin, keyT);
+  let base;
+  if (key) base = { dx: key.dx, dy: key.dy, rot: key.rot ?? 0, ease: key.ease ?? 'smooth' };
+  else {
+    const at = mode === 'pingpong' ? keyT / 2 : keyT;
+    base = { ...samplePinOffset(pin, at, mode), ease: segmentEase(pin.keyframes, keyT, mode) };
+  }
+  return setKeyframe(pin, key ? key.t : keyT, { ...base, ...changes });
 }
 
 /**

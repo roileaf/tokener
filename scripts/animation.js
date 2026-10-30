@@ -10,7 +10,8 @@ export const ANIMATION_PRESETS = [
   'look',
 ];
 
-const KEYFRAME_MERGE = 1 / 120;
+/** Keyframes closer than this (around the loop seam) count as the same time. */
+export const KEYFRAME_MERGE = 1 / 120;
 const BREATHE_SCALE = 0.03;
 const FLAP_PULL = 0.3;
 const WAVE_DELAY = 0.12;
@@ -36,7 +37,7 @@ function wrapTime(t) {
 }
 
 /** Distance between two loop times, measured around the loop seam (0.999 is next to 0). */
-function loopDistance(a, b) {
+export function loopDistance(a, b) {
   const gap = Math.abs(a - b);
   return Math.min(gap, 1 - gap);
 }
