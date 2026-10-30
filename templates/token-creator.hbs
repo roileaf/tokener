@@ -183,8 +183,8 @@
           <summary><i class='fas fa-keyboard'></i> {{labels.shortcutsHeading}}</summary>
           <dl class='pf2e-tokener-creator-shortcuts'>
             {{#each labels.shortcuts}}
-              <dt {{#if popOut}}data-pop-out-tools{{/if}}>{{{keys}}}</dt>
-              <dd {{#if popOut}}data-pop-out-tools{{/if}}>{{label}}</dd>
+              <dt {{#if popOut}}data-pop-out-tools{{/if}} {{#if tokenOnly}}data-token-only{{/if}}>{{{keys}}}</dt>
+              <dd {{#if popOut}}data-pop-out-tools{{/if}} {{#if tokenOnly}}data-token-only{{/if}}>{{label}}</dd>
             {{/each}}
           </dl>
         </details>

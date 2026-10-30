@@ -911,3 +911,41 @@ test('pin dots map from source to preview space with the current layout', async 
   assert.equal(atStart[1].x, 105);
   assert.equal(atStart[1].selected, false);
 });
+
+test('preset targets: bob and sway use the selected pin, breathe uses every pin', async () => {
+  const { getPresetTargets } = await import('../scripts/token-animation.js');
+  const pins = [
+    { id: 'a', x: 0, y: 0, keyframes: [] },
+    { id: 'b', x: 10, y: 0, keyframes: [] },
+    { id: 'c', x: 0, y: 10, keyframes: [] },
+  ];
+  assert.deepEqual(getPresetTargets(pins, 'b', 'bob'), ['b']);
+  assert.deepEqual(getPresetTargets(pins, 'b', 'sway'), ['b']);
+  assert.deepEqual(getPresetTargets(pins, null, 'bob'), []);
+  assert.deepEqual(getPresetTargets(pins, 'missing', 'sway'), []);
+  assert.deepEqual(getPresetTargets(pins, null, 'breathe'), ['a', 'b', 'c']);
+  assert.deepEqual(getPresetTargets(pins, 'b', 'breathe'), ['a', 'b', 'c']);
+});
+
+test('breathe on three pins through the creator path gives real motion', async () => {
+  const { getPresetTargets } = await import('../scripts/token-animation.js');
+  const { applyPreset, hasMotion } = await import('../scripts/animation.js');
+  const pins = [
+    { id: 'a', x: 0, y: 0, keyframes: [] },
+    { id: 'b', x: 100, y: 0, keyframes: [] },
+    { id: 'c', x: 50, y: 90, keyframes: [] },
+  ];
+  const ids = getPresetTargets(pins, 'a', 'breathe');
+  const next = applyPreset(pins, ids, 'breathe', { amplitude: 3 });
+  assert.equal(hasMotion({ pins: next }), true);
+  assert.ok(next.every((pin) => pin.keyframes.length === 2));
+});
+
+test('dragging a pin moves its rest position until it has keyframes', async () => {
+  const { getPinDragMode } = await import('../scripts/token-animation.js');
+  assert.equal(getPinDragMode({ id: 'a', x: 0, y: 0, keyframes: [] }), 'rest');
+  assert.equal(
+    getPinDragMode({ id: 'a', x: 0, y: 0, keyframes: [{ t: 0, dx: 0, dy: 0 }] }),
+    'keyframe',
+  );
+});

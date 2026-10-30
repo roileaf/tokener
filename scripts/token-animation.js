@@ -81,3 +81,18 @@ export function getPinPreviewPoints({ pins, layout, cutoutWidth, t = 0, selected
     };
   });
 }
+
+/**
+ * Which pins a preset writes: Bob and Sway move the selected pin only (none when nothing is
+ * selected); Breathe scales every pin about their shared centre.
+ */
+export function getPresetTargets(pins, selectedPinId, preset) {
+  const list = pins ?? [];
+  if (preset === 'breathe') return list.map((pin) => pin.id);
+  return list.some((pin) => pin.id === selectedPinId) ? [selectedPinId] : [];
+}
+
+/** Dragging a pin without keyframes moves where it rests; otherwise it sets its offset now. */
+export function getPinDragMode(pin) {
+  return pin?.keyframes?.length ? 'keyframe' : 'rest';
+}

@@ -46,7 +46,8 @@ import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picke
 import {
   bendTokenArt,
   getPinPreviewPoints,
-  isAnchorPin,
+  getPinDragMode,
+  getPresetTargets,
   resetAnimationForNewSource,
 } from './token-animation.js';
 import { canEncodeAnimation } from './webm-alpha.js';
@@ -556,6 +557,14 @@ function prepareCreatorContext(app) {
         {
           keys: `${kbd('Q')} ${kbd('R')} ${kbd('G')}`,
           label: localize('Creator.ShortcutCleanup', 'Remove, restore, fill remove'),
+        },
+        {
+          keys: `${kbd('P')}`,
+          label: localize(
+            'Creator.ShortcutPin',
+            'Pins: click to add, drag to move or keyframe, right-click to remove',
+          ),
+          tokenOnly: true,
         },
         {
           keys: `${kbd('Shift')} ${localize('Creator.ShortcutDrag', 'drag')}`,
@@ -1607,13 +1616,6 @@ function getSelectedPin(app) {
   return app.animation.pins.find((pin) => pin.id === app.selectedPinId) ?? null;
 }
 
-/** Presets go on the selected pin, or else on every pin that already moves. */
-function getPresetTargets(app) {
-  const selected = getSelectedPin(app);
-  if (selected) return [selected.id];
-  return app.animation.pins.filter((pin) => !isAnchorPin(pin)).map((pin) => pin.id);
-}
-
 function setAnimationPins(app, pins) {
   app.animation = { ...app.animation, pins };
   if (!pins.some((pin) => pin.id === app.selectedPinId)) app.selectedPinId = null;
@@ -1695,7 +1697,6 @@ function startPinDrag(app, point, button) {
   stopAnimationPlayback(app);
   const source = previewPointToSource(app, point);
   let pin = hit ? app.animation.pins.find((entry) => entry.id === hit.id) : null;
-  const placing = !pin;
   if (!pin) {
     const { width, height } = app.cutout;
     if (source.x < 0 || source.y < 0 || source.x >= width || source.y >= height) return null;
@@ -1708,7 +1709,7 @@ function startPinDrag(app, point, button) {
   renderCreatorPreview(app);
   return {
     pinId: pin.id,
-    moveRest: placing || !app.animation.pins.some((entry) => entry.keyframes.length),
+    moveRest: getPinDragMode(pin) === 'rest',
     grabX: source.x - (pin.x + offset.dx),
     grabY: source.y - (pin.y + offset.dy),
   };
@@ -1747,7 +1748,7 @@ function removeKeyframeAtTime(app) {
 
 function applyAnimationPreset(app, preset) {
   if (!ANIMATION_PRESETS.includes(preset) || !canEditPins(app)) return;
-  const ids = getPresetTargets(app);
+  const ids = getPresetTargets(app.animation.pins, app.selectedPinId, preset);
   if (!ids.length) return;
   const amplitude = PRESET_AMPLITUDE * Math.max(app.cutout.width, app.cutout.height);
   setAnimationPins(app, applyPreset(app.animation.pins, ids, preset, { amplitude }));
@@ -1758,6 +1759,7 @@ function applyAnimationPreset(app, preset) {
 function startAnimationPlayback(app) {
   const requestFrame = globalThis.requestAnimationFrame;
   if (app.animationPlaying || !canEditPins(app) || typeof requestFrame !== 'function') return;
+  if (!hasMotion(app.animation)) return;
   app.animationPlaying = true;
   let last = null;
   const step = (now) => {
@@ -1791,11 +1793,13 @@ function stopAnimationPlayback(app) {
 
 /**
  * The token art bent to the current loop time, or null to draw it still: in the portrait, with
- * no motion, or while a mask or touch-up tool edits the unbent art. Cached per pose.
+ * no motion, or while a mask or touch-up tool edits the unbent art and playback is paused.
+ * Cached per pose.
  */
 function getPreviewBend(app, size) {
   if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return null;
-  if (app.maskTool && app.maskTool !== 'pin') return null;
+  // Mask and touch-up tools edit the still art, so it stays unbent there unless playing.
+  if (app.maskTool && app.maskTool !== 'pin' && !app.animationPlaying) return null;
   const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
   const key = {
     animation: app.animation,
@@ -1867,14 +1871,17 @@ function syncAnimationControls(app) {
   getAnimationSection(app)?.setAttribute('data-available', available ? 'true' : 'false');
   const pin = getSelectedPin(app);
   const atKeyframe = Boolean(pin?.keyframes.some((key) => isAtTime(key.t, app.animationTime)));
-  const hasPresetTargets = getPresetTargets(app).length > 0;
+  const moving = hasMotion(app.animation);
   const enabled = available && Boolean(app.cutout) && !app.busy;
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
     let disabled = !enabled;
     if (action === 'keyframe-add') disabled ||= !pin;
     if (action === 'keyframe-remove') disabled ||= !atKeyframe;
-    if (action === 'animation-preset') disabled ||= !hasPresetTargets;
+    if (action === 'animation-preset')
+      disabled ||= !getPresetTargets(app.animation.pins, app.selectedPinId, control.dataset.preset)
+        .length;
+    if (action === 'animation-play') disabled ||= !moving && !app.animationPlaying;
     control.disabled = disabled;
   });
 
@@ -1946,8 +1953,6 @@ function shouldShowMaskOverlay(app) {
 }
 
 function setMaskTool(app, tool) {
-  // Mask and touch-up tools edit the still art, so playback stops when one is picked.
-  if (tool !== 'pin') stopAnimationPlayback(app);
   app.maskTool = tool;
   if (tool && tool !== 'pin' && !isCleanupTool(tool)) ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
