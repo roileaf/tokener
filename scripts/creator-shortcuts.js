@@ -43,6 +43,15 @@ export function getMaskShortcut({ key, ctrlKey, metaKey, shiftKey, altKey } = {}
  */
 const CLEANUP_TOOLS = ['cut', 'restore', 'wand'];
 
+/**
+ * The toolbar button that shows a tool as active. Paint and erase are the two modes of the one
+ * pop-out brush (E or X starts it in erase mode), so both light up the brush button.
+ */
+export function getToolButton(tool) {
+  if (!tool) return 'move';
+  return tool === 'erase' ? 'paint' : tool;
+}
+
 /** Background cleanup tools edit the cut-out itself; the others edit the pop-out mask. */
 export function isCleanupTool(tool) {
   return CLEANUP_TOOLS.includes(tool);

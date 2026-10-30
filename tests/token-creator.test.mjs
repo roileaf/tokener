@@ -1035,3 +1035,11 @@ test('pop-out brushes only reach outside the frame opening', async () => {
   assert.equal(alphaAt(20, 5), 255);
   assert.equal(alphaAt(2, 2), 255);
 });
+
+test('the pop-out brush button stands for both brush modes', async () => {
+  const { getToolButton } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getToolButton('paint'), 'paint');
+  assert.equal(getToolButton('erase'), 'paint');
+  assert.equal(getToolButton('cut'), 'cut');
+  assert.equal(getToolButton(null), 'move');
+});

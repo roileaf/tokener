@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Pop-out brushes only work outside the frame opening: **Paint** and **Erase** strokes can cross the frame edge freely, and the outline and tint of popped parts are shown only where they actually pop out.
+- **Paint** and **Erase** are now one **Pop-out brush** (**B**): drag to pop parts out, right-drag or Alt-drag to keep them inside (**E** still starts it in keep-inside mode and **X** swaps). The brush only works outside the frame opening, so strokes can cross the frame edge freely, and the outline and tint of popped parts are shown only where they actually pop out.
 
 ## 2.3.1 - 2026-10-30
 

@@ -29,6 +29,7 @@ import {
 import {
   getMaskShortcut,
   getStrokeMode,
+  getToolButton,
   isCleanupTool,
   stepBrushSize,
   stepViewScale,
@@ -520,11 +521,7 @@ function prepareCreatorContext(app) {
       maskMoveTooltip: localize('Creator.MaskMoveTooltip', 'Move and zoom the art (V)'),
       maskPaintTooltip: localize(
         'Creator.MaskPaintTooltip',
-        'Paint the parts that should break out of the frame (B)',
-      ),
-      maskEraseTooltip: localize(
-        'Creator.MaskEraseTooltip',
-        'Erase parts so they stay inside the frame (E)',
+        'Pop-out brush (B): drag over parts to pop them out of the frame, right-drag or Alt-drag to keep them inside',
       ),
       maskSelectTooltip: localize(
         'Creator.MaskSelectTooltip',
@@ -584,17 +581,17 @@ function prepareCreatorContext(app) {
         },
         {
           keys: `${kbd('Shift')} ${localize('Creator.ShortcutDrag', 'drag')}`,
-          label: localize('Creator.ShortcutPaint', 'Paint'),
+          label: localize('Creator.ShortcutPaint', 'Pop parts out (any tool)'),
           popOut: true,
         },
         {
           keys: `${kbd('Alt')} / ${kbd('Right')} ${localize('Creator.ShortcutDrag', 'drag')}`,
-          label: localize('Creator.ShortcutErase', 'Erase'),
+          label: localize('Creator.ShortcutErase', 'Keep parts inside (any tool)'),
           popOut: true,
         },
         {
-          keys: `${kbd('B')} ${kbd('E')} ${kbd('V')}`,
-          label: localize('Creator.ShortcutTools', 'Paint, erase, move'),
+          keys: `${kbd('B')} ${kbd('V')}`,
+          label: localize('Creator.ShortcutTools', 'Pop-out brush, move'),
           popOut: true,
         },
         ...(areAiToolsEnabled()
@@ -1020,7 +1017,6 @@ async function handleCreatorClick(app, event) {
       applyAnimationPreset(app, button.dataset.preset);
       return;
     case 'mask-paint':
-    case 'mask-erase':
     case 'mask-select':
     case 'mask-cut':
     case 'mask-restore':
@@ -2255,8 +2251,8 @@ function cloneMask(mask) {
 function syncMaskControls(app) {
   const root = getCreatorRoot(app);
   if (!root) return;
-  const tool = app.maskTool ?? 'move';
-  const tools = ['move', 'paint', 'erase', 'select', 'cut', 'restore', 'wand', 'pin'];
+  const tool = getToolButton(app.maskTool);
+  const tools = ['move', 'paint', 'select', 'cut', 'restore', 'wand', 'pin'];
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
