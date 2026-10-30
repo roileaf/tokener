@@ -10,9 +10,10 @@ import {
   getBendMargin,
   getPinHitRadius,
   isPresetAvailable,
+  renderAnimationFrame,
   shouldBendPreview,
 } from '../scripts/token-animation.js';
-import { getTokenFrameLayout } from '../scripts/token-composer.js';
+import { drawTokenFrame, getTokenFrameLayout } from '../scripts/token-composer.js';
 
 const SIZE = 32;
 const VIEW = { zoom: 1, offsetX: 0, offsetY: 0 };
@@ -243,4 +244,168 @@ test('bend margin covers a rotated satellite', () => {
     },
   ];
   assert.ok(getBendMargin(pins, 1, 40) >= 15);
+});
+
+/** A 40x20 cut-out: red body with a green square at (14..20, 12..18); the region marks the square. */
+function makeRegionArt() {
+  const cutout = createCanvas(40, 20);
+  const context = cutout.getContext('2d');
+  context.fillStyle = '#c03020';
+  context.fillRect(4, 4, 32, 14);
+  context.fillStyle = '#20c040';
+  context.fillRect(14, 12, 6, 6);
+  const region = createCanvas(40, 20);
+  const regionContext = region.getContext('2d');
+  regionContext.fillStyle = '#ffffff';
+  regionContext.fillRect(14, 12, 6, 6);
+  return { cutout, region };
+}
+
+function plainDraw(context, bent, size) {
+  context.clearRect(0, 0, size, size);
+  if (bent) context.drawImage(bent.art, 0, 0);
+}
+
+test('regions follow the art when the view changes', () => {
+  const { cutout, region } = makeRegionArt();
+  const size = 64;
+  const animation = {
+    duration: 2,
+    fps: 30,
+    pins: [],
+    effects: [{ id: 'fx', type: 'flicker', region: 'eyes', amount: 0, kind: 'opacity', speed: 3 }],
+  };
+  for (const view of [
+    { zoom: 1, offsetX: 0, offsetY: 0 },
+    { zoom: 1.6, offsetX: 0.2, offsetY: -0.1 },
+  ]) {
+    const context = createCanvas(size, size).getContext('2d');
+    const bent = renderAnimationFrame({
+      context,
+      size,
+      t: 0.3,
+      art: { cutout, popOutImage: null, regions: { eyes: region } },
+      view,
+      animation,
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    const bentRegion = bent.regions.eyes;
+    assert.ok(bentRegion, 'bent region exists');
+    const regionData = pixels(bentRegion);
+    const artData = pixels(bent.art);
+    let inside = 0;
+    for (let i = 0; i < size * size; i += 1) {
+      if (regionData[i * 4 + 3] < 250) continue;
+      inside += 1;
+      assert.ok(artData[i * 4 + 1] > artData[i * 4], `region pixel ${i} lies on the green square`);
+    }
+    assert.ok(inside > 10, 'region covers some pixels');
+  }
+});
+
+test('a wind effect only moves pixels inside its region', () => {
+  const size = 128;
+  const cutout = createCanvas(128, 128);
+  const context = cutout.getContext('2d');
+  // Striped art over the whole image, so any displacement shows.
+  for (let x = 0; x < 128; x += 4) {
+    context.fillStyle = x % 8 ? '#2040c0' : '#e0d020';
+    context.fillRect(x, 0, 4, 128);
+  }
+  const region = createCanvas(128, 128);
+  const regionContext = region.getContext('2d');
+  regionContext.fillStyle = '#ffffff';
+  regionContext.fillRect(0, 0, 40, 128);
+  const render = (effects) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0.25,
+      art: { cutout, popOutImage: null, regions: { left: region } },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, pins: [], effects },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    return pixels(target);
+  };
+  const still = render([{ id: 'flat', type: 'flicker', region: null, amount: 0 }]);
+  const windy = render([{ id: 'w', type: 'wind', region: 'left', strength: 6, scale: 40 }]);
+  let movedInside = 0;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const o = (y * size + x) * 4;
+      const diff = Math.abs(still[o] - windy[o]) + Math.abs(still[o + 2] - windy[o + 2]);
+      if (x >= 56) assert.ok(diff <= 4, `pixel ${x},${y} outside the region stays put`);
+      if (x < 32 && diff > 60) movedInside += 1;
+    }
+  }
+  assert.ok(movedInside > 200, `wind moves the region (${movedInside} pixels changed)`);
+});
+
+test('with no effects and no motion, renderAnimationFrame draws the plain still frame', () => {
+  const cutout = makeCutout();
+  const size = 48;
+  const view = { zoom: 1.3, offsetX: 0.1, offsetY: -0.05 };
+  const frame = { size, borderWidth: 3, fill: true, fillColor: '#203040' };
+  const drawFrame = (ctx, bent) =>
+    bent
+      ? drawTokenFrame(ctx, bent.art, frame)
+      : drawTokenFrame(ctx, cutout, {
+          ...frame,
+          zoom: view.zoom,
+          offsetX: view.offsetX * size,
+          offsetY: view.offsetY * size,
+        });
+  const expected = createCanvas(size, size);
+  drawFrame(expected.getContext('2d'), null);
+  const actual = createCanvas(size, size);
+  renderAnimationFrame({
+    context: actual.getContext('2d'),
+    size,
+    t: 0.4,
+    art: { cutout, popOutImage: null, regions: {} },
+    view,
+    animation: { duration: 2, fps: 30, pins: [pin([{ t: 0, dx: 0, dy: 0 }])], effects: [] },
+    createCanvas,
+    drawFrame,
+  });
+  assert.deepEqual(pixels(actual), pixels(expected));
+});
+
+test('a whole-figure glow is drawn behind the art, a region glow over it', () => {
+  const { cutout, region } = makeRegionArt();
+  const size = 64;
+  const render = (effect) => {
+    const target = createCanvas(size, size);
+    renderAnimationFrame({
+      context: target.getContext('2d'),
+      size,
+      t: 0,
+      art: { cutout, popOutImage: null, regions: { eyes: region } },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, pins: [], effects: [effect] },
+      createCanvas,
+      drawFrame: (ctx, b) => plainDraw(ctx, b, size),
+    });
+    return pixels(target);
+  };
+  const glow = { id: 'g', type: 'glow', color: '#0000ff', size: 6, pulse: 0 };
+  const layout = getTokenFrameLayout({ imageWidth: 40, imageHeight: 20, size });
+  const scale = layout.width / 40;
+  const at = (data, x, y) => {
+    const o = (Math.floor(layout.y + y * scale) * size + Math.floor(layout.x + x * scale)) * 4;
+    return [...data.slice(o, o + 4)];
+  };
+  const behind = render({ ...glow, region: null });
+  // Inside the red body the art is opaque and unchanged; just outside it the aura shows.
+  assert.deepEqual(at(behind, 8.5, 8.5).slice(0, 3), [0xc0, 0x30, 0x20]);
+  const aura = at(behind, 3, 2);
+  assert.ok(aura[3] > 0 && aura[2] > aura[0], `aura outside the body (${aura})`);
+  const over = render({ ...glow, region: 'eyes' });
+  const eye = at(over, 17, 15);
+  assert.ok(eye[2] > 0x40, `region glow brightens the eye (${eye})`);
+  assert.deepEqual(at(over, 8.5, 8.5).slice(0, 3), [0xc0, 0x30, 0x20]);
 });

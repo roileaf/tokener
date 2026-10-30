@@ -47,7 +47,6 @@ import {
 } from './animation.js';
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
 import {
-  bendTokenArt,
   canPlayWithTool,
   getAnimatedOutputSize,
   getAnimatedSavePlan,
@@ -56,6 +55,7 @@ import {
   getPinDragMode,
   getPresetTargets,
   isPresetAvailable,
+  renderAnimationFrame,
   resetAnimationForNewSource,
   shouldBendPreview,
 } from './token-animation.js';
@@ -1369,8 +1369,7 @@ function renderCreatorPreview(app) {
   const tokenContext = token.getContext('2d');
   const portraitMode = app.editTarget === 'portrait';
   if (portraitMode) drawPortraitPreview(tokenContext, app, size);
-  else
-    drawCreatedToken(tokenContext, app, size, { preview: true, bent: getPreviewBend(app, size) });
+  else drawPreviewToken(tokenContext, app, size);
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
   if (!portraitMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
 
@@ -1817,14 +1816,27 @@ function stopAnimationPlayback(app) {
 }
 
 /**
- * The token art bent to the current loop time, or null to draw it still: in the portrait, with
- * no motion, while a mask or touch-up tool edits the unbent art, or while a modifier stroke
- * would paint the pop-out mask under Move. Cached per pose.
+ * Whether the preview animates the token: not in the portrait, with no motion, while a mask or
+ * touch-up tool edits the unbent art, or while a modifier stroke would paint the pop-out mask
+ * under Move.
  */
-function getPreviewBend(app, size) {
-  if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return null;
-  if (!shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode })) return null;
+function shouldAnimatePreview(app) {
+  if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return false;
+  return shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode });
+}
+
+/**
+ * Draws the preview token: still, or the animation frame at the current loop time (bent art,
+ * effects, glow and particles). The bend is cached per pose, so redraws for other reasons (pins,
+ * options) reuse it.
+ */
+function drawPreviewToken(context, app, size) {
+  if (!shouldAnimatePreview(app)) {
+    drawCreatedToken(context, app, size, { preview: true });
+    return;
+  }
   const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
+  const regions = app.effectRegions ?? {};
   const key = {
     animation: app.animation,
     t: app.animationTime,
@@ -1833,22 +1845,25 @@ function getPreviewBend(app, size) {
     offsetY: app.view.offsetY,
     cutout: app.cutout,
     popOutImage,
+    regions,
     size,
   };
   const cached = app._previewBend;
-  if (cached && Object.keys(key).every((name) => cached.key[name] === key[name]))
-    return cached.bent;
-  const bent = bendTokenArt({
-    cutout: app.cutout,
-    popOutImage,
-    view: app.view,
+  const reuse =
+    cached && Object.keys(key).every((name) => cached.key[name] === key[name]) ? cached.bent : null;
+  const bent = renderAnimationFrame({
+    context,
     size,
-    animation: app.animation,
     t: app.animationTime,
+    art: { cutout: app.cutout, popOutImage, regions },
+    view: app.view,
+    animation: app.animation,
     createCanvas,
+    drawFrame: (frameContext, frameBent) =>
+      drawCreatedToken(frameContext, app, size, { preview: true, bent: frameBent }),
+    bent: reuse,
   });
   app._previewBend = { key, bent };
-  return bent;
 }
 
 /** Pin dots while the pin tool is active: selected pins get a gold ring, anchors are hollow. */
@@ -3096,6 +3111,9 @@ function snapshotTokenAnimation(app) {
       popOutMask: null,
     },
     popOutImage: isPopOutEnabled(app) ? copyCanvas(getPopOutImage(app)) : null,
+    regions: Object.fromEntries(
+      Object.entries(app.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+    ),
     animation: structuredClone(app.animation),
   }));
 }
@@ -3106,24 +3124,24 @@ function snapshotTokenAnimation(app) {
  * `getAnimatedOutputSize`; the bitrate follows it. The status line counts the rendered frames.
  */
 async function encodeTokenAnimation(app, size) {
-  const { snapshot, popOutImage, animation } = snapshotTokenAnimation(app);
+  const { snapshot, popOutImage, regions, animation } = snapshotTokenAnimation(app);
   const times = getFrameTimes(animation);
   const canvas = createCanvas(size, size);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   const frames = [];
   for (const [index, t] of times.entries()) {
     setCreatorStatus(app, getEncodingStatus(index, times.length));
-    const bent = bendTokenArt({
-      cutout: snapshot.cutout,
-      popOutImage,
-      view: snapshot.view,
-      size,
-      animation,
-      t,
-      createCanvas,
-    });
     context.clearRect(0, 0, size, size);
-    drawCreatedToken(context, snapshot, size, { bent });
+    renderAnimationFrame({
+      context,
+      size,
+      t,
+      art: { cutout: snapshot.cutout, popOutImage, regions },
+      view: snapshot.view,
+      animation,
+      createCanvas,
+      drawFrame: (frameContext, bent) => drawCreatedToken(frameContext, snapshot, size, { bent }),
+    });
     frames.push(context.getImageData(0, 0, size, size));
     if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();
   }
