@@ -1,4 +1,5 @@
 import { MODULE_ID } from './constants.js';
+import { getProjectFlagUpdate } from './creator-project.js';
 import { getCurrentSystemProfile } from './system-profile.js';
 import {
   getDocumentActor,
@@ -137,6 +138,10 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile, documen
     randomImg: false,
     ...buildBreakoutUpdate(breakout, tokenSrc, document, systemProfile),
   };
+  // Created tokens link to their Token Creator project so the creator can reopen it.
+  const projectSrc = getImageSource(candidate?.projectSrc);
+  if (projectSrc)
+    Object.assign(update, getProjectFlagUpdate({ path: projectSrc, output: tokenSrc }));
 
   if (!supportsDynamicTokenRing(systemProfile)) return update;
 

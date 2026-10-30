@@ -421,6 +421,7 @@ export function buildCreatedTokenCandidate({
   ringEffects,
   breakoutScale = 1,
   animated = false,
+  projectSrc,
 }) {
   const candidate = {
     id: `${CREATED_TOKEN_SOURCE_ID}:${tokenSrc}`,
@@ -431,6 +432,7 @@ export function buildCreatedTokenCandidate({
   };
   if (breakoutScale > 1) candidate.breakoutScale = breakoutScale;
   if (portraitSrc) candidate.portraitSrc = portraitSrc;
+  if (projectSrc) candidate.projectSrc = projectSrc;
   if (subjectSrc) {
     // An animated token is a video: Foundry's ring then uses the token texture itself as the
     // subject, so no separate subject image is set.

@@ -4950,6 +4950,28 @@ test('ring effects are written for still and animated ring candidates only', asy
   assert.equal('ring.effects' in buildTokenUpdate(plain, { scale: 1 }), false);
 });
 
+test('created tokens with a saved project write the project flag on token and prototype', async () => {
+  const { buildCreatedTokenCandidate } = await import('../scripts/token-composer.js');
+  const candidate = buildCreatedTokenCandidate({
+    label: 'D',
+    tokenSrc: 'w/tokener/d.webm',
+    projectSrc: 'w/tokener/d.tokener.json',
+  });
+  assert.equal(candidate.projectSrc, 'w/tokener/d.tokener.json');
+  const project = { path: 'w/tokener/d.tokener.json', output: 'w/tokener/d.webm' };
+  assert.deepEqual(buildTokenUpdate(candidate)['flags.pf2e-tokener.project'], project);
+  assert.deepEqual(
+    buildActorUpdate(candidate, { actor: { prototypeToken: {} } })[
+      'prototypeToken.flags.pf2e-tokener.project'
+    ],
+    project,
+  );
+
+  const without = buildCreatedTokenCandidate({ label: 'P', tokenSrc: 'p.webp' });
+  assert.equal('projectSrc' in without, false);
+  assert.equal('flags.pf2e-tokener.project' in buildTokenUpdate(without), false);
+});
+
 test('revert state captures and restores ring.effects', () => {
   const snapshot = buildRevertSnapshot({
     action: 'token',

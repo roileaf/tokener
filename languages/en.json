@@ -154,6 +154,7 @@
   "PF2ETokener.Creator.Saved": "Tokener: token saved to {path}.",
   "PF2ETokener.Creator.SaveFailed": "Failed to save the token.",
   "PF2ETokener.Creator.SaveFailedNotification": "Tokener: failed to save the created token.",
+  "PF2ETokener.Creator.ProjectSaveFailed": "The token was saved, but its project could not be saved for later editing.",
   "PF2ETokener.Settings.CreatedTokenFolder.Name": "Created token folder",
   "PF2ETokener.Settings.CreatedTokenFolder.Hint": "Data folder where the Token Creator saves new tokens. Leave empty to use worlds/<world>/tokener.",
   "PF2ETokener.Creator.MaskPaintTooltip": "Pop-out brush (B): drag over parts to pop them out of the frame, right-drag or Alt-drag to keep them inside",

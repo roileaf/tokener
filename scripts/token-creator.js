@@ -80,6 +80,7 @@ import {
   updateKeyframeAt,
 } from './token-animation.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
+import { buildProjectFileName, serializeProject } from './creator-project.js';
 import { registerCreatedTokenSubjectPath } from './ring-video.js';
 import {
   colorizeRingBackground,
@@ -3967,6 +3968,9 @@ export async function createToken(app, action) {
 
   // The saved loop is rendered from a snapshot, so the preview must not keep moving the pose.
   stopAnimationPlayback(app);
+  // The project is frozen now, with playback stopped, so edits made while files upload never
+  // mix into it.
+  const projectState = snapshotProjectState(app);
   setCreatorBusy(app, true);
   setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
   try {
@@ -4031,6 +4035,19 @@ export async function createToken(app, action) {
       );
     }
 
+    // A project that fails to save never fails the token: it is applied without the flag.
+    let projectSrc;
+    let projectNote = '';
+    try {
+      projectSrc = await saveCreatorProject(projectState, { folder, tokenSrc });
+    } catch (error) {
+      console.warn(`${MODULE_ID} | Failed to save the Token Creator project`, error);
+      projectNote = localize(
+        'Creator.ProjectSaveFailed',
+        'The token was saved, but its project could not be saved for later editing.',
+      );
+    }
+
     const candidate = buildCreatedTokenCandidate({
       label,
       tokenSrc,
@@ -4040,6 +4057,7 @@ export async function createToken(app, action) {
       ringEffects: ringMode ? app.creatorOptions.ringEffects : undefined,
       breakoutScale: 1 / getActiveRingScale(app),
       animated,
+      projectSrc,
     });
     if (action) {
       await applyCreatedTokenCandidate(action, candidate, app.tokenDocument);
@@ -4057,7 +4075,11 @@ export async function createToken(app, action) {
             ),
       );
     }
-    setCreatorStatus(app, tokenSrc);
+    setCreatorStatus(
+      app,
+      projectNote ? `${tokenSrc} — ${projectNote}` : tokenSrc,
+      Boolean(projectNote),
+    );
   } catch (error) {
     console.error(`${MODULE_ID} | Failed to create token`, error);
     setCreatorStatus(app, localize('Creator.SaveFailed', 'Failed to save the token.'), true);
@@ -4067,6 +4089,80 @@ export async function createToken(app, action) {
   } finally {
     setCreatorBusy(app, false);
   }
+}
+
+/**
+ * Everything a Token Creator project stores, frozen at save start. Sources are kept by
+ * reference (they are replaced, never drawn into); masks and regions are painted in place, so
+ * they are copied.
+ */
+function snapshotProjectState(app) {
+  const token = app.workspaces.token;
+  const portrait = app.workspaces.portrait?.source ? app.workspaces.portrait : null;
+  const cleanup = (workspace) => ({
+    keep: copyCanvas(workspace.cleanup?.keep),
+    remove: copyCanvas(workspace.cleanup?.remove),
+  });
+  return {
+    label: token.source?.label ?? '',
+    options: structuredClone(app.creatorOptions),
+    token: {
+      source: token.source,
+      view: { ...app.view },
+      popOutMask: copyCanvas(app.popOutMask),
+      cleanup: cleanup(token),
+    },
+    portrait: portrait
+      ? {
+          source: portrait.source,
+          view: { ...app.portraitView },
+          popOutMask: null,
+          cleanup: cleanup(portrait),
+        }
+      : null,
+    portraitView: { ...app.portraitView },
+    animation: structuredClone(app.animation),
+    regions: Object.fromEntries(
+      Object.entries(app.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+    ),
+  };
+}
+
+/**
+ * Writes `<stem>.tokener.json` next to the saved token and returns its path. Sources without a
+ * path (file, paste, drop, generated) are uploaded first as lossless `<stem>-source.png` (and
+ * `<stem>-portrait-source.png` for a separate portrait image) so the project can reload them.
+ */
+async function saveCreatorProject(state, { folder, tokenSrc }) {
+  const tokenFileName = String(tokenSrc).split('/').pop();
+  const stem = tokenFileName.replace(/\.[^.]+$/, '');
+  const uploadSource = async (source, fileName) =>
+    source.path || uploadBlob(await canvasToBlob(source.canvas, 'image/png'), folder, fileName);
+  const tokenPath = await uploadSource(state.token.source, `${stem}-source.png`);
+  let portrait = null;
+  if (state.portrait) {
+    const portraitPath =
+      state.portrait.source === state.token.source
+        ? tokenPath
+        : await uploadSource(state.portrait.source, `${stem}-portrait-source.png`);
+    portrait = { ...state.portrait, sourcePath: portraitPath };
+  }
+  const project = serializeProject({
+    label: state.label,
+    output: tokenSrc,
+    options: state.options,
+    token: { ...state.token, sourcePath: tokenPath },
+    portrait,
+    portraitView: state.portraitView,
+    animation: state.animation,
+    regions: state.regions,
+    toDataUrl: (canvas) => canvas.toDataURL('image/png'),
+  });
+  return uploadBlob(
+    new Blob([JSON.stringify(project)], { type: 'application/json' }),
+    folder,
+    buildProjectFileName(tokenFileName),
+  );
 }
 
 /** Frames rendered between yields to the browser while an animation is prepared. */

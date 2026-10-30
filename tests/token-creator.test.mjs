@@ -690,7 +690,16 @@ test('saving uses the token image for the token and the separate image for the p
     await createToken(app, null);
 
     assert.equal(app.editTarget, 'portrait', 'saving restores the edited target');
-    assert.equal(uploads.length, 2);
+    // token, portrait and the project file (both sources already have paths)
+    assert.equal(uploads.length, 3);
+    const projectUpload = uploads.find((entry) => entry.name.endsWith('.tokener.json'));
+    const project = JSON.parse(projectUpload.buffer.toString('utf8'));
+    assert.equal(project.token.sourcePath, 'art/red.webp');
+    assert.equal(project.portrait.sourcePath, 'art/blue.webp');
+    assert.equal(
+      project.output,
+      `worlds/w/tokener/${projectUpload.name.replace('.tokener.json', '.webp')}`,
+    );
     const pixel = async (name) => {
       const upload = uploads.find((entry) => entry.name.includes(name));
       const image = await loadImage(upload.buffer);
@@ -700,7 +709,9 @@ test('saving uses the token image for the token and the separate image for the p
         ...canvas.getContext('2d').getImageData(image.width / 2, image.height / 2, 1, 1).data,
       ];
     };
-    const tokenName = uploads.find((entry) => !entry.name.includes('portrait')).name;
+    const tokenName = uploads.find(
+      (entry) => entry.name.endsWith('.webp') && !entry.name.includes('portrait'),
+    ).name;
     assert.deepEqual(await pixel(tokenName), [255, 0, 0, 255]);
     assert.deepEqual(await pixel('portrait'), [0, 0, 255, 255]);
   } finally {
@@ -708,6 +719,127 @@ test('saving uses the token image for the token and the separate image for the p
     globalThis.foundry = previous.foundry;
     globalThis.game = previous.game;
   }
+});
+
+async function runCreatorSave({ sourcePath, failJson = false, effects = [], regions = {} }) {
+  const { createCanvas } = await import('canvas');
+  const { createToken, normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  const canvas = createCanvas(32, 32);
+  canvas.getContext('2d').fillRect(0, 0, 32, 32);
+  canvas.toBlob = (callback, type) =>
+    callback(new Blob([canvas.toBuffer('image/png')], { type: type ?? 'image/png' }));
+  const uploads = [];
+  const notices = { info: [], error: [] };
+  const previous = {
+    document: globalThis.document,
+    foundry: globalThis.foundry,
+    game: globalThis.game,
+    ui: globalThis.ui,
+  };
+  globalThis.document = {
+    createElement: () => {
+      const element = createCanvas(1, 1);
+      element.toBlob = (callback, type) =>
+        callback(new Blob([element.toBuffer('image/png')], { type: type ?? 'image/png' }));
+      return element;
+    },
+  };
+  globalThis.foundry = {
+    applications: {
+      apps: {
+        FilePicker: {
+          implementation: {
+            browse: async () => ({}),
+            upload: async (_source, folder, file) => {
+              if (failJson && file.name.endsWith('.json')) throw new Error('nope');
+              uploads.push({
+                name: file.name,
+                type: file.type,
+                buffer: Buffer.from(await file.arrayBuffer()),
+              });
+              return { path: `${folder}/${file.name}` };
+            },
+          },
+        },
+      },
+    },
+  };
+  globalThis.game = { world: { id: 'w' }, settings: { get: () => '' } };
+  globalThis.ui = {
+    notifications: {
+      info: (message) => notices.info.push(message),
+      error: (message) => notices.error.push(message),
+    },
+  };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const workspace = {
+      source: { canvas, path: sourcePath, file: null, label: 'Hero' },
+      autoCutout: canvas,
+      cutout: canvas,
+      cleanup: { keep: null, remove: null },
+      cutoutToken: 0,
+    };
+    const app = {
+      creatorOptions: normalizeTokenCreatorOptions({ borderWidth: 0 }),
+      view: { zoom: 1, offsetX: 0, offsetY: 0 },
+      portraitView: { zoom: 1, offsetX: 0, offsetY: 0 },
+      editTarget: 'token',
+      workspaces: { token: workspace, portrait: null },
+      popOutMask: null,
+      _maskVersion: 0,
+      animation: { duration: 2, fps: 30, mode: 'loop', pins: [], effects },
+      effectRegions: regions,
+    };
+    Object.defineProperties(app, {
+      workspace: { get: () => workspace },
+      source: { get: () => workspace.source },
+      cutout: { get: () => workspace.cutout },
+      cleanup: { get: () => workspace.cleanup },
+    });
+    await createToken(app, null);
+    return { uploads, notices };
+  } finally {
+    console.warn = warn;
+    Object.assign(globalThis, previous);
+  }
+}
+
+test('saving uploads a path-less source as a lossless png and references it in the project', async () => {
+  const { createCanvas } = await import('canvas');
+  const { uploads } = await runCreatorSave({
+    sourcePath: null,
+    effects: [{ id: 'fx', type: 'wind', region: 'used' }],
+    regions: { used: createCanvas(32, 32), orphan: createCanvas(32, 32) },
+  });
+  const token = uploads.find((entry) => entry.name.endsWith('.webp'));
+  const stem = token.name.replace(/\.webp$/, '');
+  const source = uploads.find((entry) => entry.name === `${stem}-source.png`);
+  assert.ok(source, 'source uploaded');
+  assert.equal(source.type, 'image/png');
+  const projectUpload = uploads.find((entry) => entry.name === `${stem}.tokener.json`);
+  assert.equal(projectUpload.type, 'application/json');
+  const project = JSON.parse(projectUpload.buffer.toString('utf8'));
+  assert.equal(project.version, 1);
+  assert.equal(project.token.sourcePath, `worlds/w/tokener/${stem}-source.png`);
+  assert.equal(project.output, `worlds/w/tokener/${token.name}`);
+  assert.equal(project.portrait, null);
+  assert.deepEqual(Object.keys(project.animation.regions), ['used']);
+  assert.match(project.animation.regions.used, /^data:image\/png;base64,/);
+});
+
+test('a failed project upload still saves the token', async () => {
+  const { uploads, notices } = await runCreatorSave({
+    sourcePath: 'art/hero.webp',
+    failJson: true,
+  });
+  assert.deepEqual(
+    uploads.map((entry) => entry.name.endsWith('.webp')),
+    [true],
+  );
+  assert.equal(notices.error.length, 0);
+  assert.equal(notices.info.length, 1);
 });
 
 test('From portrait turns the edited portrait into the token image and unlinks the portrait', async () => {
