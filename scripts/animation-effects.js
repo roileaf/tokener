@@ -13,7 +13,8 @@ const MAX_PARTICLES = 200;
 const MIN_SCALE = 16;
 /** Largest strength/scale ratio at which the 8 px warp mesh cannot fold over. */
 const MAX_STRENGTH_RATIO = 0.18;
-const PARTICLE_COLORS = {
+/** Default particle colour per kind (used while an effect's `color` is null). */
+export const PARTICLE_COLORS = {
   embers: '#ffa040',
   smoke: '#b4b8c4',
   sparkles: '#fff4b8',

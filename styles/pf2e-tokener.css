@@ -2731,6 +2731,117 @@
   display: none;
 }
 
+.pf2e-tokener-creator-app [data-creator-action='mask-region'][hidden],
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects [hidden] {
+  display: none !important;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects {
+  display: grid;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects h5 {
+  margin: 0;
+  color: var(--color-text-light-6, #cfc6b8);
+  font-size: 11px;
+  font-weight: 700;
+  border: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects-add {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects-add select {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 24px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects-add .pf2e-tokener-creator-button {
+  flex: 0 0 auto;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  margin: 0;
+  border-radius: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect.is-selected {
+  background: rgba(211, 143, 255, 0.16);
+  box-shadow: inset 2px 0 0 #d38fff;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect-select {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  height: 24px;
+  margin: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--color-text-light-highlight, #f5f2e8);
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  background: transparent;
+  border: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect-params {
+  display: grid;
+  gap: 7px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  align-items: end;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect-controls select,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effect-controls input[type='color'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects button:disabled,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects select:disabled,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-effects input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-sliders {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

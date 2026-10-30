@@ -99,6 +99,16 @@
             aria-pressed='false'
             data-tooltip='{{labels.pinTooltip}}'
           ><i class='fas fa-thumbtack'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-token-only
+            data-animation-control
+            data-creator-action='mask-region'
+            aria-pressed='false'
+            data-tooltip='{{labels.regionTooltip}}'
+            hidden
+          ><i class='fas fa-highlighter'></i></button>
           <span class='pf2e-tokener-creator-divider'></span>
           <button
             type='button'
@@ -463,6 +473,41 @@
             {{/each}}
           </select>
         </label>
+        <div class='pf2e-tokener-creator-effects' data-effects>
+          <h5>{{labels.effectsTitle}}</h5>
+          <div class='pf2e-tokener-creator-effects-add'>
+            <select
+              name='effectType'
+              aria-label='{{labels.effectsType}}'
+              data-animation-control
+            >
+              {{#each animation.effectTypes}}
+                <option value='{{value}}'>{{label}}</option>
+              {{/each}}
+            </select>
+            <select
+              name='effectKind'
+              aria-label='{{labels.effectsKind}}'
+              data-animation-control
+              data-effect-kind-picker
+              hidden
+            >
+              {{#each animation.particleKinds}}
+                <option value='{{value}}'>{{label}}</option>
+              {{/each}}
+            </select>
+            <button
+              type='button'
+              class='pf2e-tokener-creator-button is-secondary'
+              data-animation-control
+              data-creator-action='effect-add'
+              data-tooltip='{{labels.effectsAddTooltip}}'
+            ><i class='fas fa-plus'></i> {{labels.effectsAdd}}</button>
+          </div>
+          <ul class='pf2e-tokener-creator-effects-list' data-effects-list></ul>
+          <p class='pf2e-tokener-creator-hint' data-effects-empty>{{labels.effectsEmpty}}</p>
+          <div class='pf2e-tokener-creator-effect-params' data-effect-params hidden></div>
+        </div>
         <p class='pf2e-tokener-creator-hint' data-animation-available>{{labels.animateHint}}</p>
         <p class='pf2e-tokener-creator-hint' data-animation-unavailable>{{labels.animateUnavailable}}</p>
       </section>

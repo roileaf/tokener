@@ -46,9 +46,17 @@ import {
   removeKeyframe,
   samplePinOffset,
 } from './animation.js';
+import {
+  createEffect,
+  EFFECT_TYPES,
+  normalizeEffects,
+  PARTICLE_COLORS,
+  PARTICLE_KINDS,
+} from './animation-effects.js';
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
 import {
   canPlayWithTool,
+  clearEffectCaches,
   getAnimatedOutputSize,
   getAnimatedSavePlan,
   getPinHitRadius,
@@ -173,6 +181,45 @@ const PRESET_TOOLTIPS = {
   shiver: 'Shiver: the selected pins jitter quickly',
   look: 'Look: the selected pins turn left and right',
 };
+// Effects list: icons per type, the region brush/overlay colour and the warp strength cap
+// (normalizeEffects keeps wind/wobble strength under 18 % of the noise scale, at most 40 px).
+const EFFECT_ICONS = {
+  wind: 'fa-wind',
+  wobble: 'fa-water',
+  flicker: 'fa-lightbulb',
+  glow: 'fa-sun',
+  particles: 'fa-fire',
+};
+const EFFECT_TYPE_LABELS = {
+  wind: 'Wind',
+  wobble: 'Wobble',
+  flicker: 'Flicker',
+  glow: 'Glow',
+  particles: 'Particles',
+};
+const PARTICLE_KIND_LABELS = {
+  embers: 'Embers',
+  smoke: 'Smoke',
+  sparkles: 'Sparkles',
+  snow: 'Snow',
+  drips: 'Drips',
+};
+const FLICKER_KIND_LABELS = { opacity: 'Fade', brightness: 'Brightness' };
+const EFFECT_PARAM_LABELS = {
+  strength: 'Strength',
+  scale: 'Ripple size',
+  amount: 'Amount',
+  kind: 'Kind',
+  speed: 'Flickers per loop',
+  color: 'Colour',
+  size: 'Size',
+  pulse: 'Pulse',
+  count: 'Count',
+};
+const MAX_WARP_STRENGTH = 40;
+const WARP_STRENGTH_RATIO = 0.18;
+const REGION_COLOR = '#d38fff';
+const REGION_OVERLAY_ALPHA = 0.45;
 const KEYFRAME_EASES = ['smooth', 'linear', 'hold'];
 const ANIMATION_MODES = ['loop', 'pingpong'];
 const MAX_KEYFRAME_ROTATION = 45;
@@ -349,6 +396,11 @@ export function getTokenCreatorApplicationClass() {
       this.animationTime = 0;
       // Selected pins in selection order; the first is the primary that keyframe controls edit.
       this.selectedPinIds = [];
+      // Effect regions: source-image px canvases keyed by effect.region. One stable object; the
+      // preview falls back to the frozen EMPTY_REGIONS only when it is missing.
+      this.effectRegions = {};
+      this.selectedEffectId = null;
+      this._regionVersion = 0;
       this.animationPlaying = false;
       this._animationFrame = null;
       // WebM encoding support, probed once when the creator first renders (false until then).
@@ -533,6 +585,14 @@ function prepareCreatorContext(app) {
         ),
       })),
       rotationMax: MAX_KEYFRAME_ROTATION,
+      effectTypes: EFFECT_TYPES.map((type) => ({
+        value: type,
+        label: getEffectTypeLabel(type),
+      })),
+      particleKinds: PARTICLE_KINDS.map((kind) => ({
+        value: kind,
+        label: getParticleKindLabel(kind),
+      })),
     },
     labels: {
       animateTitle: localize('Creator.Animate.Title', 'Animate'),
@@ -563,6 +623,22 @@ function prepareCreatorContext(app) {
       pinTooltip: localize(
         'Creator.Animate.PinTooltip',
         'Pins: click to add or select, Shift+click to add to the selection, drag to move or keyframe at the current time, right-click to remove (P)',
+      ),
+      effectsTitle: localize('Creator.Animate.Effects.Title', 'Effects'),
+      effectsType: localize('Creator.Animate.Effects.Type', 'Effect'),
+      effectsKind: localize('Creator.Animate.Effects.Kind', 'Kind'),
+      effectsAdd: localize('Creator.Animate.Effects.Add', 'Add'),
+      effectsAddTooltip: localize(
+        'Creator.Animate.Effects.AddTooltip',
+        'Add an effect of this type. Effects loop seamlessly with the pins.',
+      ),
+      effectsEmpty: localize(
+        'Creator.Animate.Effects.Empty',
+        'No effects yet: add wind, a glow, flickering or particles.',
+      ),
+      regionTooltip: localize(
+        'Creator.Animate.Effects.RegionTooltip',
+        'Effect region brush (F): drag over the art where the selected effect applies, right-drag or Alt-drag to remove',
       ),
       source: localize('Creator.Source', 'Image'),
       browse: localize('Creator.Browse', 'Browse files'),
@@ -644,6 +720,14 @@ function prepareCreatorContext(app) {
           label: localize(
             'Creator.ShortcutPin',
             'Pins: click to add, drag to move or keyframe, right-click to remove',
+          ),
+          tokenOnly: true,
+        },
+        {
+          keys: `${kbd('F')}`,
+          label: localize(
+            'Creator.ShortcutRegion',
+            'Effect region brush: paint where the selected effect applies',
           ),
           tokenOnly: true,
         },
@@ -778,6 +862,22 @@ function bindPreviewInteractions(app, canvas) {
       }
       return;
     }
+    if (app.maskTool === 'region') {
+      event.preventDefault();
+      const key = startRegionStroke(app);
+      if (!key) return;
+      const mode = getStrokeMode({
+        tool: 'region',
+        button: event.button,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+      });
+      const point = getTokenPoint(app, canvas, event);
+      drag = { mode, region: key, last: point };
+      paintEffectRegion(app, key, point, point, mode);
+      canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
     if (isCleanupTool(app.maskTool) && app.cutout) {
       event.preventDefault();
       const point = getTokenPoint(app, canvas, event);
@@ -856,6 +956,7 @@ function bindPreviewInteractions(app, canvas) {
     if (drag.mode) {
       const point = getTokenPoint(app, canvas, event);
       if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
+      else if (drag.region) paintEffectRegion(app, drag.region, drag.last, point, drag.mode);
       else paintPopOutMask(app, drag.last, point, drag.mode);
       drag.last = point;
       return;
@@ -873,6 +974,7 @@ function bindPreviewInteractions(app, canvas) {
       app.selectedPinIds = [drag.pinId];
       renderCreatorPreview(app);
     }
+    if (drag?.region) finishRegionStroke(app);
     drag = null;
     syncMaskControls(app);
     if (wasPin) syncAnimationControls(app);
@@ -894,7 +996,7 @@ function bindPreviewInteractions(app, canvas) {
         setViewScale(app, stepViewScale(app.viewport.scale, event.deltaY < 0 ? 1 : -1));
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && canMask(app)) {
+      if ((event.ctrlKey || event.metaKey) && (canMask(app) || app.maskTool === 'region')) {
         setBrushSize(app, stepBrushSize(app.brushSize, event.deltaY < 0 ? 1 : -1));
         return;
       }
@@ -951,7 +1053,11 @@ function handleCreatorKeyDown(app, event) {
     case 'tool-pin':
       selectPinTool(app);
       return;
+    case 'tool-region':
+      selectRegionTool(app);
+      return;
     case 'swap':
+      if (app.maskTool === 'region') return;
       if (isCleanupTool(app.maskTool))
         selectMaskTool(app, app.maskTool === 'cut' ? 'restore' : 'cut');
       else selectMaskTool(app, app.maskTool === 'paint' ? 'erase' : 'paint');
@@ -998,6 +1104,10 @@ function refreshPointerMode(app, event) {
 function handleCreatorInput(app, event) {
   const target = event.target;
   const name = target?.name;
+  if (target?.dataset?.effectParam) {
+    updateEffectParam(app, target);
+    return;
+  }
   if (name === 'zoom') {
     setCreatorZoom(app, Number(target.value));
     return;
@@ -1055,6 +1165,15 @@ async function handleCreatorChange(app, event) {
     renderCreatorPreview(app);
     return;
   }
+  if (target?.name === 'effectType') {
+    syncEffectControls(app);
+    return;
+  }
+  if (target?.name === 'effectRegion') {
+    setEffectRegionMode(app, target.value === 'painted');
+    return;
+  }
+  if (target?.dataset?.effectParam) return;
   if (target?.name === 'animationEase') {
     if (KEYFRAME_EASES.includes(target.value)) setPrimaryKeyframe(app, { ease: target.value });
     return;
@@ -1107,6 +1226,18 @@ async function handleCreatorClick(app, event) {
       return;
     case 'mask-pin':
       selectPinTool(app);
+      return;
+    case 'mask-region':
+      selectRegionTool(app);
+      return;
+    case 'effect-add':
+      addCreatorEffect(app);
+      return;
+    case 'effect-select':
+      selectCreatorEffect(app, button.dataset.effectId);
+      return;
+    case 'effect-remove':
+      removeCreatorEffect(app, button.dataset.effectId);
       return;
     case 'animation-play':
       if (app.animationPlaying) stopAnimationPlayback(app);
@@ -1485,6 +1616,7 @@ function renderCreatorPreview(app) {
   else drawPreviewToken(tokenContext, app, size);
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
   if (!portraitMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
+  if (!portraitMode) drawEffectRegionOverlay(tokenContext, app, size);
 
   const viewport = getViewport(app, size);
   const isFramed = !portraitMode && (viewport.scale !== 1 || viewport.x !== 0 || viewport.y !== 0);
@@ -1712,6 +1844,7 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
 /** Pointer mode for the brush cursor; the pin tool never paints. */
 function getPointerMode(app, event) {
   if (app.maskTool === 'pin') return null;
+  if (app.maskTool === 'region' && !canPaintRegion(app)) return null;
   return getStrokeMode({ tool: app.maskTool, shiftKey: event.shiftKey, altKey: event.altKey });
 }
 
@@ -1767,8 +1900,520 @@ function clearAnimationPins(app) {
   stopAnimationPlayback(app);
   app.animation = resetAnimationForNewSource(app.animation);
   app.selectedPinIds = [];
+  // Effects are dropped with the pins, and their regions belong to the old image.
+  app.effectRegions = {};
+  app.selectedEffectId = null;
+  app._regionVersion += 1;
+  app._maskHistory.undo = app._maskHistory.undo.filter((entry) => entry.layer !== 'region');
+  app._maskHistory.redo = app._maskHistory.redo.filter((entry) => entry.layer !== 'region');
+  if (app.maskTool === 'region') {
+    app.maskTool = null;
+    syncMaskControls(app);
+  }
+  clearEffectCaches();
   app._previewBend = null;
   syncAnimationControls(app);
+}
+
+/** The key of an effect's painted region in `app.effectRegions`, or null for the whole figure. */
+export function getEffectRegionKey(effect) {
+  const region = effect?.region;
+  return typeof region === 'string' && region ? region : null;
+}
+
+/** A new animation with `effect` appended (params clamped). The old animation is untouched. */
+export function addEffect(animation, effect) {
+  return { ...animation, effects: normalizeEffects([...(animation?.effects ?? []), effect]) };
+}
+
+/**
+ * A new animation with effect `id` changed (params clamped, so wind/wobble strength follows the
+ * scale). Choosing another particle kind goes back to that kind's own colour. Returns the same
+ * animation when there is no such effect.
+ */
+export function updateEffect(animation, id, changes) {
+  const effects = animation?.effects ?? [];
+  const index = effects.findIndex((effect) => effect.id === id);
+  if (index < 0) return animation;
+  const current = effects[index];
+  const next = { ...current, ...changes };
+  if (
+    current.type === 'particles' &&
+    'kind' in changes &&
+    changes.kind !== current.kind &&
+    !('color' in changes)
+  )
+    next.color = null;
+  const [normalized] = normalizeEffects([next]);
+  if (!normalized) return animation;
+  const list = effects.slice();
+  list[index] = normalized;
+  return { ...animation, effects: list };
+}
+
+/**
+ * Removes effect `id`. Its painted region is dropped too unless another effect still uses it;
+ * `regions` is then a new object and `removedRegion` the dropped key.
+ */
+export function removeEffect({ animation, regions }, id) {
+  const effects = animation?.effects ?? [];
+  const effect = effects.find((entry) => entry.id === id);
+  if (!effect) return { animation, regions, removedRegion: null };
+  const rest = effects.filter((entry) => entry.id !== id);
+  const next = { ...animation, effects: rest };
+  const key = getEffectRegionKey(effect);
+  const shared = rest.some((entry) => getEffectRegionKey(entry) === key);
+  if (!key || shared || !regions || !Object.hasOwn(regions, key))
+    return { animation: next, regions, removedRegion: null };
+  return {
+    animation: next,
+    regions: Object.fromEntries(Object.entries(regions).filter(([name]) => name !== key)),
+    removedRegion: key,
+  };
+}
+
+function getEffectTypeLabel(type) {
+  return localize(`Creator.Animate.Effects.Types.${type}`, EFFECT_TYPE_LABELS[type] ?? type);
+}
+
+function getParticleKindLabel(kind) {
+  return localize(`Creator.Animate.Effects.Particles.${kind}`, PARTICLE_KIND_LABELS[kind] ?? kind);
+}
+
+/** Highest wind/wobble strength the scale allows, rounded down to the slider's 0.1 step. */
+function getMaxWarpStrength(scale) {
+  return Math.floor(Math.min(MAX_WARP_STRENGTH, scale * WARP_STRENGTH_RATIO) * 10) / 10;
+}
+
+/**
+ * The parameter controls of an effect, in display order: `{ param, input: 'range' | 'select' |
+ * 'color', label, value, min, max, step, unit, options }`.
+ */
+export function getEffectParamControls(effect) {
+  if (!effect) return [];
+  const label = (param) =>
+    localize(`Creator.Animate.Effects.Params.${param}`, EFFECT_PARAM_LABELS[param] ?? param);
+  const range = (param, min, max, step, unit = '') => ({
+    param,
+    input: 'range',
+    label: label(param),
+    value: effect[param],
+    min,
+    max,
+    step,
+    unit,
+  });
+  const select = (param, options) => ({
+    param,
+    input: 'select',
+    label: label(param),
+    value: effect[param],
+    options: options.map((option) => ({ ...option, selected: option.value === effect[param] })),
+  });
+  const color = (value) => ({ param: 'color', input: 'color', label: label('color'), value });
+  switch (effect.type) {
+    case 'wind':
+    case 'wobble':
+      return [
+        range('strength', 0, getMaxWarpStrength(effect.scale), 0.1, 'px'),
+        range('scale', 16, 200, 1, 'px'),
+      ];
+    case 'flicker':
+      return [
+        range('amount', 0, 1, 0.05, '%'),
+        select(
+          'kind',
+          Object.keys(FLICKER_KIND_LABELS).map((value) => ({
+            value,
+            label: localize(`Creator.Animate.Effects.Flicker.${value}`, FLICKER_KIND_LABELS[value]),
+          })),
+        ),
+        range('speed', 1, 12, 1),
+      ];
+    case 'glow':
+      return [color(effect.color), range('size', 1, 60, 1, 'px'), range('pulse', 0, 1, 0.05, '%')];
+    case 'particles':
+      return [
+        select(
+          'kind',
+          PARTICLE_KINDS.map((value) => ({ value, label: getParticleKindLabel(value) })),
+        ),
+        range('count', 1, 200, 1),
+        color(effect.color ?? PARTICLE_COLORS[effect.kind] ?? '#ffffff'),
+        range('size', 1, 20, 0.5, 'px'),
+      ];
+    default:
+      return [];
+  }
+}
+
+function formatEffectValue(control, value) {
+  const number = Number(value) || 0;
+  if (control.unit === '%') return `${Math.round(number * 100)}%`;
+  return `${Math.round(number * 10) / 10}${control.unit ?? ''}`;
+}
+
+function getSelectedEffect(app) {
+  const id = app.selectedEffectId;
+  return app.animation.effects.find((effect) => effect.id === id) ?? null;
+}
+
+/** The region brush works on the token art of the selected effect, where animation is possible. */
+function canPaintRegion(app) {
+  return canEditPins(app) && Boolean(getSelectedEffect(app));
+}
+
+function selectRegionTool(app) {
+  if (canPaintRegion(app)) setMaskTool(app, 'region');
+}
+
+/** Replaces the animation after an effect change and keeps the selection and tools valid. */
+function setAnimationEffects(app, animation) {
+  app.animation = animation;
+  if (!getSelectedEffect(app)) app.selectedEffectId = null;
+  if (!hasMotion(app.animation)) stopAnimationPlayback(app);
+  if (app.maskTool === 'region' && !getSelectedEffect(app)) setMaskTool(app, null);
+}
+
+function addCreatorEffect(app) {
+  if (!canEditPins(app)) return;
+  const root = getCreatorRoot(app);
+  const type = root?.querySelector('select[name="effectType"]')?.value;
+  if (!EFFECT_TYPES.includes(type)) return;
+  const effect = createEffect(type);
+  if (type === 'particles') {
+    const kind = root.querySelector('select[name="effectKind"]')?.value;
+    if (PARTICLE_KINDS.includes(kind)) effect.kind = kind;
+  }
+  setAnimationEffects(app, addEffect(app.animation, effect));
+  app.selectedEffectId = effect.id;
+  syncAnimationControls(app);
+  syncMaskControls(app);
+  renderCreatorPreview(app);
+}
+
+function selectCreatorEffect(app, id) {
+  if (!app.animation.effects.some((effect) => effect.id === id)) return;
+  app.selectedEffectId = id;
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+/** Removes an effect with its painted region; the region's undo steps go with it. */
+function removeCreatorEffect(app, id) {
+  const result = removeEffect({ animation: app.animation, regions: app.effectRegions }, id);
+  if (result.animation === app.animation) return;
+  if (result.removedRegion) {
+    app.effectRegions = result.regions;
+    const keep = (entry) => entry.layer !== 'region' || entry.regionKey !== result.removedRegion;
+    app._maskHistory.undo = app._maskHistory.undo.filter(keep);
+    app._maskHistory.redo = app._maskHistory.redo.filter(keep);
+    app._regionVersion += 1;
+  }
+  clearEffectCaches();
+  app._previewBend = null;
+  setAnimationEffects(app, result.animation);
+  syncAnimationControls(app);
+  syncMaskControls(app);
+  renderCreatorPreview(app);
+}
+
+/**
+ * Whole figure / painted region for the selected effect. A painted region is keyed by the
+ * effect's id; its canvas is kept when switching back to the whole figure so it can return.
+ */
+function setEffectRegionMode(app, painted) {
+  const effect = getSelectedEffect(app);
+  if (!effect) return;
+  const region = painted ? (getEffectRegionKey(effect) ?? effect.id) : null;
+  if (region !== getEffectRegionKey(effect))
+    setAnimationEffects(app, updateEffect(app.animation, effect.id, { region }));
+  syncAnimationControls(app);
+  if (painted) selectRegionTool(app);
+  else if (app.maskTool === 'region') setMaskTool(app, null);
+  else renderCreatorPreview(app);
+}
+
+/** Applies a parameter control of the selected effect without rebuilding the controls. */
+function updateEffectParam(app, input) {
+  const effect = getSelectedEffect(app);
+  const param = input.dataset.effectParam;
+  if (!effect || !param) return;
+  const value = input.type === 'range' ? Number(input.value) : input.value;
+  app.animation = updateEffect(app.animation, effect.id, { [param]: value });
+  const updated = getSelectedEffect(app);
+  const panel = input.closest?.('[data-effect-params]');
+  if (panel && updated) {
+    for (const control of getEffectParamControls(updated)) {
+      const field = panel.querySelector(`[data-effect-param="${control.param}"]`);
+      if (!field) continue;
+      if (control.input === 'range') {
+        field.max = String(control.max);
+        if (field !== input) field.value = String(control.value);
+      } else if (field !== input) field.value = String(control.value);
+      const label = panel.querySelector(`[data-effect-value="${control.param}"]`);
+      if (label) label.textContent = formatEffectValue(control, control.value);
+    }
+  }
+  renderCreatorPreview(app);
+}
+
+/**
+ * Starts a region stroke on the selected effect: switches it to a painted region if it was the
+ * whole figure, records an undo step and returns the region key (null when it cannot paint).
+ */
+function startRegionStroke(app) {
+  if (!canPaintRegion(app)) return null;
+  stopAnimationPlayback(app);
+  const effect = getSelectedEffect(app);
+  let key = getEffectRegionKey(effect);
+  if (!key) {
+    key = effect.id;
+    app.animation = updateEffect(app.animation, effect.id, { region: key });
+    syncAnimationControls(app);
+  }
+  pushMaskHistory(app, 'region', key);
+  return key;
+}
+
+/** The region canvas for `key`, in source-image px (the cut-out's size), created on demand. */
+function ensureEffectRegion(app, key) {
+  const current = app.effectRegions[key];
+  if (current && current.width === app.cutout.width && current.height === app.cutout.height)
+    return current;
+  const canvas = createCanvas(app.cutout.width, app.cutout.height);
+  app.effectRegions[key] = canvas;
+  return canvas;
+}
+
+/**
+ * Paints (or erases) a region stroke in place. The preview is unbent while the region tool is
+ * active, so the bend and effect caches are only reset when the stroke ends.
+ */
+function paintEffectRegion(app, key, from, to, mode) {
+  if (!app.cutout) return;
+  const region = ensureEffectRegion(app, key);
+  const layout = getPreviewLayout(app);
+  const toImage = (point) =>
+    previewPointToImage({
+      layout,
+      imageWidth: app.cutout.width,
+      imageHeight: app.cutout.height,
+      x: point.x,
+      y: point.y,
+    });
+  const start = toImage(from);
+  const end = toImage(to);
+  const context = region.getContext('2d');
+  context.save();
+  context.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+  context.strokeStyle = '#ffffff';
+  context.fillStyle = '#ffffff';
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.lineWidth = app.brushSize * end.scale;
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.lineTo(end.x, end.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(end.x, end.y, context.lineWidth / 2, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+  app._regionVersion += 1;
+  renderCreatorPreview(app);
+}
+
+/** The region canvas changed in place: forget everything cached by its identity. */
+function finishRegionStroke(app) {
+  clearEffectCaches();
+  app._previewBend = null;
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+/** While the region brush is active, the selected effect's region is tinted over the art. */
+function drawEffectRegionOverlay(context, app, size) {
+  if (app.maskTool !== 'region' || !app.cutout) return;
+  const key = getEffectRegionKey(getSelectedEffect(app));
+  const region = key ? app.effectRegions[key] : null;
+  if (!region) return;
+  const cached = app._regionTint;
+  let tint =
+    cached?.region === region && cached.version === app._regionVersion ? cached.tint : null;
+  if (!tint) {
+    tint = createCanvas(region.width, region.height);
+    const tintContext = tint.getContext('2d');
+    tintContext.drawImage(region, 0, 0);
+    tintContext.globalCompositeOperation = 'source-in';
+    tintContext.fillStyle = REGION_COLOR;
+    tintContext.fillRect(0, 0, region.width, region.height);
+    app._regionTint = { region, version: app._regionVersion, tint };
+  }
+  const layout = getPreviewLayout(app, size);
+  context.save();
+  context.globalAlpha = REGION_OVERLAY_ALPHA;
+  context.drawImage(tint, layout.x, layout.y, layout.width, layout.height);
+  context.restore();
+}
+
+function describeEffect(effect) {
+  const type = getEffectTypeLabel(effect.type);
+  const name = effect.type === 'particles' ? `${type}: ${getParticleKindLabel(effect.kind)}` : type;
+  if (!getEffectRegionKey(effect)) return name;
+  return `${name} (${localize('Creator.Animate.Effects.RegionShort', 'region')})`;
+}
+
+/**
+ * Effects list and the selected effect's controls, built from `app.animation.effects`. They are
+ * rebuilt only when the effects or the selection change, so a control being dragged survives
+ * unrelated syncs. Built controls carry `data-animation-control` so they share its enabling.
+ */
+function syncEffectControls(app) {
+  const root = getCreatorRoot(app);
+  const panel = root?.querySelector?.('[data-effects]');
+  const selected = getSelectedEffect(app);
+  const regionButton = root?.querySelector?.('[data-creator-action="mask-region"]');
+  if (regionButton) regionButton.hidden = !selected;
+  if (!panel) return;
+  const type = panel.querySelector('select[name="effectType"]')?.value;
+  const kindPicker = panel.querySelector('[data-effect-kind-picker]');
+  if (kindPicker) kindPicker.hidden = type !== 'particles';
+
+  const signature = JSON.stringify([
+    app.animation.effects,
+    app.selectedEffectId,
+    Object.keys(app.effectRegions ?? {}),
+  ]);
+  if (panel.dataset.signature === signature) return;
+  panel.dataset.signature = signature;
+  const doc = panel.ownerDocument;
+  const make = (tag, props = {}) => Object.assign(doc.createElement(tag), props);
+
+  const empty = panel.querySelector('[data-effects-empty]');
+  if (empty) empty.hidden = app.animation.effects.length > 0;
+  const list = panel.querySelector('[data-effects-list]');
+  if (list) {
+    list.replaceChildren();
+    for (const effect of app.animation.effects) {
+      const item = make('li', { className: 'pf2e-tokener-creator-effect' });
+      item.classList.toggle('is-selected', effect.id === app.selectedEffectId);
+      const choose = make('button', {
+        type: 'button',
+        className: 'pf2e-tokener-creator-effect-select',
+      });
+      choose.dataset.creatorAction = 'effect-select';
+      choose.dataset.effectId = effect.id;
+      choose.dataset.animationControl = '';
+      choose.setAttribute('aria-pressed', effect.id === app.selectedEffectId ? 'true' : 'false');
+      choose.append(
+        make('i', { className: `fas ${EFFECT_ICONS[effect.type] ?? 'fa-star'}` }),
+        make('span', { textContent: describeEffect(effect) }),
+      );
+      const remove = make('button', {
+        type: 'button',
+        className: 'pf2e-tokener-creator-icon-button',
+      });
+      const removeLabel = localize('Creator.Animate.Effects.Remove', 'Remove effect');
+      remove.dataset.creatorAction = 'effect-remove';
+      remove.dataset.effectId = effect.id;
+      remove.dataset.animationControl = '';
+      remove.dataset.tooltip = removeLabel;
+      remove.setAttribute('aria-label', removeLabel);
+      remove.append(make('i', { className: 'fas fa-trash' }));
+      item.append(choose, remove);
+      list.append(item);
+    }
+  }
+
+  const params = panel.querySelector('[data-effect-params]');
+  if (!params) return;
+  params.replaceChildren();
+  params.hidden = !selected;
+  if (!selected) return;
+  const painted = Boolean(getEffectRegionKey(selected));
+  const modes = make('div', {
+    className: 'pf2e-tokener-creator-segmented pf2e-tokener-creator-effect-region',
+  });
+  for (const value of ['whole', 'painted']) {
+    const option = make('label');
+    option.dataset.tooltip =
+      value === 'whole'
+        ? localize(
+            'Creator.Animate.Effects.WholeTooltip',
+            'The effect covers the whole figure (particles rise around it)',
+          )
+        : localize(
+            'Creator.Animate.Effects.PaintedTooltip',
+            'The effect covers only the area painted with the region brush (F)',
+          );
+    const radio = make('input', {
+      type: 'radio',
+      name: 'effectRegion',
+      value,
+      checked: (value === 'painted') === painted,
+    });
+    radio.dataset.animationControl = '';
+    const text =
+      value === 'painted'
+        ? localize('Creator.Animate.Effects.Painted', 'Painted region')
+        : selected.type === 'particles'
+          ? localize('Creator.Animate.Effects.Around', 'Around the figure')
+          : localize('Creator.Animate.Effects.Whole', 'Whole figure');
+    option.append(radio, make('span', { textContent: text }));
+    modes.append(option);
+  }
+  params.append(modes);
+
+  const grid = make('div', { className: 'pf2e-tokener-creator-effect-controls' });
+  for (const control of getEffectParamControls(selected)) {
+    const field = make('label', { className: 'pf2e-tokener-creator-slider' });
+    field.append(make('span', { textContent: control.label }));
+    let input;
+    if (control.input === 'range') {
+      const value = make('span', {
+        className: 'pf2e-tokener-creator-value',
+        textContent: formatEffectValue(control, control.value),
+      });
+      value.dataset.effectValue = control.param;
+      field.append(value);
+      input = make('input', {
+        type: 'range',
+        min: String(control.min),
+        max: String(control.max),
+        step: String(control.step),
+      });
+      input.value = String(control.value);
+    } else if (control.input === 'select') {
+      input = make('select');
+      for (const option of control.options)
+        input.append(
+          make('option', {
+            value: option.value,
+            textContent: option.label,
+            selected: option.selected,
+          }),
+        );
+    } else {
+      input = make('input', { type: 'color', value: control.value });
+    }
+    input.name = 'effectParam';
+    input.dataset.effectParam = control.param;
+    input.dataset.animationControl = '';
+    field.append(input);
+    grid.append(field);
+  }
+  params.append(grid);
+  if (painted && !app.effectRegions[getEffectRegionKey(selected)])
+    params.append(
+      make('p', {
+        className: 'pf2e-tokener-creator-hint',
+        textContent: localize(
+          'Creator.Animate.Effects.PaintHint',
+          'Paint the region with the region brush (F); until then the effect covers the whole figure.',
+        ),
+      }),
+    );
 }
 
 function setAnimationTime(app, t) {
@@ -2086,6 +2731,7 @@ function syncAnimationControls(app) {
   const atKeyframe = Boolean(pin && getKeyframeAt(pin, app.animationTime, app.animation.mode));
   const moving = hasMotion(app.animation);
   const enabled = available && Boolean(app.cutout) && !app.busy;
+  syncEffectControls(app);
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
     let disabled = !enabled;
@@ -2195,7 +2841,8 @@ function canMask(app) {
 }
 
 function shouldShowMaskOverlay(app) {
-  if (isCleanupTool(app.maskTool) || app.maskTool === 'pin') return false;
+  if (isCleanupTool(app.maskTool) || app.maskTool === 'pin' || app.maskTool === 'region')
+    return false;
   return canMask(app) && Boolean(app.maskTool || app._pointer?.mode);
 }
 
@@ -2203,9 +2850,9 @@ function setMaskTool(app, tool) {
   // The mask overlay and brushes map to the still art, so editing tools pause the preview loop.
   if (!canPlayWithTool(tool)) stopAnimationPlayback(app);
   app.maskTool = tool;
-  if (tool && tool !== 'pin' && !isCleanupTool(tool)) ensurePopOutMask(app);
+  if (tool && tool !== 'pin' && tool !== 'region' && !isCleanupTool(tool)) ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
-  if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool;
+  if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool === 'region' ? 'paint' : tool;
   syncMaskControls(app);
   syncBrushCursor(app);
   renderCreatorPreview(app);
@@ -2249,15 +2896,21 @@ function setBrushSize(app, size) {
   renderCreatorPreview(app);
 }
 
-function pushMaskHistory(app, layer = 'popout') {
+function pushMaskHistory(app, layer = 'popout', regionKey = null) {
   const history = app._maskHistory;
-  history.undo.push({ layer, workspace: app.workspace, snapshot: snapshotLayer(app, layer) });
+  history.undo.push({
+    layer,
+    regionKey,
+    workspace: app.workspace,
+    snapshot: snapshotLayer(app, layer, app.workspace, regionKey),
+  });
   if (history.undo.length > MASK_HISTORY_LIMIT) history.undo.shift();
   history.redo = [];
   syncMaskControls(app);
 }
 
-function snapshotLayer(app, layer, workspace = app.workspace) {
+function snapshotLayer(app, layer, workspace = app.workspace, regionKey = null) {
+  if (layer === 'region') return cloneMask(app.effectRegions[regionKey]);
   if (layer === 'cleanup')
     return {
       keep: cloneMask(workspace.cleanup.keep),
@@ -2272,7 +2925,7 @@ function undoMask(app) {
   if (!entry) return;
   history.redo.push({
     ...entry,
-    snapshot: snapshotLayer(app, entry.layer, entry.workspace),
+    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry.regionKey),
   });
   restoreLayer(app, entry);
 }
@@ -2283,12 +2936,25 @@ function redoMask(app) {
   if (!entry) return;
   history.undo.push({
     ...entry,
-    snapshot: snapshotLayer(app, entry.layer, entry.workspace),
+    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry.regionKey),
   });
   restoreLayer(app, entry);
 }
 
-function restoreLayer(app, { layer, snapshot, workspace = app.workspace }) {
+function restoreLayer(app, { layer, snapshot, regionKey, workspace = app.workspace }) {
+  if (layer === 'region') {
+    // A restored region is a new canvas, but the regions object keeps its identity, so the
+    // preview bend and the effect caches are reset by hand.
+    if (snapshot) app.effectRegions[regionKey] = snapshot;
+    else delete app.effectRegions[regionKey];
+    app._regionVersion += 1;
+    clearEffectCaches();
+    app._previewBend = null;
+    syncMaskControls(app);
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+    return;
+  }
   if (layer === 'cleanup') {
     workspace.cleanup = { keep: snapshot.keep, remove: snapshot.remove };
     workspace.cutout = composeCleanCutout(workspace);
@@ -2467,7 +3133,7 @@ function syncMaskControls(app) {
   const root = getCreatorRoot(app);
   if (!root) return;
   const tool = getToolButton(app.maskTool);
-  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin'];
+  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin', 'region'];
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
@@ -2604,6 +3270,7 @@ function formatDownloadStatus(key, percent) {
 }
 
 function canShowBrush(app) {
+  if (app.maskTool === 'region') return canPaintRegion(app);
   return isCleanupTool(app.maskTool) ? Boolean(app.cutout) : canMask(app);
 }
 
@@ -2624,7 +3291,8 @@ function drawBrushCursor(context, app, viewport) {
   context.strokeStyle = 'rgba(0, 0, 0, 0.7)';
   context.stroke();
   context.lineWidth = 1.5;
-  context.strokeStyle = BRUSH_COLORS[pointer.mode] ?? BRUSH_COLORS.paint;
+  context.strokeStyle =
+    app.maskTool === 'region' ? REGION_COLOR : (BRUSH_COLORS[pointer.mode] ?? BRUSH_COLORS.paint);
   if (pointer.mode === 'erase' || pointer.mode === 'cut') context.setLineDash([4, 3]);
   context.stroke();
   context.restore();

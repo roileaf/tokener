@@ -1225,3 +1225,163 @@ test('Escape with the pin tool clears a selection first, then switches to Move',
   assert.equal(getPinToolEscapeAction({ maskTool: 'pin', selectedCount: 0 }), 'move');
   assert.equal(getPinToolEscapeAction({ maskTool: 'paint', selectedCount: 2 }), 'move');
 });
+
+test('F selects the region tool', async () => {
+  const { getMaskShortcut } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getMaskShortcut({ key: 'f' }), 'tool-region');
+  assert.equal(getMaskShortcut({ key: 'F' }), 'tool-region');
+  assert.equal(getMaskShortcut({ key: 'f', ctrlKey: true }), null);
+});
+
+test('the region tool has its own toolbar button', async () => {
+  const { getToolButton } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getToolButton('region'), 'region');
+});
+
+test('the region brush adds on a drag and removes on a right or Alt drag', async () => {
+  const { getStrokeMode } = await import('../scripts/creator-shortcuts.js');
+  assert.equal(getStrokeMode({ tool: 'region' }), 'paint');
+  assert.equal(getStrokeMode({ tool: 'region', shiftKey: true }), 'paint');
+  assert.equal(getStrokeMode({ tool: 'region', button: 2 }), 'erase');
+  assert.equal(getStrokeMode({ tool: 'region', altKey: true }), 'erase');
+});
+
+test('the region tool pauses playback and shows the unbent art like the mask tools', async () => {
+  const { canPlayWithTool, shouldBendPreview } = await import('../scripts/token-animation.js');
+  assert.equal(canPlayWithTool('region'), false);
+  assert.equal(shouldBendPreview({ maskTool: 'region', pointerMode: null }), false);
+});
+
+test('effect region keys: null for the whole figure, the region key when painted', async () => {
+  const { getEffectRegionKey } = await import('../scripts/token-creator.js');
+  assert.equal(getEffectRegionKey({ id: 'a', type: 'wind', region: null }), null);
+  assert.equal(getEffectRegionKey({ id: 'a', type: 'wind', region: 'a' }), 'a');
+  assert.equal(getEffectRegionKey({ id: 'a', type: 'wind', region: '' }), null);
+  assert.equal(getEffectRegionKey(null), null);
+});
+
+test('adding and updating effects replaces the animation and clamps params', async () => {
+  const { addEffect, updateEffect } = await import('../scripts/token-creator.js');
+  const animation = { duration: 2, fps: 30, mode: 'loop', pins: [], effects: [] };
+  const added = addEffect(animation, {
+    id: 'w',
+    type: 'wind',
+    region: null,
+    strength: 4,
+    scale: 24,
+  });
+  assert.notEqual(added, animation);
+  assert.equal(animation.effects.length, 0);
+  assert.deepEqual(
+    added.effects.map((effect) => effect.id),
+    ['w'],
+  );
+
+  // Strength is capped at 18 % of the noise scale so the warp mesh cannot fold.
+  const strong = updateEffect(added, 'w', { strength: 30 });
+  assert.notEqual(strong.effects[0], added.effects[0]);
+  assert.equal(strong.effects[0].strength, 24 * 0.18);
+  assert.equal(updateEffect(added, 'missing', { strength: 1 }), added);
+
+  const painted = updateEffect(added, 'w', { region: 'w' });
+  assert.equal(painted.effects[0].region, 'w');
+
+  const particles = addEffect(animation, {
+    id: 'p',
+    type: 'particles',
+    region: null,
+    kind: 'embers',
+    count: 24,
+    color: '#123456',
+    size: 3,
+  });
+  const snow = updateEffect(particles, 'p', { kind: 'snow' });
+  assert.equal(snow.effects[0].kind, 'snow');
+  assert.equal(snow.effects[0].color, null, 'a new kind takes its own default colour');
+});
+
+test('removing an effect drops its region', async () => {
+  const { removeEffect } = await import('../scripts/token-creator.js');
+  const regionA = { id: 'canvas-a' };
+  const regionB = { id: 'canvas-b' };
+  const animation = {
+    duration: 2,
+    fps: 30,
+    mode: 'loop',
+    pins: [],
+    effects: [
+      { id: 'a', type: 'glow', region: 'a', color: '#8fd3ff', size: 10, pulse: 0.5 },
+      { id: 'b', type: 'wind', region: 'b', strength: 4, scale: 24 },
+    ],
+  };
+  const regions = { a: regionA, b: regionB };
+  const result = removeEffect({ animation, regions }, 'a');
+  assert.deepEqual(
+    result.animation.effects.map((effect) => effect.id),
+    ['b'],
+  );
+  assert.deepEqual(Object.keys(result.regions), ['b']);
+  assert.equal(result.regions.b, regionB);
+  assert.equal(result.removedRegion, 'a');
+  assert.equal(animation.effects.length, 2, 'the old animation is untouched');
+  assert.equal(regions.a, regionA, 'the old regions are untouched');
+
+  // A region another effect still uses stays.
+  const shared = {
+    ...animation,
+    effects: [animation.effects[0], { ...animation.effects[1], region: 'a' }],
+  };
+  const kept = removeEffect({ animation: shared, regions }, 'a');
+  assert.equal(kept.regions, regions);
+  assert.equal(kept.removedRegion, null);
+
+  const missing = removeEffect({ animation, regions }, 'zzz');
+  assert.equal(missing.animation, animation);
+  assert.equal(missing.regions, regions);
+});
+
+test('effect param controls follow the type, with the wind strength capped by its scale', async () => {
+  const { getEffectParamControls } = await import('../scripts/token-creator.js');
+  const wind = getEffectParamControls({
+    id: 'w',
+    type: 'wind',
+    region: null,
+    strength: 4,
+    scale: 100,
+  });
+  assert.deepEqual(
+    wind.map((control) => control.param),
+    ['strength', 'scale'],
+  );
+  assert.equal(wind[0].max, 18);
+  assert.equal(wind[0].value, 4);
+  const glow = getEffectParamControls({
+    id: 'g',
+    type: 'glow',
+    region: null,
+    color: '#ff0000',
+    size: 10,
+    pulse: 0.5,
+  });
+  assert.deepEqual(
+    glow.map((control) => [control.param, control.input]),
+    [
+      ['color', 'color'],
+      ['size', 'range'],
+      ['pulse', 'range'],
+    ],
+  );
+  const particles = getEffectParamControls({
+    id: 'p',
+    type: 'particles',
+    region: null,
+    kind: 'snow',
+    count: 24,
+    color: null,
+    size: 3,
+  });
+  const kind = particles.find((control) => control.param === 'kind');
+  assert.equal(kind.input, 'select');
+  assert.equal(kind.options.find((option) => option.selected).value, 'snow');
+  assert.equal(particles.find((control) => control.param === 'color').value, '#ffffff');
+});
