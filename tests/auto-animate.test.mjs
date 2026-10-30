@@ -3,15 +3,19 @@ import assert from 'node:assert/strict';
 
 import { analyseSubject, findProtrusions } from '../scripts/auto-compose.js';
 import { hasMotion, PINGPONG_MAX_KEY, samplePinOffset } from '../scripts/animation.js';
-import { buildAutoRig, layerPresetKeyframes } from '../scripts/auto-animate.js';
+import { buildAutoRig, classifyTip, layerPresetKeyframes } from '../scripts/auto-animate.js';
 import { getTokenFrameLayout } from '../scripts/token-composer.js';
 
 const CLIP = 0.666;
 const GRID = 96;
 const VIEW = { zoom: 0.5, offsetX: 0, offsetY: 0 };
+const WIDE = { zoom: 0.7, offsetX: 0, offsetY: 0 };
 
-/** 200x300 figure: round head, wide body down to the bottom edge, optional raised sword. */
-function figure({ sword = false, spike = false } = {}) {
+/**
+ * 200x300 figure: round head, wide body down to the bottom edge, and optional parts: a raised
+ * sword and spike, level wings out to both sides, or a tail hanging down to the right.
+ */
+function figure({ sword = false, spike = false, wings = false, tail = false } = {}) {
   const width = 200;
   const height = 300;
   const alpha = new Uint8Array(width * height);
@@ -21,7 +25,9 @@ function figure({ sword = false, spike = false } = {}) {
         Math.hypot(x - 100, y - 70) <= 30 ||
         (y >= 95 && x >= 55 && x <= 145) ||
         (sword && x >= 140 && x <= 147 && y >= 6 && y <= 200) ||
-        (spike && x >= 50 && x <= 57 && y >= 10 && y <= 200);
+        (spike && x >= 50 && x <= 57 && y >= 10 && y <= 200) ||
+        (wings && y >= 110 && y <= 120) ||
+        (tail && x >= 140 && Math.abs(y - 125 - (x - 140) * 0.9) <= 6);
       if (on) alpha[y * width + x] = 255;
     }
   }
@@ -75,10 +81,12 @@ test('auto rig layers bob over breathe on the head and breathes the chest', () =
   // Breathe scales the head and chest about their midpoint by 3 %.
   const midY = (head.y + chest.y) / 2;
   const at = (pin, t) => pin.keyframes.find((key) => key.t === t);
-  assert.ok(Math.abs(at(head, 0.5).dy - ((head.y - midY) * 0.03 - 0.6 * amplitude)) < 1e-9);
   assert.ok(Math.abs(at(chest, 0.5).dy - (chest.y - midY) * 0.03) < 1e-9);
-  assert.equal(at(head, 0).dy, 0);
   assert.equal(chest.keyframes.length, 2);
+  // The head bobs a beat behind the chest's breath, so it is still rising after the chest peaks.
+  assert.ok(head.keyframes.some((key) => Math.abs(key.t - 0.58) < 1e-9));
+  assert.ok(samplePinOffset(head, 0.58).dy < samplePinOffset(head, 0.5).dy, 'head peaks late');
+  assert.ok(samplePinOffset(head, 0.58).dy < -0.6 * amplitude + 1);
 });
 
 test('auto rig adds a swaying tip pin, without breathe, for a raised sword', () => {
@@ -88,29 +96,59 @@ test('auto rig adds a swaying tip pin, without breathe, for a raised sword', () 
   assert.equal(tips.length, 1);
   assert.ok(Math.abs(tips[0].x - 143) <= 8, `tip x ${tips[0].x}`);
   assert.ok(tips[0].y <= 30, `tip y ${tips[0].y}`);
-  const amplitude = 0.03 * 300;
-  assert.deepEqual(
-    tips[0].keyframes.map((key) => [key.t, key.dx, key.dy]),
-    [
-      [0, -amplitude, 0],
-      [0.5, amplitude, 0],
-    ],
-  );
+  const [from, to] = tips[0].keyframes;
+  assert.deepEqual([from.t, to.t], [0.1, 0.6], 'a crest trails the body');
+  assert.equal(from.dy, 0);
+  assert.equal(to.dy, 0);
+  assert.ok(from.dx < 0 && to.dx === -from.dx, 'it sways from side to side');
   assert.equal(hasMotion({ pins }), true);
 });
 
-test('auto rig flaps two tips toward the body', () => {
+test('auto rig staggers two raised tips instead of moving them in lockstep', () => {
   const { pins } = rig(figure({ sword: true, spike: true }));
   const tips = pins.slice(4);
   assert.equal(tips.length, 2);
-  const amplitude = 0.03 * 300;
-  const centreX = (tips[0].x + tips[1].x) / 2;
+  const starts = tips.map((tip) => tip.keyframes[0].t).sort((a, b) => a - b);
+  assert.ok(Math.abs(starts[0] - 0.1) < 1e-9 && Math.abs(starts[1] - 0.22) < 1e-9, `${starts}`);
+});
+
+test('auto rig flaps level wings together, down and toward the body', () => {
+  // Zoomed in so the wings reach past the token ring.
+  const { pins } = rig(figure({ wings: true }), WIDE);
+  const [, chest] = pins;
+  const tips = pins.slice(4);
+  assert.equal(tips.length, 2, 'both wings get a pin');
+  assert.ok(tips.some((tip) => tip.x < chest.x) && tips.some((tip) => tip.x > chest.x));
   for (const tip of tips) {
-    const apex = tip.keyframes.find((key) => key.t === 0.5);
-    assert.equal(apex.dy, amplitude);
-    assert.ok(Math.sign(apex.dx) === Math.sign(centreX - tip.x));
-    assert.ok(Math.abs(apex.dx) > 0);
+    assert.equal(classifyTip(tip, chest), 'wing');
+    const [rest, apex] = tip.keyframes;
+    assert.deepEqual([rest.t, apex.t], [0, 0.5], 'wings beat with the body');
+    assert.ok(apex.dy > 0);
+    assert.ok(Math.sign(apex.dx) === Math.sign(chest.x - tip.x));
   }
+});
+
+test('auto rig swings a hanging tail across its length, well behind the body', () => {
+  const { pins } = rig(figure({ tail: true }), WIDE);
+  const [, chest] = pins;
+  const tips = pins.slice(4);
+  assert.equal(tips.length, 1, 'the tail gets a pin');
+  const [tail] = tips;
+  assert.equal(classifyTip(tail, chest), 'tail');
+  const [from, to] = tail.keyframes;
+  assert.deepEqual([from.t, to.t], [0.25, 0.75]);
+  // The swing is square to the line from the chest to the tip.
+  const along = (to.dx - from.dx) * (tail.x - chest.x) + (to.dy - from.dy) * (tail.y - chest.y);
+  assert.ok(Math.abs(along) < 1e-6, `swing along the tail ${along}`);
+  assert.ok(Math.hypot(to.dx, to.dy) > 0);
+});
+
+test('tip roles come from the direction seen from the chest', () => {
+  const chest = { x: 100, y: 100 };
+  assert.equal(classifyTip({ x: 110, y: 10 }, chest), 'crest');
+  assert.equal(classifyTip({ x: 190, y: 90 }, chest), 'wing');
+  assert.equal(classifyTip({ x: 10, y: 120 }, chest), 'wing');
+  assert.equal(classifyTip({ x: 150, y: 190 }, chest), 'tail');
 });
 
 test('auto rig keeps one tip when two pieces poke out of the same part', () => {
@@ -133,7 +171,10 @@ test('auto rig keeps one tip when two pieces poke out of the same part', () => {
   assert.ok(pieces.length >= 2, `the prongs should be separate pieces (${pieces.length})`);
   const { pins } = rig(grid);
   assert.equal(pins.length, 5);
-  assert.equal(pins[4].keyframes.find((key) => key.t === 0.5).dy, 0, 'a lone tip sways');
+  assert.ok(
+    pins[4].keyframes.every((key) => key.dy === 0),
+    'a lone raised tip sways',
+  );
 });
 
 test('auto rig finds the sword tip under another zoom and offsets', () => {
@@ -231,18 +272,26 @@ test('auto rig in ping-pong peaks at the apex and moves over the whole forward h
   const amplitude = 0.03 * 300;
   const [head, chest] = pins;
   const midY = (head.y + chest.y) / 2;
-  for (const pin of [head, chest, pins[4]])
-    assert.deepEqual(
-      pin.keyframes.map((key) => key.t),
-      [0, PINGPONG_MAX_KEY],
-    );
-  const apex = head.keyframes[1];
+  assert.deepEqual(
+    chest.keyframes.map((key) => key.t),
+    [0, PINGPONG_MAX_KEY],
+  );
+  // The head and the sword hold a moment, then still arrive at the apex.
+  assert.deepEqual(
+    head.keyframes.map((key) => key.t),
+    [0, 0.16, PINGPONG_MAX_KEY],
+  );
+  const apex = head.keyframes.at(-1);
   assert.ok(Math.abs(apex.dy - ((head.y - midY) * 0.03 - 0.6 * amplitude)) < 1e-9);
-  // The sword sways from -A to +A over the forward half without stalling.
   const tip = pins[4];
+  assert.deepEqual(
+    tip.keyframes.map((key) => key.t),
+    [0, 0.2, PINGPONG_MAX_KEY],
+  );
+  const reach = tip.keyframes.at(-1).dx;
   const quarter = samplePinOffset(tip, 0.375, 'pingpong').dx;
-  assert.ok(quarter > -amplitude && quarter < amplitude * 0.9, `quarter ${quarter}`);
-  assert.ok(Math.abs(samplePinOffset(tip, 0.5, 'pingpong').dx - amplitude) < 1e-9);
+  assert.ok(quarter > -reach && quarter < reach * 0.9, `quarter ${quarter}`);
+  assert.ok(Math.abs(samplePinOffset(tip, 0.5, 'pingpong').dx - reach) < 1e-9);
 });
 
 test('layering in ping-pong holds the last key instead of wrapping', () => {

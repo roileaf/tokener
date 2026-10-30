@@ -4,6 +4,7 @@ import {
   createPin,
   KEYFRAME_MERGE,
   loopDistance,
+  PINGPONG_MAX_KEY,
   samplePinOffset,
 } from './animation.js';
 import { getRotationArm, getPresetAmplitude } from './token-animation.js';
@@ -11,6 +12,9 @@ import { getTokenFrameLayout } from './token-composer.js';
 
 // Auto animate: places pins on the head, chest, base and any protruding tips of the cut-out and
 // gives them an idle loop. Works on a plain alpha grid so it can be tested without a browser.
+// Each tip moves by what it is, read from where it points as seen from the chest: a crest (a
+// horn, a raised weapon) sways, a wing flaps and a tail swings, and the parts lag behind the body
+// by different amounts so the figure does not move in lockstep.
 
 const CHEST_DROP = 1.6;
 const ANCHOR_SHARES = [0.25, 0.75];
@@ -22,6 +26,21 @@ const HEAD_CLEARANCE = 1.2;
 // Tips closer than this share of the figure's longest side are two pieces of one part (a wing cut
 // by the frame twice), so only the farther one gets a pin.
 const MIN_TIP_SPACING = 0.15;
+// A tip pointing this steeply up (unit y below minus this) is a crest; this steeply down, a tail.
+const CREST_SLOPE = 0.7;
+const TAIL_SLOPE = 0.4;
+const CREST_SWAY = 0.7;
+const FLAP_PULL = 0.3;
+// Share of the loop each part trails the chest's breath by; the head follows a little behind.
+const HEAD_LAG = 0.08;
+const ROLE_LAG = { crest: 0.1, wing: 0, tail: 0.25 };
+// A second crest or tail trails the first by this much more; wings beat together.
+const SAME_ROLE_LAG = 0.12;
+// Tips farther from the chest than half the figure's longest side move more, nearer ones less.
+const MIN_REACH = 0.75;
+const MAX_REACH = 1.5;
+// The longest ping-pong hold before a lagging part starts to move.
+const PINGPONG_MAX_HOLD = 0.9;
 
 /**
  * `alpha` is the grid from getAlphaGrid ({ alpha, width, height, scale }); the pins come back in
@@ -69,24 +88,80 @@ export function buildAutoRig({
 
   const amplitude = getPresetAmplitude('bob', size);
   const bodyIds = [headPin.id, chestPin.id];
-  let pins = applyPreset([headPin, chestPin, ...anchors, ...tipPins], bodyIds, 'breathe', {
+  const breathing = applyPreset([headPin, chestPin], bodyIds, 'breathe', { mode });
+  // The head's bob is layered over its breath, a beat behind it; anchors stay still.
+  const bob = delayedKeyframes(
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: -amplitude * HEAD_BOB_SHARE },
+    HEAD_LAG,
     mode,
-  });
-  // Bob, Flap and Sway are layered over Breathe, not written in its place; anchors stay still.
-  pins = layerPreset(pins, [headPin.id], 'bob', amplitude * HEAD_BOB_SHARE, mode);
-  if (tipPins.length === 2) {
-    pins = layerPreset(
-      pins,
-      tipPins.map((pin) => pin.id),
-      'flap',
-      amplitude,
-      mode,
-    );
-  } else if (tipPins.length === 1) {
-    pins = layerPreset(pins, [tipPins[0].id], 'sway', amplitude, mode);
-  }
+  );
+  const headBobbing = {
+    ...breathing[0],
+    keyframes: layerPresetKeyframes(breathing[0].keyframes, bob, mode),
+  };
+  const reachUnit = (Math.max(bounds.width * toSourceX, bounds.height * toSourceY) || 1) / 2;
+  const tips = animateTips(tipPins, chestPin, { amplitude, reachUnit, mode });
   // Nothing stays selected: a preset clicked next would otherwise land on every pin at once.
-  return { pins, selectedPinIds: [] };
+  return { pins: [headBobbing, breathing[1], ...anchors, ...tips], selectedPinIds: [] };
+}
+
+/** What a tip is, from its direction seen from the chest: 'crest' (up), 'tail' (down) or 'wing'. */
+export function classifyTip(tip, chest) {
+  const dx = tip.x - chest.x;
+  const dy = tip.y - chest.y;
+  const length = Math.hypot(dx, dy) || 1;
+  if (dy / length < -CREST_SLOPE) return 'crest';
+  if (dy / length > TAIL_SLOPE) return 'tail';
+  return 'wing';
+}
+
+/** Gives each tip pin the motion of its role, scaled by its reach and lagging by role. */
+function animateTips(tips, chest, { amplitude, reachUnit, mode }) {
+  const seen = { crest: 0, wing: 0, tail: 0 };
+  return tips.map((tip) => {
+    const role = classifyTip(tip, chest);
+    const dx = tip.x - chest.x;
+    const dy = tip.y - chest.y;
+    const length = Math.hypot(dx, dy) || 1;
+    const reach = Math.min(MAX_REACH, Math.max(MIN_REACH, length / reachUnit));
+    const swing = amplitude * reach;
+    let from;
+    let to;
+    if (role === 'crest') {
+      from = { dx: -swing * CREST_SWAY, dy: 0 };
+      to = { dx: swing * CREST_SWAY, dy: 0 };
+    } else if (role === 'wing') {
+      from = { dx: 0, dy: 0 };
+      to = { dx: Math.sign(-dx) * swing * FLAP_PULL, dy: swing };
+    } else {
+      // A tail swings across its own length.
+      const nx = -dy / length;
+      const ny = dx / length;
+      from = { dx: -nx * swing, dy: -ny * swing };
+      to = { dx: nx * swing, dy: ny * swing };
+    }
+    const lag = ROLE_LAG[role] + (role === 'wing' ? 0 : seen[role] * SAME_ROLE_LAG);
+    seen[role] += 1;
+    return { ...tip, keyframes: delayedKeyframes(from, to, lag, mode) };
+  });
+}
+
+/**
+ * Keyframes going from `from` to `to` and back, starting `lag` of the loop late. In ping-pong the
+ * part holds `from` for a while instead, so it still reaches `to` at the apex.
+ */
+function delayedKeyframes(from, to, lag, mode) {
+  const key = (t, value) => ({ t, dx: value.dx, dy: value.dy });
+  if (mode === 'pingpong') {
+    const hold = Math.min(PINGPONG_MAX_HOLD, 2 * lag);
+    const keys = [key(0, from)];
+    if (hold >= KEYFRAME_MERGE) keys.push(key(hold, from));
+    keys.push(key(PINGPONG_MAX_KEY, to));
+    return keys;
+  }
+  if (lag < KEYFRAME_MERGE) return [key(0, from), key(0.5, to)];
+  return [key(lag, from), key(lag + 0.5, to)];
 }
 
 /**
@@ -112,18 +187,6 @@ export function layerPresetKeyframes(base, added, mode = 'loop') {
     if (rot) key.rot = rot;
     return key;
   });
-}
-
-function layerPreset(pins, ids, preset, amplitude, mode) {
-  const bare = pins.map((pin) => ({ ...pin, keyframes: [] }));
-  const added = new Map(
-    applyPreset(bare, ids, preset, { amplitude, mode }).map((pin) => [pin.id, pin.keyframes]),
-  );
-  return pins.map((pin) =>
-    ids.includes(pin.id)
-      ? { ...pin, keyframes: layerPresetKeyframes(pin.keyframes, added.get(pin.id), mode) }
-      : pin,
-  );
 }
 
 function findTips({
