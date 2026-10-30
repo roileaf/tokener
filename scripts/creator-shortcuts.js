@@ -43,13 +43,14 @@ export function getMaskShortcut({ key, ctrlKey, metaKey, shiftKey, altKey } = {}
  */
 const CLEANUP_TOOLS = ['cut', 'restore', 'wand'];
 
-/**
- * The toolbar button that shows a tool as active. Paint and erase are the two modes of the one
- * pop-out brush (E or X starts it in erase mode), so both light up the brush button.
- */
+// Tools that are the second mode of another tool's button: the pop-out brush (paint/erase) and
+// the touch-up brush (cut/restore). E, R or X start a brush in its second mode.
+const SECOND_MODES = { erase: 'paint', restore: 'cut' };
+
+/** The toolbar button that shows a tool as active; a brush button lights up in either mode. */
 export function getToolButton(tool) {
   if (!tool) return 'move';
-  return tool === 'erase' ? 'paint' : tool;
+  return SECOND_MODES[tool] ?? tool;
 }
 
 /** Background cleanup tools edit the cut-out itself; the others edit the pop-out mask. */

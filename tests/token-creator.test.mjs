@@ -1041,5 +1041,6 @@ test('the pop-out brush button stands for both brush modes', async () => {
   assert.equal(getToolButton('paint'), 'paint');
   assert.equal(getToolButton('erase'), 'paint');
   assert.equal(getToolButton('cut'), 'cut');
+  assert.equal(getToolButton('restore'), 'cut');
   assert.equal(getToolButton(null), 'move');
 });

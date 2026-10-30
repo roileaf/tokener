@@ -536,11 +536,7 @@ function prepareCreatorContext(app) {
       maskClearTooltip: localize('Creator.MaskClearTooltip', 'Remove all pop-out areas.'),
       cleanupCutTooltip: localize(
         'Creator.CleanupCutTooltip',
-        'Remove background: paint over leftovers to delete them (Q)',
-      ),
-      cleanupRestoreTooltip: localize(
-        'Creator.CleanupRestoreTooltip',
-        'Restore: paint to bring back parts of the original image (R)',
+        'Touch-up brush (Q): drag over leftovers to remove them, right-drag or Alt-drag to bring the original back',
       ),
       cleanupWandTooltip: localize(
         'Creator.CleanupWandTooltip',
@@ -568,8 +564,8 @@ function prepareCreatorContext(app) {
           label: localize('Creator.ShortcutViewPan', 'Pan view'),
         },
         {
-          keys: `${kbd('Q')} ${kbd('R')} ${kbd('G')}`,
-          label: localize('Creator.ShortcutCleanup', 'Remove, restore, fill remove'),
+          keys: `${kbd('Q')} ${kbd('G')}`,
+          label: localize('Creator.ShortcutCleanup', 'Touch-up brush, fill remove'),
         },
         {
           keys: `${kbd('P')}`,
@@ -1019,7 +1015,6 @@ async function handleCreatorClick(app, event) {
     case 'mask-paint':
     case 'mask-select':
     case 'mask-cut':
-    case 'mask-restore':
     case 'mask-wand':
       selectMaskTool(app, button.dataset.creatorAction.replace('mask-', ''));
       return;
@@ -2252,7 +2247,7 @@ function syncMaskControls(app) {
   const root = getCreatorRoot(app);
   if (!root) return;
   const tool = getToolButton(app.maskTool);
-  const tools = ['move', 'paint', 'select', 'cut', 'restore', 'wand', 'pin'];
+  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin'];
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
