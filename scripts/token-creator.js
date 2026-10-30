@@ -80,7 +80,12 @@ import {
   updateKeyframeAt,
 } from './token-animation.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
-import { buildProjectFileName, serializeProject } from './creator-project.js';
+import {
+  buildProjectFileName,
+  parseProject,
+  serializeProject,
+  shouldLoadProject,
+} from './creator-project.js';
 import { registerCreatedTokenSubjectPath } from './ring-video.js';
 import {
   colorizeRingBackground,
@@ -349,6 +354,11 @@ export function openTokenCreator(tokenDocument, { onApplied } = {}) {
     activeCreator.tokenDocument = tokenDocument;
     activeCreator.onApplied = onApplied;
     activeCreator.bringToFront?.();
+    // Re-targeting never replaces work in progress: the saved project opens only while the
+    // creator is still empty (use Open project to switch on purpose).
+    const project = shouldLoadProject(tokenDocument);
+    if (project && !activeCreator.workspaces.token.source && !activeCreator.busy)
+      void loadCreatorProject(activeCreator, project.path);
     return activeCreator;
   }
 
@@ -481,8 +491,11 @@ export function getTokenCreatorApplicationClass() {
       startAnimationSupportProbe(this);
       if (!this.source && !this._initialSourceRequested) {
         this._initialSourceRequested = true;
+        // A token made in the creator reopens its saved project instead of starting over.
+        const project = shouldLoadProject(this.tokenDocument);
         const portrait = getDocumentActor(this.tokenDocument)?.img;
-        if (portrait && !isDefaultArtwork(portrait))
+        if (project) void loadCreatorProject(this, project.path);
+        else if (portrait && !isDefaultArtwork(portrait))
           void loadCreatorSource(this, { path: portrait });
       } else {
         renderCreatorPreview(this);
@@ -661,6 +674,11 @@ function prepareCreatorContext(app) {
       ),
       source: localize('Creator.Source', 'Image'),
       browse: localize('Creator.Browse', 'Browse files'),
+      openProject: localize('Creator.OpenProject', 'Open project'),
+      openProjectTooltip: localize(
+        'Creator.OpenProjectTooltip',
+        'Open a saved Token Creator project (.tokener.json) to keep editing it.',
+      ),
       upload: localize('Creator.Upload', 'Upload'),
       portrait: localize('Creator.UsePortrait', 'Use portrait'),
       dropHint: localize(
@@ -1241,6 +1259,9 @@ async function handleCreatorClick(app, event) {
     case 'browse':
       openCreatorFilePicker(app);
       return;
+    case 'open-project':
+      openProjectFilePicker(app);
+      return;
     case 'upload':
       getCreatorRoot(app)?.querySelector('input[name="upload"]')?.click();
       return;
@@ -1398,7 +1419,38 @@ function openCreatorFilePicker(app) {
   }).render(true);
 }
 
+/** Browses for a `.tokener.json` project (text files) and opens it in the creator. */
+function openProjectFilePicker(app) {
+  const FilePicker = getFilePickerImplementation();
+  if (!FilePicker) return;
+  const link = app.tokenDocument?.isTokenerActorProxy
+    ? app.tokenDocument.prototypeToken
+    : app.tokenDocument;
+  const current =
+    link?._source?.flags?.[MODULE_ID]?.project?.path ??
+    link?._source?.texture?.src ??
+    link?.texture?.src ??
+    '';
+  new FilePicker({
+    type: 'text',
+    current,
+    callback: (path) => {
+      if (!/\.json$/i.test(String(path ?? ''))) {
+        setCreatorStatus(
+          app,
+          localize('Creator.ProjectNotJson', 'Choose a .tokener.json project file.'),
+          true,
+        );
+        return;
+      }
+      void loadCreatorProject(app, path);
+    },
+  }).render(true);
+}
+
 async function loadCreatorSource(app, { path, file }) {
+  // An image picked while a project is still opening wins over that project.
+  app._projectLoadToken = (app._projectLoadToken ?? 0) + 1;
   setCreatorStatus(app, localize('Creator.Loading', 'Loading image...'));
   try {
     const image = await loadImageElement(file ? URL.createObjectURL(file) : path, Boolean(file));
@@ -1436,6 +1488,143 @@ async function loadCreatorSource(app, { path, file }) {
       true,
     );
   }
+}
+
+/**
+ * Reopens a saved Token Creator project: sources (by path), views, options, the pop-out mask,
+ * touch-ups, animation, effects and their regions. Everything is fetched and decoded before
+ * the creator is touched, so a failure (missing project or image file, unknown version) leaves
+ * the current state as it was (an empty creator stays empty) with `Creator.ProjectLoadFailed`.
+ * `fetchJson` / `loadImage` are injectable for tests. Resolves true when the project loaded.
+ */
+export async function loadCreatorProject(
+  app,
+  path,
+  { fetchJson = fetchProjectJson, loadImage = loadProjectImage } = {},
+) {
+  const token = (app._projectLoadToken = (app._projectLoadToken ?? 0) + 1);
+  setCreatorStatus(app, localize('Creator.ProjectLoading', 'Opening the saved project...'));
+  let restored;
+  try {
+    const project = parseProject(await fetchJson(path));
+    if (!project) throw new Error(`Not a Token Creator project: ${path}`);
+    restored = await decodeProject(project, loadImage);
+  } catch (error) {
+    if (token !== app._projectLoadToken) return false;
+    console.error(`${MODULE_ID} | Failed to open token creator project ${path}`, error);
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.ProjectLoadFailed',
+        'Could not open the saved project. Its files may have been moved or deleted.',
+      ),
+      true,
+    );
+    return false;
+  }
+  if (token !== app._projectLoadToken) return false;
+  applyLoadedProject(app, restored);
+  // Re-run the background removal with the saved options so autoCutout is rebuilt; the saved
+  // touch-ups (already on each workspace) are composed over it by updateCutout.
+  await updateAllCutouts(app);
+  if (token !== app._projectLoadToken) return false;
+  if (app.rendered && typeof app.render === 'function') await app.render({ parts: ['main'] });
+  setCreatorStatus(app, localize('Creator.ProjectLoaded', 'Editing the saved project.'));
+  return true;
+}
+
+async function fetchProjectJson(path) {
+  const url = globalThis.foundry?.utils?.getRoute?.(path) ?? path;
+  const fetchJsonWithTimeout = globalThis.foundry?.utils?.fetchJsonWithTimeout;
+  if (typeof fetchJsonWithTimeout === 'function') return fetchJsonWithTimeout(url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+function loadProjectImage(src) {
+  const url = src.startsWith('data:') ? src : (globalThis.foundry?.utils?.getRoute?.(src) ?? src);
+  return loadImageElement(url, false);
+}
+
+/** Loads every image a parsed project refers to into canvases, without touching the app. */
+async function decodeProject(project, loadImage) {
+  const loadSource = async (path) => {
+    const canvas = drawToWorkingCanvas(await loadImage(path));
+    canvas.getContext('2d').getImageData(0, 0, 1, 1);
+    return canvas;
+  };
+  // Masks and regions are stored at source resolution; drawing them at the source size keeps
+  // them aligned even if a mask was saved at a slightly different working size.
+  const loadMask = async (dataUrl, size) => {
+    if (!dataUrl) return null;
+    const image = await loadImage(dataUrl);
+    const canvas = createCanvas(size.width, size.height);
+    canvas.getContext('2d').drawImage(image, 0, 0, size.width, size.height);
+    return canvas;
+  };
+  const loadWorkspace = async (workspace, shared) => {
+    const canvas =
+      shared && workspace.sourcePath === shared.path
+        ? shared.canvas
+        : await loadSource(workspace.sourcePath);
+    return {
+      path: workspace.sourcePath,
+      canvas,
+      popOutMask: await loadMask(workspace.popOutMask, canvas),
+      keep: await loadMask(workspace.cleanup.keep, canvas),
+      remove: await loadMask(workspace.cleanup.remove, canvas),
+    };
+  };
+  const token = await loadWorkspace(project.token);
+  const portrait = project.portrait ? await loadWorkspace(project.portrait, token) : null;
+  const regions = {};
+  for (const [key, dataUrl] of Object.entries(project.animation.regions ?? {}))
+    regions[key] = await loadMask(dataUrl, token.canvas);
+  return { project, token, portrait, regions };
+}
+
+/** Swaps the decoded project into the creator; selections, history and caches start fresh. */
+function applyLoadedProject(app, { project, token, portrait, regions }) {
+  stopAnimationPlayback(app);
+  let options = normalizeTokenCreatorOptions(project.options);
+  if (AI_BACKGROUND_MODES.includes(options.backgroundMode) && !areAiToolsEnabled())
+    options = { ...options, backgroundMode: 'auto' };
+  app.creatorOptions = options;
+  const label = project.label || deriveSourceLabel(app, token.path, null);
+  const workspace = (loaded, sharedSource) => ({
+    ...createWorkspace(),
+    source: sharedSource ?? { canvas: loaded.canvas, path: loaded.path, file: null, label },
+    cleanup: { keep: loaded.keep, remove: loaded.remove },
+  });
+  const tokenWorkspace = workspace(token);
+  app.workspaces = {
+    token: tokenWorkspace,
+    portrait: portrait
+      ? workspace(portrait, portrait.canvas === token.canvas ? tokenWorkspace.source : null)
+      : null,
+  };
+  app.editTarget = 'token';
+  app.view = { ...project.token.view };
+  // The top-level portraitView is the single source of truth for portrait framing.
+  app.portraitView = { ...project.portraitView };
+  app.viewport = { scale: 1, panX: 0, panY: 0 };
+  app.popOutMask = token.popOutMask;
+  app._maskVersion += 1;
+  app._maskHistory = { undo: [], redo: [] };
+  app.maskTool = null;
+  app._compose = null;
+  const animation = { ...project.animation };
+  delete animation.regions;
+  app.animation = animation;
+  app.animationTime = 0;
+  app.selectedPinIds = [];
+  app.effectRegions = regions;
+  app.selectedEffectId = null;
+  app._regionVersion += 1;
+  clearEffectCaches();
+  app._previewBend = null;
+  syncZoomInput(app);
 }
 
 function loadImageElement(src, revoke) {

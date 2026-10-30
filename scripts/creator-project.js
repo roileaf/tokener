@@ -112,6 +112,25 @@ export function getProjectFlagUpdate({ path, output }) {
   return { [PROJECT_FLAG_PATH]: { path, output } };
 }
 
+/**
+ * The project to reopen for a token (or, for actor-only opens, the actor's prototype token):
+ * `{ path }` only while the project flag's `output` is still the document's saved art. Revert
+ * and later art changes leave the flag behind, and this check is what keeps it harmless.
+ * Persisted `_source` data is read first so temporary overrides never decide.
+ */
+export function shouldLoadProject(documentLike) {
+  if (!documentLike) return null;
+  const target = documentLike.isTokenerActorProxy ? documentLike.prototypeToken : documentLike;
+  if (!target) return null;
+  const link =
+    target._source?.flags?.[MODULE_ID]?.[PROJECT_FLAG_KEY] ??
+    target.flags?.[MODULE_ID]?.[PROJECT_FLAG_KEY];
+  const src = target._source?.texture?.src ?? target.texture?.src;
+  if (!isPlainObject(link) || typeof link.path !== 'string' || !link.path) return null;
+  if (typeof src !== 'string' || !src || link.output !== src) return null;
+  return { path: link.path };
+}
+
 function normalizeProjectAnimation(animation) {
   const normalized = normalizeAnimation(animation);
   return { ...normalized, effects: normalizeEffects(normalized.effects) };
