@@ -66,7 +66,7 @@ test('normalizeEffects drops unknown types and clamps params', () => {
     { id: 'd', type: 'particles', count: 9999, kind: 'lava', size: 0 },
   ]);
   assert.equal(list.length, 4);
-  assert.ok(list[0].strength <= 40 && list[0].scale >= 4);
+  assert.ok(list[0].strength <= 40 && list[0].scale >= 16);
   assert.equal(list[0].region, 'r');
   assert.equal(list[1].amount, 1);
   assert.equal(list[1].speed, 3);
@@ -257,4 +257,48 @@ test('particle count is bounded and an empty emitter draws nothing', () => {
   assert.ok(countPixels(many) > countPixels(few));
   assert.ok(countPixels(many) < SIZE * SIZE);
   assert.ok(particleFrame(many, { points: [] }, 0.4).every((v) => v === 0));
+});
+
+test('normalizeEffects uses deterministic fallback ids', () => {
+  const a = normalizeEffects([{ type: 'wind' }, { type: 'glow' }]);
+  const b = normalizeEffects([{ type: 'wind' }, { type: 'glow' }]);
+  assert.deepEqual(a, b);
+  assert.deepEqual(
+    a.map((e) => e.id),
+    ['fx-0', 'fx-1'],
+  );
+});
+
+test('wind differs between effect ids', () => {
+  const one = { ...createEffect('wind'), id: 'one' };
+  const two = { ...one, id: 'two' };
+  assert.notDeepEqual(getDisplacement(one, 50, 60, 0.2), getDisplacement(two, 50, 60, 0.2));
+});
+
+test('max-allowed wind and wobble never fold the 8 px warp mesh', () => {
+  for (const type of ['wind', 'wobble']) {
+    for (const scale of [16, 24, 40, 100, 200]) {
+      const [effect] = normalizeEffects([{ id: 'm', type, strength: 999, scale }]);
+      for (const t of [0, 0.125, 0.25, 0.5, 0.75, 0.9]) {
+        const grid = [];
+        for (let y = 0; y <= 60; y += 1) {
+          const row = [];
+          for (let x = 0; x <= 60; x += 1) {
+            const d = getDisplacement(effect, x * 8, y * 8, t);
+            row.push({ x: x * 8 + d.dx, y: y * 8 + d.dy });
+          }
+          grid.push(row);
+        }
+        for (let y = 0; y < 60; y += 1) {
+          for (let x = 0; x < 60; x += 1) {
+            const p = grid[y][x];
+            const ex = { x: grid[y][x + 1].x - p.x, y: grid[y][x + 1].y - p.y };
+            const ey = { x: grid[y + 1][x].x - p.x, y: grid[y + 1][x].y - p.y };
+            const det = (ex.x * ey.y - ex.y * ey.x) / 64;
+            assert.ok(det > 0.2, `${type} scale ${scale} t ${t} det ${det}`);
+          }
+        }
+      }
+    }
+  }
 });

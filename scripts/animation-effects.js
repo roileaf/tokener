@@ -10,6 +10,9 @@ const FLICKER_KINDS = ['opacity', 'brightness'];
 const DEFAULT_GLOW_COLOR = '#8fd3ff';
 const GLOW_STEPS = 12;
 const MAX_PARTICLES = 200;
+const MIN_SCALE = 16;
+/** Largest strength/scale ratio at which the 8 px warp mesh cannot fold over. */
+const MAX_STRENGTH_RATIO = 0.18;
 const PARTICLE_COLORS = {
   embers: '#ffa040',
   smoke: '#b4b8c4',
@@ -87,19 +90,24 @@ export function createEffect(type, { region = null } = {}) {
   }
 }
 
-function normalizeEffect(raw) {
+function normalizeEffect(raw, index) {
   if (!raw || typeof raw !== 'object' || !EFFECT_TYPES.includes(raw.type)) return null;
   const defaults = createEffect(raw.type);
   const effect = {
-    id: typeof raw.id === 'string' && raw.id ? raw.id : defaults.id,
+    id: typeof raw.id === 'string' && raw.id ? raw.id : `fx-${index}`,
     type: raw.type,
     region: typeof raw.region === 'string' && raw.region ? raw.region : null,
   };
   switch (raw.type) {
     case 'wind':
     case 'wobble':
-      effect.strength = clamp(raw.strength, 0, 40, defaults.strength);
-      effect.scale = clamp(raw.scale, 4, 200, defaults.scale);
+      effect.scale = clamp(raw.scale, MIN_SCALE, 200, defaults.scale);
+      effect.strength = clamp(
+        raw.strength,
+        0,
+        Math.min(40, effect.scale * MAX_STRENGTH_RATIO),
+        defaults.strength,
+      );
       break;
     case 'flicker':
       effect.amount = clamp(raw.amount, 0, 1, defaults.amount);
@@ -123,7 +131,7 @@ function normalizeEffect(raw) {
 /** Drops unknown effect types and clamps every param to its valid range. */
 export function normalizeEffects(list) {
   if (!Array.isArray(list)) return [];
-  return list.map(normalizeEffect).filter(Boolean);
+  return list.map((raw, index) => normalizeEffect(raw, index)).filter(Boolean);
 }
 
 function lattice(ix, iy, salt) {
@@ -152,8 +160,9 @@ export function getDisplacement(effect, x, y, t) {
   const scale = Math.max(1, Number(effect.scale) || 24);
   const phase = wrap(t) * TAU;
   if (effect.type === 'wind') {
-    const a = smoothNoise(x / scale, y / scale, 1) * TAU;
-    const b = smoothNoise(x / scale + 17.3, y / scale + 5.1, 2) * TAU;
+    const salt = hashString(String(effect.id ?? ''));
+    const a = smoothNoise(x / scale, y / scale, salt) * Math.PI;
+    const b = smoothNoise(x / scale + 17.3, y / scale + 5.1, salt ^ 0x9e3779b9) * Math.PI;
     return { dx: strength * Math.sin(phase + a), dy: strength * 0.5 * Math.cos(phase + b) };
   }
   if (effect.type === 'wobble') {
@@ -297,7 +306,7 @@ export function drawParticles(context, { effect, emitter, t, size }) {
     if (alpha <= 0.01) continue;
     let x = point.x;
     let y = point.y;
-    let radius = base * scale;
+    let radius = base * scale * (size / 480);
     let opacity = alpha;
     if (kind === 'embers') {
       x += drift * 10 * unit * age + Math.sin(sway + age * TAU) * 3 * unit;
