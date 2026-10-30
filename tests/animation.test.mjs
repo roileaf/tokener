@@ -9,6 +9,7 @@ import {
   getFrameTimes,
   hasMotion,
   normalizeAnimation,
+  PINGPONG_MAX_KEY,
   removeKeyframe,
   samplePinOffset,
   samplePins,
@@ -262,4 +263,95 @@ test('hasMotion counts rotation and effects', () => {
   assert.equal(hasMotion({ pins: [rot] }), true);
   assert.equal(hasMotion({ pins: [], effects: [{ id: 'e', type: 'wind' }] }), true);
   assert.equal(hasMotion({ pins: [], effects: [] }), false);
+});
+
+/** dx of `pin` sampled in ping-pong at n even scrub times over the forward half. */
+function forwardHalf(pin, n = 40) {
+  return Array.from(
+    { length: n + 1 },
+    (_, i) => samplePinOffset(pin, (i / n) * 0.5, 'pingpong').dx,
+  );
+}
+
+test('ping-pong sway swings smoothly over the whole forward half, with no freeze', () => {
+  const pin = createPin({ x: 0, y: 0 });
+  const [loop] = applyPreset([pin], [pin.id], 'sway', { amplitude: 10 });
+  assert.deepEqual(
+    loop.keyframes.map((key) => key.t),
+    [0, 0.5],
+  );
+  const [swing] = applyPreset([pin], [pin.id], 'sway', { amplitude: 10, mode: 'pingpong' });
+  assert.deepEqual(
+    swing.keyframes.map((key) => [key.t, key.dx]),
+    [
+      [0, -10],
+      [PINGPONG_MAX_KEY, 10],
+    ],
+  );
+  const values = forwardHalf(swing);
+  assert.equal(values[0], -10);
+  assert.ok(Math.abs(values[values.length - 1] - 10) < 1e-9);
+  // Strictly increasing over the forward half: still moving in its last quarter.
+  for (let i = 1; i < values.length - 1; i += 1) assert.ok(values[i] > values[i - 1], `step ${i}`);
+  assert.ok(values[30] < 9.5, 'no freeze after the first quarter');
+  // The way back mirrors the way out.
+  for (const t of [0.1, 0.3, 0.45])
+    assert.ok(
+      Math.abs(
+        samplePinOffset(swing, t, 'pingpong').dx - samplePinOffset(swing, 1 - t, 'pingpong').dx,
+      ) < 1e-9,
+    );
+});
+
+test('ping-pong presets peak at the apex instead of 0.5', () => {
+  const pins = [createPin({ x: 0, y: 0 }), createPin({ x: 20, y: 30 })];
+  const ids = pins.map((pin) => pin.id);
+  for (const preset of ['bob', 'breathe', 'flap', 'look', 'hover']) {
+    const next = applyPreset(pins, ids, preset, { amplitude: 6, mode: 'pingpong' });
+    for (const pin of next)
+      assert.deepEqual(
+        pin.keyframes.map((key) => key.t),
+        [0, PINGPONG_MAX_KEY],
+        preset,
+      );
+  }
+  const [shiver] = applyPreset(pins, [ids[0]], 'shiver', { amplitude: 8, mode: 'pingpong' });
+  assert.equal(shiver.keyframes.length, 8);
+  assert.equal(shiver.keyframes[0].t, 0);
+  assert.ok(Math.abs(shiver.keyframes[7].t - PINGPONG_MAX_KEY) < 1e-12);
+  assert.ok(shiver.keyframes.every((key) => key.ease === 'linear'));
+});
+
+test('ping-pong wave delays each pin start and keeps the follow-through order', () => {
+  const pins = [0, 1, 2, 3, 4].map((i) => createPin({ x: i * 10, y: 0 }));
+  const ids = pins.map((pin) => pin.id);
+  const waved = applyPreset(pins, ids, 'wave', { amplitude: 10, mode: 'pingpong' });
+  assert.deepEqual(
+    waved[0].keyframes.map((key) => [key.t, key.dx]),
+    [
+      [0, -10],
+      [PINGPONG_MAX_KEY, 10],
+    ],
+  );
+  const starts = [0.24, 0.48, 0.72, 0.9];
+  waved.slice(1).forEach((pin, i) => {
+    assert.equal(pin.keyframes.length, 3);
+    assert.ok(Math.abs(pin.keyframes[1].t - starts[i]) < 1e-12, `pin ${i + 1}`);
+    assert.equal(pin.keyframes[1].dx, -10);
+    assert.equal(pin.keyframes[2].t, PINGPONG_MAX_KEY);
+  });
+  // At every scrub time of the forward half a later pin is never ahead of an earlier one, and
+  // everything reaches the peak together at the apex.
+  for (let i = 1; i < 40; i += 1) {
+    const t = (i / 40) * 0.5;
+    const values = waved.map((pin) => samplePinOffset(pin, t, 'pingpong').dx);
+    for (let k = 1; k < values.length; k += 1) assert.ok(values[k] <= values[k - 1] + 1e-9);
+  }
+  for (const pin of waved)
+    assert.ok(Math.abs(samplePinOffset(pin, 0.5, 'pingpong').dx - 10) < 1e-9);
+  // Each pin keeps moving after its start: no freeze before the apex.
+  for (const pin of waved) {
+    const values = forwardHalf(pin);
+    assert.ok(values[38] > values[36], 'still moving near the apex');
+  }
 });

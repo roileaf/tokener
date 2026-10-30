@@ -12,6 +12,8 @@ export const ANIMATION_PRESETS = [
 
 /** Keyframes closer than this (around the loop seam) count as the same time. */
 export const KEYFRAME_MERGE = 1 / 120;
+/** Ping-pong keyframes stop short of 1 so the apex never merges with a keyframe at 0. */
+export const PINGPONG_MAX_KEY = 1 - 2 * KEYFRAME_MERGE;
 const BREATHE_SCALE = 0.03;
 const FLAP_PULL = 0.3;
 const WAVE_DELAY = 0.12;
@@ -19,6 +21,8 @@ const LOOK_ANGLE = 0.18;
 const LOOK_SWING = 0.25;
 const SHIVER_STEPS = 8;
 const SHIVER_SCALE = 0.25;
+/** Latest ping-pong keyframe time at which a Wave pin starts moving. */
+const PINGPONG_WAVE_MAX_HOLD = 0.9;
 const EASES = ['smooth', 'linear', 'hold'];
 const MODES = ['loop', 'pingpong'];
 let pinCounter = 0;
@@ -208,13 +212,19 @@ export function samplePins(pins, t, mode = 'loop') {
   return { rest, moved };
 }
 
-/** Returns new pins with preset keyframes written on the selected pins (hover: all pins). */
-export function applyPreset(pins, ids, preset, { amplitude = 0 } = {}) {
+/**
+ * Returns new pins with preset keyframes written on the selected pins (hover: all pins). `mode`
+ * shapes the keys for the playback mode: a loop swings out at 0.5 and back at the seam; ping-pong
+ * plays only the forward half (rest pose at 0, peak at `PINGPONG_MAX_KEY`) and then plays it back.
+ */
+export function applyPreset(pins, ids, preset, { amplitude = 0, mode = 'loop' } = {}) {
   const selected = new Set(ids);
   const chosen = pins.filter((pin) => selected.has(pin.id));
   const cx = chosen.length ? chosen.reduce((sum, pin) => sum + pin.x, 0) / chosen.length : 0;
   const cy = chosen.length ? chosen.reduce((sum, pin) => sum + pin.y, 0) / chosen.length : 0;
   const order = new Map(ids.map((id, index) => [id, index]));
+  const pingpong = mode === 'pingpong';
+  const peak = pingpong ? PINGPONG_MAX_KEY : 0.5;
   if (preset === 'wave' && chosen.length < 2) return pins;
   return pins.map((pin) => {
     if (!selected.has(pin.id) && preset !== 'hover') return pin;
@@ -222,33 +232,43 @@ export function applyPreset(pins, ids, preset, { amplitude = 0 } = {}) {
     if (preset === 'bob' || preset === 'hover') {
       keyframes = [
         { t: 0, dx: 0, dy: 0 },
-        { t: 0.5, dx: 0, dy: -amplitude },
+        { t: peak, dx: 0, dy: -amplitude },
       ];
     } else if (preset === 'sway') {
       keyframes = [
         { t: 0, dx: -amplitude, dy: 0 },
-        { t: 0.5, dx: amplitude, dy: 0 },
+        { t: peak, dx: amplitude, dy: 0 },
       ];
     } else if (preset === 'breathe') {
       keyframes = [
         { t: 0, dx: 0, dy: 0 },
-        { t: 0.5, dx: (pin.x - cx) * BREATHE_SCALE, dy: (pin.y - cy) * BREATHE_SCALE },
+        { t: peak, dx: (pin.x - cx) * BREATHE_SCALE, dy: (pin.y - cy) * BREATHE_SCALE },
       ];
     } else if (preset === 'flap') {
       keyframes = [
         { t: 0, dx: 0, dy: 0 },
-        { t: 0.5, dx: Math.sign(cx - pin.x) * amplitude * FLAP_PULL, dy: amplitude },
+        { t: peak, dx: Math.sign(cx - pin.x) * amplitude * FLAP_PULL, dy: amplitude },
       ];
     } else if (preset === 'wave') {
       const delay = order.get(pin.id) * WAVE_DELAY;
-      keyframes = sortKeyframes([
-        { t: wrapTime(delay), dx: -amplitude, dy: 0 },
-        { t: wrapTime(0.5 + delay), dx: amplitude, dy: 0 },
-      ]);
+      if (pingpong) {
+        // Every pin peaks at the apex; later pins hold their start pose longer (follow-through).
+        const start = Math.min(PINGPONG_WAVE_MAX_HOLD, 2 * delay);
+        keyframes = [{ t: 0, dx: -amplitude, dy: 0 }];
+        if (start >= KEYFRAME_MERGE) keyframes.push({ t: start, dx: -amplitude, dy: 0 });
+        keyframes.push({ t: PINGPONG_MAX_KEY, dx: amplitude, dy: 0 });
+      } else {
+        keyframes = sortKeyframes([
+          { t: wrapTime(delay), dx: -amplitude, dy: 0 },
+          { t: wrapTime(0.5 + delay), dx: amplitude, dy: 0 },
+        ]);
+      }
     } else if (preset === 'shiver') {
+      // Ping-pong spreads the jitter over the forward half, which then plays back.
+      const step = pingpong ? PINGPONG_MAX_KEY / (SHIVER_STEPS - 1) : 1 / SHIVER_STEPS;
       keyframes = Array.from({ length: SHIVER_STEPS }, (_, i) => {
         const sign = i % 2 ? -1 : 1;
-        return makeKeyframe(i / SHIVER_STEPS, {
+        return makeKeyframe(i * step, {
           dx: sign * amplitude * SHIVER_SCALE,
           dy: -sign * amplitude * SHIVER_SCALE * 0.5,
           ease: 'linear',
@@ -257,7 +277,7 @@ export function applyPreset(pins, ids, preset, { amplitude = 0 } = {}) {
     } else if (preset === 'look') {
       keyframes = [
         makeKeyframe(0, { dx: -amplitude * LOOK_SWING, dy: 0, rot: -LOOK_ANGLE }),
-        makeKeyframe(0.5, { dx: amplitude * LOOK_SWING, dy: 0, rot: LOOK_ANGLE }),
+        makeKeyframe(peak, { dx: amplitude * LOOK_SWING, dy: 0, rot: LOOK_ANGLE }),
       ];
     } else return pin;
     return { ...pin, keyframes };

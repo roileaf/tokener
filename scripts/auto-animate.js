@@ -23,9 +23,17 @@ const HEAD_CLEARANCE = 1.2;
 /**
  * `alpha` is the grid from getAlphaGrid ({ alpha, width, height, scale }); the pins come back in
  * source-image pixels. `view`, `clipRadius` and `gridSize` describe the token framing used to find
- * protruding parts.
+ * protruding parts. `mode` is the playback mode the keyframes are shaped for (see applyPreset).
  */
-export function buildAutoRig({ alpha, cutoutWidth, cutoutHeight, view, clipRadius, gridSize }) {
+export function buildAutoRig({
+  alpha,
+  cutoutWidth,
+  cutoutHeight,
+  view,
+  clipRadius,
+  gridSize,
+  mode = 'loop',
+}) {
   const analysis = analyseSubject(alpha);
   if (!analysis) return { pins: [], selectedPinIds: [] };
   const size = { width: cutoutWidth, height: cutoutHeight };
@@ -47,27 +55,31 @@ export function buildAutoRig({ alpha, cutoutWidth, cutoutHeight, view, clipRadiu
 
   const amplitude = getPresetAmplitude('bob', size);
   const bodyIds = [headPin.id, chestPin.id];
-  let pins = applyPreset([headPin, chestPin, ...anchors, ...tipPins], bodyIds, 'breathe');
+  let pins = applyPreset([headPin, chestPin, ...anchors, ...tipPins], bodyIds, 'breathe', {
+    mode,
+  });
   // Bob, Flap and Sway are layered over Breathe, not written in its place; anchors stay still.
-  pins = layerPreset(pins, [headPin.id], 'bob', amplitude * HEAD_BOB_SHARE);
+  pins = layerPreset(pins, [headPin.id], 'bob', amplitude * HEAD_BOB_SHARE, mode);
   if (tipPins.length === 2) {
     pins = layerPreset(
       pins,
       tipPins.map((pin) => pin.id),
       'flap',
       amplitude,
+      mode,
     );
   } else if (tipPins.length === 1) {
-    pins = layerPreset(pins, [tipPins[0].id], 'sway', amplitude);
+    pins = layerPreset(pins, [tipPins[0].id], 'sway', amplitude, mode);
   }
   return { pins, selectedPinIds: pins.map((pin) => pin.id) };
 }
 
 /**
  * Sums two keyframe tracks. Keyframes within the merge tolerance combine; otherwise both are kept,
- * each with the other track sampled at that time so the sum is right everywhere.
+ * each with the other track sampled at that time so the sum is right everywhere. In ping-pong a
+ * track holds its last key instead of wrapping back to its first one.
  */
-export function layerPresetKeyframes(base, added) {
+export function layerPresetKeyframes(base, added, mode = 'loop') {
   const times = [...base.map((key) => key.t)];
   for (const key of added) {
     if (!times.some((t) => loopDistance(t, key.t) < KEYFRAME_MERGE)) times.push(key.t);
@@ -75,9 +87,11 @@ export function layerPresetKeyframes(base, added) {
   times.sort((a, b) => a - b);
   const baseTrack = { keyframes: base };
   const addedTrack = { keyframes: added };
+  // A ping-pong keyframe time u is played at scrub time u / 2 on the way out.
+  const at = (t) => (mode === 'pingpong' ? t / 2 : t);
   return times.map((t) => {
-    const one = samplePinOffset(baseTrack, t);
-    const two = samplePinOffset(addedTrack, t);
+    const one = samplePinOffset(baseTrack, at(t), mode);
+    const two = samplePinOffset(addedTrack, at(t), mode);
     const key = { t, dx: one.dx + two.dx, dy: one.dy + two.dy };
     const rot = one.rot + two.rot;
     if (rot) key.rot = rot;
@@ -85,14 +99,14 @@ export function layerPresetKeyframes(base, added) {
   });
 }
 
-function layerPreset(pins, ids, preset, amplitude) {
+function layerPreset(pins, ids, preset, amplitude, mode) {
   const bare = pins.map((pin) => ({ ...pin, keyframes: [] }));
   const added = new Map(
-    applyPreset(bare, ids, preset, { amplitude }).map((pin) => [pin.id, pin.keyframes]),
+    applyPreset(bare, ids, preset, { amplitude, mode }).map((pin) => [pin.id, pin.keyframes]),
   );
   return pins.map((pin) =>
     ids.includes(pin.id)
-      ? { ...pin, keyframes: layerPresetKeyframes(pin.keyframes, added.get(pin.id)) }
+      ? { ...pin, keyframes: layerPresetKeyframes(pin.keyframes, added.get(pin.id), mode) }
       : pin,
   );
 }

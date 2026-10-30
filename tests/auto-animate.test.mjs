@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { analyseSubject, findProtrusions } from '../scripts/auto-compose.js';
-import { hasMotion, samplePinOffset } from '../scripts/animation.js';
+import { hasMotion, PINGPONG_MAX_KEY, samplePinOffset } from '../scripts/animation.js';
 import { buildAutoRig, layerPresetKeyframes } from '../scripts/auto-animate.js';
 import { getTokenFrameLayout } from '../scripts/token-composer.js';
 
@@ -28,7 +28,7 @@ function figure({ sword = false, spike = false } = {}) {
   return { alpha, width, height, scale: 1 };
 }
 
-function rig(grid, view = VIEW) {
+function rig(grid, view = VIEW, mode = undefined) {
   return buildAutoRig({
     alpha: grid,
     cutoutWidth: grid.width * grid.scale,
@@ -36,6 +36,7 @@ function rig(grid, view = VIEW) {
     view,
     clipRadius: CLIP,
     gridSize: GRID,
+    mode,
   });
 }
 
@@ -202,4 +203,41 @@ test('auto rig maps tips back through the grid scale to source pixels', () => {
 test('auto rig returns no pins for an empty cut-out', () => {
   const grid = { alpha: new Uint8Array(100), width: 10, height: 10, scale: 1 };
   assert.deepEqual(rig(grid), { pins: [], selectedPinIds: [] });
+});
+
+test('auto rig in ping-pong peaks at the apex and moves over the whole forward half', () => {
+  const { pins } = rig(figure({ sword: true }), VIEW, 'pingpong');
+  const amplitude = 0.03 * 300;
+  const [head, chest] = pins;
+  const midY = (head.y + chest.y) / 2;
+  for (const pin of [head, chest, pins[4]])
+    assert.deepEqual(
+      pin.keyframes.map((key) => key.t),
+      [0, PINGPONG_MAX_KEY],
+    );
+  const apex = head.keyframes[1];
+  assert.ok(Math.abs(apex.dy - ((head.y - midY) * 0.03 - 0.6 * amplitude)) < 1e-9);
+  // The sword sways from -A to +A over the forward half without stalling.
+  const tip = pins[4];
+  const quarter = samplePinOffset(tip, 0.375, 'pingpong').dx;
+  assert.ok(quarter > -amplitude && quarter < amplitude * 0.9, `quarter ${quarter}`);
+  assert.ok(Math.abs(samplePinOffset(tip, 0.5, 'pingpong').dx - amplitude) < 1e-9);
+});
+
+test('layering in ping-pong holds the last key instead of wrapping', () => {
+  const base = [
+    { t: 0, dx: 0, dy: 0 },
+    { t: 0.5, dx: 4, dy: 0 },
+  ];
+  const [, late] = layerPresetKeyframes(
+    base,
+    [
+      { t: 0, dx: 0, dy: 0 },
+      { t: 0.75, dx: 2, dy: 0 },
+    ],
+    'pingpong',
+  ).filter((key) => key.t >= 0.5);
+  // At 0.75 the base track holds 4 (a loop would ease it back toward 0).
+  assert.equal(late.t, 0.75);
+  assert.ok(Math.abs(late.dx - 6) < 1e-9);
 });
