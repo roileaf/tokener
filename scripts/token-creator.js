@@ -14,6 +14,7 @@ import {
   loadTransformers,
   registerAiToolsSetting,
 } from './ai-tools.js';
+import { loadComposeRankingModel, rerankComposeCandidates } from './compose-ai-ranking.js';
 import {
   DEFAULT_BACKGROUND_FEATHER,
   DEFAULT_BACKGROUND_TOLERANCE,
@@ -2205,17 +2206,24 @@ async function runAutoCompose(app) {
   const clipRadius = withComposeOptions(app, { breakoutRoom: MAX_BREAKOUT_ROOM }, () =>
     getComposeClipRadius(app),
   );
-  const candidates = pickComposeOptions(
-    composeCandidates({
-      alpha,
-      clipRadius,
-      ringScale,
-      maxRoom: MAX_BREAKOUT_ROOM,
-      gridSize: DEFAULT_COMPOSE_GRID,
-      limit: 40,
-    }),
-    COMPOSE_OPTIONS,
-  );
+  let ranked = composeCandidates({
+    alpha,
+    clipRadius,
+    ringScale,
+    maxRoom: MAX_BREAKOUT_ROOM,
+    gridSize: DEFAULT_COMPOSE_GRID,
+    limit: 40,
+  });
+  if (ranked.length && areAiToolsEnabled()) {
+    try {
+      const model = await loadComposeRankingModel();
+      if (app.cutout !== cutout) return;
+      ranked = rerankComposeCandidates(ranked, alpha, clipRadius, model);
+    } catch (error) {
+      console.warn(`${MODULE_ID} | Optional Auto Compose ranking unavailable`, error);
+    }
+  }
+  const candidates = pickComposeOptions(ranked, COMPOSE_OPTIONS);
   if (!candidates.length) {
     setCreatorStatus(app, localize('Creator.ComposeEmpty', 'Nothing to compose yet.'), true);
     return;
