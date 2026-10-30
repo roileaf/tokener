@@ -17,6 +17,7 @@ import {
   loadTransformers,
   registerAiToolsSetting,
 } from './ai-tools.js';
+import { findPartClick, pickPartMask, toHingeKeyframes } from './auto-parts.js';
 import { loadComposeRankingModel, rerankComposeCandidates } from './compose-ai-ranking.js';
 import {
   DEFAULT_BACKGROUND_FEATHER,
@@ -3259,7 +3260,7 @@ async function runAutoAnimate(app) {
   const alpha = getAlphaGrid(
     cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
   );
-  const { pins, selectedPinIds } = buildAutoRig({
+  const { pins, selectedPinIds, parts } = buildAutoRig({
     alpha,
     cutoutWidth: cutout.width,
     cutoutHeight: cutout.height,
@@ -3273,11 +3274,88 @@ async function runAutoAnimate(app) {
     return;
   }
   stopAnimationPlayback(app);
+  // The replaced pins' painted regions go with them.
+  for (const pin of app.animation.pins)
+    if (pin.region && !app.animation.effects.some((effect) => effect.region === pin.region))
+      delete app.effectRegions[pin.region];
   app.animation = { ...app.animation, pins };
   app.selectedPinIds = selectedPinIds;
+  app._regionVersion += 1;
+  clearEffectCaches();
   app._previewBend = null;
   syncAnimationControls(app);
   renderCreatorPreview(app);
+  if (areAiToolsEnabled() && parts?.tipIds.length) await cutAutoParts(app, pins, parts);
+}
+
+/**
+ * With AI tools, Segment Anything cuts out the part behind each tip pin (clicking the tip, with
+ * the chest left out). A part that passes the checks becomes the pin's region: the pin moves to
+ * where the part joins the body and turns the whole part there. Anything else stays a plain pin.
+ */
+async function cutAutoParts(app, pins, { chestId, anchorIds, tipIds }) {
+  const source = app.source;
+  const cutout = app.cutout;
+  const chest = pins.find((pin) => pin.id === chestId);
+  if (!source || !cutout || !chest || app._samBusy) return;
+  app._samBusy = true;
+  syncFlipControls(app);
+  setCreatorStatus(app, localize('Creator.Animate.AutoParts', 'Finding the moving parts...'));
+  try {
+    const select = await prepareSamSelector(app);
+    const figure = cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height);
+    const avoid = pins.filter((pin) => anchorIds.includes(pin.id));
+    const found = new Map();
+    for (const id of tipIds) {
+      const tip = pins.find((pin) => pin.id === id);
+      const click = findPartClick({ figure, tip, chest });
+      // Every proposal, with and without the chest left out: SAM's favourite is often the whole
+      // figure, while the part is one of its smaller masks.
+      const masks = [
+        ...(await select(click, { exclude: [chest], all: true })),
+        ...(await select(click, { all: true })),
+      ];
+      const part = pickPartMask(masks, { figure, tip: click, chest, avoid });
+      if (part) found.set(id, part);
+    }
+    // Left alone if the picture or the pins changed while SAM worked.
+    if (app.source !== source || app.cutout !== cutout || app.animation.pins !== pins) return;
+    setCreatorStatus(app, '');
+    if (!found.size) return;
+    for (const [id, part] of found) {
+      const region = createCanvas(cutout.width, cutout.height);
+      region
+        .getContext('2d')
+        .putImageData(new ImageData(part.rgba, cutout.width, cutout.height), 0, 0);
+      app.effectRegions[id] = region;
+    }
+    app.animation = {
+      ...app.animation,
+      pins: pins.map((pin) => {
+        const part = found.get(pin.id);
+        if (!part) return pin;
+        const hinge = { x: Math.round(part.hinge.x), y: Math.round(part.hinge.y) };
+        return {
+          ...pin,
+          ...hinge,
+          region: pin.id,
+          keyframes: toHingeKeyframes(pin.keyframes, pin, hinge),
+        };
+      }),
+    };
+    app._regionVersion += 1;
+    clearEffectCaches();
+    app._previewBend = null;
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+  } catch (error) {
+    // The plain pins already animate; the parts are a bonus.
+    console.warn(`${MODULE_ID} | Auto animate could not cut out the moving parts`, error);
+    setCreatorStatus(app, '');
+  } finally {
+    app._samBusy = false;
+    syncFlipControls(app);
+  }
 }
 
 async function confirmAutoAnimate() {

@@ -278,6 +278,7 @@
   "PF2ETokener.Creator.Animate.AutoAnimate": "Auto animate",
   "PF2ETokener.Creator.Animate.AutoAnimateTooltip": "Place pins on the head, chest, base and any protruding parts, with a gentle idle loop",
   "PF2ETokener.Creator.Animate.AutoConfirm": "Replace the existing pins with automatic ones?",
+  "PF2ETokener.Creator.Animate.AutoParts": "Finding the moving parts...",
   "PF2ETokener.Creator.Animate.AutoEmpty": "Nothing to animate yet.",
   "PF2ETokener.Creator.Animate.Bob": "Bob",
   "PF2ETokener.Creator.Animate.Sway": "Sway",

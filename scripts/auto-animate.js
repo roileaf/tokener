@@ -57,7 +57,7 @@ export function buildAutoRig({
   mode = 'loop',
 }) {
   const analysis = analyseSubject(alpha);
-  if (!analysis) return { pins: [], selectedPinIds: [] };
+  if (!analysis) return { pins: [], selectedPinIds: [], parts: null };
   const size = { width: cutoutWidth, height: cutoutHeight };
   const toSourceX = cutoutWidth / alpha.width;
   const toSourceY = cutoutHeight / alpha.height;
@@ -103,7 +103,16 @@ export function buildAutoRig({
   const reachUnit = (Math.max(bounds.width * toSourceX, bounds.height * toSourceY) || 1) / 2;
   const tips = animateTips(tipPins, chestPin, { amplitude, reachUnit, mode });
   // Nothing stays selected: a preset clicked next would otherwise land on every pin at once.
-  return { pins: [headBobbing, breathing[1], ...anchors, ...tips], selectedPinIds: [] };
+  // `parts` names the pins whose whole part AI tools may cut out and move (see auto-parts.js).
+  return {
+    pins: [headBobbing, breathing[1], ...anchors, ...tips],
+    selectedPinIds: [],
+    parts: {
+      chestId: chestPin.id,
+      anchorIds: anchors.map((pin) => pin.id),
+      tipIds: tips.map((pin) => pin.id),
+    },
+  };
 }
 
 /** What a tip is, from its direction seen from the chest: 'crest' (up), 'tail' (down) or 'wing'. */
