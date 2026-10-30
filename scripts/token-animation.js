@@ -462,7 +462,9 @@ function getEmitter({ effect, source, isRegion, layout, size, createCanvas }) {
  * warp but gets no flicker, glow or particles: it is returned as `bent.background` for
  * `drawFrame` to draw first. With no pin motion and no effects, `drawFrame(context, null)` draws
  * the plain still token. Returns `bent` (`{ art, popOut, background, regions }` or null), which
- * callers may pass back as `bent` to skip bending an identical pose again.
+ * callers may pass back as `bent` to skip bending an identical pose again. `effectClip`
+ * (`{ x, y, radius }` in context px, e.g. the token ring's opening) keeps the effects drawn over
+ * the frame (region glow and particles) inside that circle.
  */
 export function renderAnimationFrame({
   context,
@@ -474,6 +476,7 @@ export function renderAnimationFrame({
   createCanvas,
   drawFrame,
   bent: prepared,
+  effectClip = null,
 }) {
   if (!hasMotion(animation)) {
     drawFrame(context, null);
@@ -507,6 +510,12 @@ export function renderAnimationFrame({
   }
   drawFrame(context, bent);
 
+  context.save();
+  if (effectClip) {
+    context.beginPath();
+    context.arc(effectClip.x, effectClip.y, effectClip.radius, 0, Math.PI * 2);
+    context.clip();
+  }
   for (const effect of effects) {
     if (effect.type !== 'glow' || !effect.region) continue;
     const region = bent.regions[effect.region];
@@ -538,6 +547,7 @@ export function renderAnimationFrame({
     });
     drawParticles(context, { effect, emitter, t, size });
   }
+  context.restore();
   return bent;
 }
 

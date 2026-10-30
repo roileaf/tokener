@@ -588,3 +588,50 @@ test('a region pin without paint yet bends like a plain pin', () => {
   const unpainted = bend(cutout, null, [{ ...pin(keyframes), region: 'missing' }], 0.5);
   assert.deepEqual(pixels(unpainted.art), pixels(plain.art));
 });
+
+test('particles and region glow stay inside the effect clip', () => {
+  const size = 64;
+  // Art across the whole token, so particles spawn everywhere.
+  const cutout = createCanvas(size, size);
+  const cutoutContext = cutout.getContext('2d');
+  cutoutContext.fillStyle = '#4060c0';
+  cutoutContext.fillRect(0, 0, size, size);
+  const animation = {
+    duration: 2,
+    fps: 30,
+    pins: [],
+    effects: [{ id: 'p', type: 'particles', region: null, kind: 'bubbles', count: 60, size: 4 }],
+  };
+  const clip = { x: size / 2, y: size / 2, radius: 16 };
+  const outside = (canvas) => {
+    const data = pixels(canvas);
+    let count = 0;
+    for (let y = 0; y < size; y += 1)
+      for (let x = 0; x < size; x += 1)
+        if (
+          Math.hypot(x + 0.5 - clip.x, y + 0.5 - clip.y) > clip.radius + 1 &&
+          data[(y * size + x) * 4 + 3]
+        )
+          count += 1;
+    return count;
+  };
+  const render = (effectClip) => {
+    const canvas = createCanvas(size, size);
+    for (const t of [0.1, 0.4, 0.7])
+      renderAnimationFrame({
+        context: canvas.getContext('2d'),
+        size,
+        t,
+        art: { cutout, popOutImage: null, regions: {} },
+        view: VIEW,
+        animation,
+        createCanvas,
+        // The frame draws nothing, so only effects reach the canvas.
+        drawFrame: () => {},
+        effectClip,
+      });
+    return canvas;
+  };
+  assert.ok(outside(render(null)) > 0, 'unclipped particles reach the corners');
+  assert.equal(outside(render(clip)), 0);
+});
