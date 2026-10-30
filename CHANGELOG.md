@@ -22,6 +22,8 @@
 
 ### Fixed
 
+- A region pin moved or turned a long way now carries its region whole; before, any move past a small blend distance squashed the region in place instead of moving it.
+- **Auto animate** no longer gives one limb two parts (a strip along a wing's edge as well as the whole wing), which made the strip flap on its own.
 - A region's tint now moves with the art while it animates, instead of staying where it was painted; while painting, the art holds still as before.
 - With **Keep background** on, the pop-out brushes (**B** / **E**) and click-to-select are greyed out instead of looking usable and doing nothing.
 

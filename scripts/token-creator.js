@@ -17,7 +17,7 @@ import {
   loadTransformers,
   registerAiToolsSetting,
 } from './ai-tools.js';
-import { findPartClick, pickPartMask, toHingeKeyframes } from './auto-parts.js';
+import { dropNestedParts, findPartClick, pickPartMask, toHingeKeyframes } from './auto-parts.js';
 import { getSequencerEntryName, guessClipOrigin, loadSequencerClip } from './sequencer-clips.js';
 import { hasSequencerCatalog, openSequencerPicker } from './sequencer-picker.js';
 import { loadComposeRankingModel, rerankComposeCandidates } from './compose-ai-ranking.js';
@@ -3477,7 +3477,7 @@ async function cutAutoParts(app, pins, { chestId, anchorIds, tipIds }) {
     const select = await prepareSamSelector(app);
     const figure = cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height);
     const avoid = pins.filter((pin) => anchorIds.includes(pin.id));
-    const found = new Map();
+    let found = new Map();
     for (const id of tipIds) {
       const tip = pins.find((pin) => pin.id === id);
       const click = findPartClick({ figure, tip, chest });
@@ -3490,6 +3490,8 @@ async function cutAutoParts(app, pins, { chestId, anchorIds, tipIds }) {
       const part = pickPartMask(masks, { figure, tip: click, chest, avoid });
       if (part) found.set(id, part);
     }
+    // Two tips on one limb (a wing's edge and the whole wing) would move it twice over.
+    found = dropNestedParts(found);
     // Left alone if the picture or the pins changed while SAM worked.
     if (app.source !== source || app.cutout !== cutout || app.animation.pins !== pins) return;
     setCreatorStatus(app, '');

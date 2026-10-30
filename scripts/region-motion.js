@@ -67,6 +67,19 @@ export function buildRegionField(mask, { step, feather }) {
   return { w, cols, rows, step };
 }
 
+/**
+ * How far the painted part of `mask` reaches from (cx, cy), in mask px, sampled on the `step`
+ * mesh: what a turn about that point swings the region's far edge by, per radian.
+ */
+export function getMaskRadius(mask, { step, cx, cy }) {
+  let radius = 0;
+  for (let y = 0; y < mask.height; y += step)
+    for (let x = 0; x < mask.width; x += step)
+      if (mask.data[(y * mask.width + x) * 4 + 3] >= INSIDE_ALPHA)
+        radius = Math.max(radius, Math.hypot(x - cx, y - cy));
+  return radius;
+}
+
 /** Bilinear weight of `field` at mesh-space point (x, y); 0 outside the mesh. */
 export function sampleField(field, x, y) {
   const { w, cols, rows, step } = field;
