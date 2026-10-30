@@ -167,3 +167,80 @@ test('pin hit radius follows CSS scaling of the preview canvas and viewport zoom
   );
   assert.equal(getPinHitRadius({ radius: 10, canvasWidth: 600, clientWidth: 0 }), 10);
 });
+
+function alphaAt(canvas, x, y) {
+  return pixels(canvas)[(y * canvas.width + x) * 4 + 3];
+}
+
+test('a rotating pin turns the art around it', () => {
+  const cutout = createCanvas(40, 40);
+  const context = cutout.getContext('2d');
+  context.fillStyle = '#c03020';
+  context.fillRect(6, 18, 28, 4);
+  const pins = [
+    {
+      id: 'p',
+      x: 20,
+      y: 20,
+      arm: 10,
+      keyframes: [
+        { t: 0, dx: 0, dy: 0, rot: 0 },
+        { t: 0.5, dx: 0, dy: 0, rot: Math.PI / 2 },
+      ],
+    },
+  ];
+  const run = (t) =>
+    bendTokenArt({
+      cutout,
+      view: VIEW,
+      size: 40,
+      animation: { duration: 2, fps: 30, mode: 'loop', pins },
+      t,
+      createCanvas,
+    }).art;
+  const flat = run(0);
+  assert.ok(alphaAt(flat, 12, 20) > 128, 'bar is horizontal at rest');
+  assert.ok(alphaAt(flat, 20, 12) < 128);
+  const turned = run(0.5);
+  assert.ok(alphaAt(turned, 20, 12) > 128, 'opaque above the pin');
+  assert.ok(alphaAt(turned, 20, 28) > 128, 'opaque below the pin');
+  assert.ok(alphaAt(turned, 10, 20) < 128, 'transparent left at arm distance');
+  assert.ok(alphaAt(turned, 30, 20) < 128, 'transparent right at arm distance');
+});
+
+test('ping-pong animation bends the same at t and 1-t', () => {
+  const cutout = makeCutout();
+  const pins = [
+    pin([
+      { t: 0, dx: 0, dy: 0 },
+      { t: 0.3, dx: 0, dy: -6 },
+    ]),
+  ];
+  const run = (t) =>
+    bendTokenArt({
+      cutout,
+      view: VIEW,
+      size: SIZE,
+      animation: { duration: 2, fps: 30, mode: 'pingpong', pins },
+      t,
+      createCanvas,
+    }).art;
+  assert.deepEqual(pixels(run(0.1)), pixels(run(0.9)));
+  assert.notDeepEqual(pixels(run(0.1)), pixels(run(0)));
+});
+
+test('bend margin covers a rotated satellite', () => {
+  const pins = [
+    {
+      id: 'p',
+      x: 20,
+      y: 20,
+      arm: 10,
+      keyframes: [
+        { t: 0, dx: 0, dy: 0, rot: 0 },
+        { t: 0.5, dx: 0, dy: 0, rot: Math.PI / 2 },
+      ],
+    },
+  ];
+  assert.ok(getBendMargin(pins, 1, 40) >= 15);
+});

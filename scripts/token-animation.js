@@ -38,14 +38,21 @@ function drawStill(image, layout, size, createCanvas) {
 }
 
 /**
- * Padding (token pixels) drawn around the art before warping: the largest pin offset at any
+ * Padding (token pixels) drawn around the art before warping: the largest pin or rotated control point offset at any
  * keyframe, and at least a tenth of the token, so art from outside the token edge can slide in.
  */
 export function getBendMargin(pins, scale, size) {
   let largest = 0;
   for (const pin of pins ?? [])
-    for (const key of pin.keyframes ?? [])
-      largest = Math.max(largest, Math.abs(key.dx) * scale, Math.abs(key.dy) * scale);
+    for (const key of pin.keyframes ?? []) {
+      // A satellite at `arm` from the pin travels at most 2 arm sin(rot / 2) <= arm min(2, |rot|).
+      const swing = (pin.arm ?? 0) * Math.min(2, Math.abs(key.rot ?? 0));
+      largest = Math.max(
+        largest,
+        (Math.abs(key.dx) + swing) * scale,
+        (Math.abs(key.dy) + swing) * scale,
+      );
+    }
   return Math.ceil(Math.max(size * MIN_BEND_MARGIN, largest));
 }
 
@@ -75,7 +82,7 @@ export function bendTokenArt({ cutout, popOutImage, view, size, animation, t, cr
   const scale = layout.width / Math.max(1, imageWidth);
   const margin = getBendMargin(animation.pins, scale, size);
   const full = size + margin * 2;
-  const { rest, moved } = samplePins(animation.pins, t);
+  const { rest, moved } = samplePins(animation.pins, t, animation.mode);
   const toPadded = (point) => ({
     x: layout.x + margin + point.x * scale,
     y: layout.y + margin + point.y * scale,
