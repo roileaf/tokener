@@ -49,10 +49,8 @@ test('auto rig puts a head pin on the analysed head and a chest below it', () =>
   const chest = pins[1];
   assert.ok(Math.abs(chest.y - (head.y + 1.6 * head.radius)) <= 1);
   assert.ok(Math.abs(chest.x - head.x) <= 1);
-  assert.deepEqual(
-    selectedPinIds,
-    pins.map((pin) => pin.id),
-  );
+  // Nothing stays selected, so the next preset click doesn't land on every pin at once.
+  assert.deepEqual(selectedPinIds, []);
   assert.ok(pins.every((pin) => pin.arm === Math.round(0.12 * 300)));
 });
 
@@ -113,6 +111,29 @@ test('auto rig flaps two tips toward the body', () => {
     assert.ok(Math.sign(apex.dx) === Math.sign(centreX - tip.x));
     assert.ok(Math.abs(apex.dx) > 0);
   }
+});
+
+test('auto rig keeps one tip when two pieces poke out of the same part', () => {
+  // A forked blade: two prongs a few pixels apart, joined below the opening.
+  const width = 200;
+  const height = 300;
+  const alpha = figure().alpha;
+  for (let y = 6; y <= 200; y += 1)
+    for (let x = 132; x <= 158; x += 1) {
+      const prong = x <= 138 || x >= 152;
+      if (prong || y >= 60) alpha[y * width + x] = 255;
+    }
+  const grid = { alpha, width, height, scale: 1 };
+  const pieces = findProtrusions({
+    alpha: grid,
+    view: VIEW,
+    clipRadius: CLIP,
+    gridSize: GRID,
+  }).pieces.filter((piece) => !piece.inBottomArc && piece.area >= 2);
+  assert.ok(pieces.length >= 2, `the prongs should be separate pieces (${pieces.length})`);
+  const { pins } = rig(grid);
+  assert.equal(pins.length, 5);
+  assert.equal(pins[4].keyframes.find((key) => key.t === 0.5).dy, 0, 'a lone tip sways');
 });
 
 test('auto rig finds the sword tip under another zoom and offsets', () => {
