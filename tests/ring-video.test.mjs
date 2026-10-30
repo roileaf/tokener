@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { playRingVideo, registerRingVideoPlayback } from '../scripts/ring-video.js';
+import {
+  playRingVideo,
+  registerCreatedTokenSubjectPath,
+  registerRingVideoPlayback,
+} from '../scripts/ring-video.js';
 
 function makeToken({ enabled = true, video } = {}) {
   return {
@@ -45,4 +49,26 @@ test('playback is registered on drawToken and refreshToken', () => {
   const names = [];
   registerRingVideoPlayback({ on: (name) => names.push(name) });
   assert.deepEqual(names, ['drawToken', 'refreshToken']);
+});
+
+test('the created token folder is registered as holding its own ring subjects', () => {
+  const ring = { subjectPaths: {} };
+  assert.equal(registerCreatedTokenSubjectPath('/worlds/kingmaker/tokener/', ring), true);
+  assert.deepEqual(ring.subjectPaths, {
+    'worlds/kingmaker/tokener/': 'worlds/kingmaker/tokener/',
+  });
+});
+
+test('an existing subject mapping for the folder is kept', () => {
+  const ring = { subjectPaths: { 'worlds/w/tokener/': 'worlds/w/subjects/' } };
+  registerCreatedTokenSubjectPath('worlds/w/tokener', ring);
+  assert.equal(ring.subjectPaths['worlds/w/tokener/'], 'worlds/w/subjects/');
+});
+
+test('registering needs a folder and the ring config', () => {
+  assert.equal(registerCreatedTokenSubjectPath('', { subjectPaths: {} }), false);
+  assert.equal(registerCreatedTokenSubjectPath('worlds/w/tokener', undefined), false);
+  const ring = {};
+  assert.equal(registerCreatedTokenSubjectPath('worlds/w/tokener', ring), true);
+  assert.deepEqual(ring.subjectPaths, { 'worlds/w/tokener/': 'worlds/w/tokener/' });
 });

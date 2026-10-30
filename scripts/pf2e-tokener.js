@@ -8,7 +8,7 @@ import { renderTokenHud, updateOpenPanelsCanvasZoom } from './hud.js';
 import { registerImageTagSettings } from './image-tags.js';
 import { registerPermissionSettings } from './permissions.js';
 import { registerRingVideoPlayback } from './ring-video.js';
-import { registerTokenCreatorSettings } from './token-creator.js';
+import { registerTokenCreatorSettings, syncCreatedTokenSubjectPath } from './token-creator.js';
 
 export { MODULE_ID } from './constants.js';
 export {
@@ -174,6 +174,9 @@ function registerFoundryIntegration() {
     registerPermissionSettings();
     registerTokenCreatorSettings();
   });
+
+  // World settings are readable from setup, and the canvas draws tokens before ready.
+  hooks.once('setup', () => syncCreatedTokenSubjectPath());
 
   hooks.once('ready', () => {
     installApi();

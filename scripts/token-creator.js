@@ -59,6 +59,7 @@ import {
   shouldBendPreview,
 } from './token-animation.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
+import { registerCreatedTokenSubjectPath } from './ring-video.js';
 import {
   colorizeRingBackground,
   colorizeRingFrame,
@@ -181,6 +182,7 @@ export function registerTokenCreatorSettings(settings = globalThis.game?.setting
     config: true,
     type: String,
     default: '',
+    onChange: () => syncCreatedTokenSubjectPath(),
   });
   settings?.register?.(MODULE_ID, TOKEN_CREATOR_DEFAULTS_SETTING_KEY, {
     scope: 'client',
@@ -3296,6 +3298,16 @@ function saveCreatorDefaults(options) {
   try {
     void globalThis.game?.settings?.set?.(MODULE_ID, TOKEN_CREATOR_DEFAULTS_SETTING_KEY, options);
   } catch {}
+}
+
+/** Registers the configured created token folder as a ring subject path (see ring-video.js). */
+export function syncCreatedTokenSubjectPath() {
+  return registerCreatedTokenSubjectPath(
+    getCreatedTokenFolder({
+      worldId: globalThis.game?.world?.id,
+      configured: readSetting(CREATED_TOKEN_FOLDER_SETTING_KEY),
+    }),
+  );
 }
 
 function readSetting(key) {

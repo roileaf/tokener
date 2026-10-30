@@ -8,6 +8,25 @@ export function playRingVideo(token, videoHelper = globalThis.game?.video) {
   return true;
 }
 
+/**
+ * Marks the created token folder as holding its own ring subjects. A token image there then counts
+ * as a distinct ring subject, so Foundry sizes it like the explicit subjects still tokens use
+ * instead of fitting it into the ring. Animated tokens rely on this: Foundry only accepts images as
+ * `ring.subject.texture`, so their WebM is the token image with the subject left empty.
+ */
+export function registerCreatedTokenSubjectPath(
+  folder,
+  ringConfig = globalThis.CONFIG?.Token?.ring,
+) {
+  const prefix = String(folder ?? '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '');
+  if (!prefix || !ringConfig) return false;
+  ringConfig.subjectPaths ??= {};
+  ringConfig.subjectPaths[`${prefix}/`] ??= `${prefix}/`;
+  return true;
+}
+
 /** Keep animated ring-subject videos playing as tokens are drawn and refreshed. */
 export function registerRingVideoPlayback(hooks = globalThis.Hooks) {
   if (typeof hooks?.on !== 'function') return;
