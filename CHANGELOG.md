@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- **Auto animate** gives each part its own motion instead of one shared move: raised parts (horns, a held weapon) sway side to side, wings flap together, and tails swing across their length. Parts trail the body by different amounts and the head bobs a beat after the chest breathes, so the figure no longer moves in lockstep. Farther tips move more.
 - **Auto animate** no longer leaves every pin selected, so the next preset you click only moves the pins you pick, and it no longer puts both tip pins on one part when the frame cuts that part twice (two wings now flap as a pair).
 
 ## 2.3.1 - 2026-10-30
