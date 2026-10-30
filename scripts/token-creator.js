@@ -1952,23 +1952,27 @@ export function updateEffect(animation, id, changes) {
 }
 
 /**
- * Removes effect `id`. Its painted region is dropped too unless another effect still uses it;
- * `regions` is then a new object and `removedRegion` the dropped key.
+ * Removes effect `id` with the region canvases it owns: the one keyed by its id (kept even while
+ * it is switched to the whole figure) and the one its `region` names, unless a remaining effect
+ * still paints with that key. `regions` is then a new object; `removedRegions` lists the keys.
  */
 export function removeEffect({ animation, regions }, id) {
   const effects = animation?.effects ?? [];
   const effect = effects.find((entry) => entry.id === id);
-  if (!effect) return { animation, regions, removedRegion: null };
+  if (!effect) return { animation, regions, removedRegions: [] };
   const rest = effects.filter((entry) => entry.id !== id);
   const next = { ...animation, effects: rest };
-  const key = getEffectRegionKey(effect);
-  const shared = rest.some((entry) => getEffectRegionKey(entry) === key);
-  if (!key || shared || !regions || !Object.hasOwn(regions, key))
-    return { animation: next, regions, removedRegion: null };
+  const used = new Set(rest.map((entry) => getEffectRegionKey(entry)).filter(Boolean));
+  const removed = [...new Set([effect.id, getEffectRegionKey(effect)])].filter(
+    (key) => key && regions && Object.hasOwn(regions, key) && !used.has(key),
+  );
+  if (!removed.length) return { animation: next, regions, removedRegions: [] };
   return {
     animation: next,
-    regions: Object.fromEntries(Object.entries(regions).filter(([name]) => name !== key)),
-    removedRegion: key,
+    regions: Object.fromEntries(
+      Object.entries(regions).filter(([name]) => !removed.includes(name)),
+    ),
+    removedRegions: removed,
   };
 }
 
@@ -2103,13 +2107,17 @@ function selectCreatorEffect(app, id) {
 function removeCreatorEffect(app, id) {
   const result = removeEffect({ animation: app.animation, regions: app.effectRegions }, id);
   if (result.animation === app.animation) return;
-  if (result.removedRegion) {
+  if (result.removedRegions.length) {
     app.effectRegions = result.regions;
-    const keep = (entry) => entry.layer !== 'region' || entry.regionKey !== result.removedRegion;
+    const keep = (entry) =>
+      entry.layer !== 'region' || !result.removedRegions.includes(entry.regionKey);
     app._maskHistory.undo = app._maskHistory.undo.filter(keep);
     app._maskHistory.redo = app._maskHistory.redo.filter(keep);
     app._regionVersion += 1;
   }
+  const ownStep = (entry) => entry.layer !== 'region' || entry.effectId !== id;
+  app._maskHistory.undo = app._maskHistory.undo.filter(ownStep);
+  app._maskHistory.redo = app._maskHistory.redo.filter(ownStep);
   clearEffectCaches();
   app._previewBend = null;
   setAnimationEffects(app, result.animation);
@@ -2155,6 +2163,10 @@ function updateEffectParam(app, input) {
       if (label) label.textContent = formatEffectValue(control, control.value);
     }
   }
+  const row = getCreatorRoot(app)?.querySelector?.(
+    `[data-creator-action="effect-select"][data-effect-id="${effect.id}"] span`,
+  );
+  if (row && updated) row.textContent = describeEffect(updated);
   renderCreatorPreview(app);
 }
 
@@ -2166,13 +2178,13 @@ function startRegionStroke(app) {
   if (!canPaintRegion(app)) return null;
   stopAnimationPlayback(app);
   const effect = getSelectedEffect(app);
-  let key = getEffectRegionKey(effect);
-  if (!key) {
-    key = effect.id;
+  const key = getEffectRegionKey(effect) ?? effect.id;
+  // Recorded before the switch, so undoing the first stroke also returns to the whole figure.
+  pushMaskHistory(app, 'region', { regionKey: key, effectId: effect.id });
+  if (!getEffectRegionKey(effect)) {
     app.animation = updateEffect(app.animation, effect.id, { region: key });
     syncAnimationControls(app);
   }
-  pushMaskHistory(app, 'region', key);
   return key;
 }
 
@@ -2238,17 +2250,25 @@ function drawEffectRegionOverlay(context, app, size) {
   const key = getEffectRegionKey(getSelectedEffect(app));
   const region = key ? app.effectRegions[key] : null;
   if (!region) return;
-  const cached = app._regionTint;
-  let tint =
-    cached?.region === region && cached.version === app._regionVersion ? cached.tint : null;
-  if (!tint) {
-    tint = createCanvas(region.width, region.height);
+  // One tint canvas is reused (reallocated only for a new size) and redrawn when the region or
+  // its paint changes, so strokes do not allocate a full-resolution canvas per move.
+  let cached = app._regionTint;
+  if (!cached || cached.tint.width !== region.width || cached.tint.height !== region.height) {
+    cached = { tint: createCanvas(region.width, region.height), region: null, version: -1 };
+    app._regionTint = cached;
+  }
+  const tint = cached.tint;
+  if (cached.region !== region || cached.version !== app._regionVersion) {
     const tintContext = tint.getContext('2d');
+    tintContext.save();
+    tintContext.clearRect(0, 0, tint.width, tint.height);
     tintContext.drawImage(region, 0, 0);
     tintContext.globalCompositeOperation = 'source-in';
     tintContext.fillStyle = REGION_COLOR;
-    tintContext.fillRect(0, 0, region.width, region.height);
-    app._regionTint = { region, version: app._regionVersion, tint };
+    tintContext.fillRect(0, 0, tint.width, tint.height);
+    tintContext.restore();
+    cached.region = region;
+    cached.version = app._regionVersion;
   }
   const layout = getPreviewLayout(app, size);
   context.save();
@@ -2896,21 +2916,31 @@ function setBrushSize(app, size) {
   renderCreatorPreview(app);
 }
 
-function pushMaskHistory(app, layer = 'popout', regionKey = null) {
+/** `target` names the region step's canvas key and effect: `{ regionKey, effectId }`. */
+function pushMaskHistory(app, layer = 'popout', target = null) {
   const history = app._maskHistory;
-  history.undo.push({
+  const entry = {
     layer,
-    regionKey,
+    regionKey: target?.regionKey ?? null,
+    effectId: target?.effectId ?? null,
     workspace: app.workspace,
-    snapshot: snapshotLayer(app, layer, app.workspace, regionKey),
-  });
+  };
+  entry.snapshot = snapshotLayer(app, layer, app.workspace, entry);
+  history.undo.push(entry);
   if (history.undo.length > MASK_HISTORY_LIMIT) history.undo.shift();
   history.redo = [];
   syncMaskControls(app);
 }
 
-function snapshotLayer(app, layer, workspace = app.workspace, regionKey = null) {
-  if (layer === 'region') return cloneMask(app.effectRegions[regionKey]);
+/** A region step keeps the canvas and the effect's region mode (whole figure or painted). */
+function snapshotLayer(app, layer, workspace = app.workspace, entry = null) {
+  if (layer === 'region') {
+    const effect = app.animation.effects.find((item) => item.id === entry?.effectId);
+    return {
+      canvas: cloneMask(app.effectRegions[entry?.regionKey]),
+      effectRegion: effect ? getEffectRegionKey(effect) : null,
+    };
+  }
   if (layer === 'cleanup')
     return {
       keep: cloneMask(workspace.cleanup.keep),
@@ -2925,7 +2955,7 @@ function undoMask(app) {
   if (!entry) return;
   history.redo.push({
     ...entry,
-    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry.regionKey),
+    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry),
   });
   restoreLayer(app, entry);
 }
@@ -2936,17 +2966,20 @@ function redoMask(app) {
   if (!entry) return;
   history.undo.push({
     ...entry,
-    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry.regionKey),
+    snapshot: snapshotLayer(app, entry.layer, entry.workspace, entry),
   });
   restoreLayer(app, entry);
 }
 
-function restoreLayer(app, { layer, snapshot, regionKey, workspace = app.workspace }) {
+function restoreLayer(app, { layer, snapshot, regionKey, effectId, workspace = app.workspace }) {
   if (layer === 'region') {
     // A restored region is a new canvas, but the regions object keeps its identity, so the
     // preview bend and the effect caches are reset by hand.
-    if (snapshot) app.effectRegions[regionKey] = snapshot;
+    if (snapshot.canvas) app.effectRegions[regionKey] = snapshot.canvas;
     else delete app.effectRegions[regionKey];
+    const effect = app.animation.effects.find((item) => item.id === effectId);
+    if (effect && getEffectRegionKey(effect) !== snapshot.effectRegion)
+      app.animation = updateEffect(app.animation, effectId, { region: snapshot.effectRegion });
     app._regionVersion += 1;
     clearEffectCaches();
     app._previewBend = null;

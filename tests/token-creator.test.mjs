@@ -1322,7 +1322,7 @@ test('removing an effect drops its region', async () => {
   );
   assert.deepEqual(Object.keys(result.regions), ['b']);
   assert.equal(result.regions.b, regionB);
-  assert.equal(result.removedRegion, 'a');
+  assert.deepEqual(result.removedRegions, ['a']);
   assert.equal(animation.effects.length, 2, 'the old animation is untouched');
   assert.equal(regions.a, regionA, 'the old regions are untouched');
 
@@ -1333,7 +1333,7 @@ test('removing an effect drops its region', async () => {
   };
   const kept = removeEffect({ animation: shared, regions }, 'a');
   assert.equal(kept.regions, regions);
-  assert.equal(kept.removedRegion, null);
+  assert.deepEqual(kept.removedRegions, []);
 
   const missing = removeEffect({ animation, regions }, 'zzz');
   assert.equal(missing.animation, animation);
@@ -1384,4 +1384,32 @@ test('effect param controls follow the type, with the wind strength capped by it
   assert.equal(kind.input, 'select');
   assert.equal(kind.options.find((option) => option.selected).value, 'snow');
   assert.equal(particles.find((control) => control.param === 'color').value, '#ffffff');
+});
+
+test('removing an effect switched back to the whole figure still drops its region', async () => {
+  const { removeEffect } = await import('../scripts/token-creator.js');
+  const own = { id: 'canvas-a' };
+  const other = { id: 'canvas-b' };
+  const animation = {
+    duration: 2,
+    fps: 30,
+    mode: 'loop',
+    pins: [],
+    effects: [
+      { id: 'a', type: 'wind', region: null, strength: 4, scale: 24 },
+      { id: 'b', type: 'wind', region: 'b', strength: 4, scale: 24 },
+    ],
+  };
+  const result = removeEffect({ animation, regions: { a: own, b: other } }, 'a');
+  assert.deepEqual(Object.keys(result.regions), ['b']);
+  assert.deepEqual(result.removedRegions, ['a']);
+
+  // Its id-keyed canvas stays while another effect still paints with that key.
+  const borrowed = {
+    ...animation,
+    effects: [animation.effects[0], { ...animation.effects[1], region: 'a' }],
+  };
+  const kept = removeEffect({ animation: borrowed, regions: { a: own, b: other } }, 'a');
+  assert.deepEqual(Object.keys(kept.regions), ['a', 'b']);
+  assert.deepEqual(kept.removedRegions, []);
 });
