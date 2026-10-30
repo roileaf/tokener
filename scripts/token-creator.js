@@ -43,7 +43,6 @@ import {
   normalizeAnimation,
   removeKeyframe,
   samplePinOffset,
-  setKeyframe,
 } from './animation.js';
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
 import {
@@ -51,13 +50,18 @@ import {
   getAnimatedOutputSize,
   getAnimatedSavePlan,
   getPinHitRadius,
+  getKeyframeAt,
   getPinPreviewPoints,
   getPinDragMode,
+  getPresetAmplitude,
   getPresetTargets,
+  getRotationArm,
   isPresetAvailable,
   renderAnimationFrame,
   resetAnimationForNewSource,
   shouldBendPreview,
+  toggleSelection,
+  updateKeyframeAt,
 } from './token-animation.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
 import { registerCreatedTokenSubjectPath } from './ring-video.js';
@@ -140,7 +144,31 @@ const PIN_RADIUS = 5;
 const PIN_HIT_RADIUS = 10;
 const PIN_COLOR = '#8fb9d6';
 const PIN_SELECTED_COLOR = '#ffd166';
-const PRESET_AMPLITUDE = 0.03;
+const PIN_PRIMARY_RING = 5;
+// Preset button icons (Font Awesome) and the keyframe easing / loop mode choices.
+const PRESET_ICONS = {
+  bob: 'fa-arrows-up-down',
+  sway: 'fa-arrows-left-right',
+  breathe: 'fa-lungs',
+  flap: 'fa-dove',
+  wave: 'fa-water',
+  hover: 'fa-feather',
+  shiver: 'fa-wave-square',
+  look: 'fa-eye',
+};
+const PRESET_TOOLTIPS = {
+  bob: 'Bob: the selected pins rise and fall',
+  sway: 'Sway: the selected pins swing side to side',
+  breathe: 'Breathe: every pin swells and settles about their centre (2+ pins)',
+  flap: 'Flap: the selected pins beat down together, like wings',
+  wave: 'Wave: the selected pins sway one after another, in the order you selected them (2+ pins)',
+  hover: 'Hover: every pin floats up and down',
+  shiver: 'Shiver: the selected pins jitter quickly',
+  look: 'Look: the selected pins turn left and right',
+};
+const KEYFRAME_EASES = ['smooth', 'linear', 'hold'];
+const ANIMATION_MODES = ['loop', 'pingpong'];
+const MAX_KEYFRAME_ROTATION = 45;
 const LOOP_LENGTHS = [1, 1.5, 2, 2.5, 3, 3.5, 4];
 // Keyframes closer than this to the current time count as "at" it (matches animation.js merging).
 const KEYFRAME_TOLERANCE = 1 / 120;
@@ -314,7 +342,8 @@ export function getTokenCreatorApplicationClass() {
       // Token animation: pins in source-image pixels, time as a fraction of the loop.
       this.animation = normalizeAnimation(null);
       this.animationTime = 0;
-      this.selectedPinId = null;
+      // Selected pins in selection order; the first is the primary that keyframe controls edit.
+      this.selectedPinIds = [];
       this.animationPlaying = false;
       this._animationFrame = null;
       // WebM encoding support, probed once when the creator first renders (false until then).
@@ -467,13 +496,38 @@ function prepareCreatorContext(app) {
         label: `${seconds} s`,
         selected: app.animation.duration === seconds,
       })),
-      presets: ANIMATION_PRESETS.map((preset) => ({
-        value: preset,
+      presets: ANIMATION_PRESETS.map((preset) => {
+        const key = `${preset[0].toUpperCase()}${preset.slice(1)}`;
+        return {
+          value: preset,
+          icon: PRESET_ICONS[preset],
+          label: localize(`Creator.Animate.${key}`, key),
+          tooltip: localize(`Creator.Animate.${key}Tooltip`, PRESET_TOOLTIPS[preset]),
+        };
+      }),
+      modes: ANIMATION_MODES.map((mode) => ({
+        value: mode,
+        label:
+          mode === 'loop'
+            ? localize('Creator.Animate.ModeLoop', 'Loop')
+            : localize('Creator.Animate.ModePingPong', 'Ping-pong'),
+        tooltip:
+          mode === 'loop'
+            ? localize('Creator.Animate.ModeLoopTooltip', 'Play the keyframes over and over')
+            : localize(
+                'Creator.Animate.ModePingPongTooltip',
+                'Play the keyframes forward, then backward',
+              ),
+        selected: app.animation.mode === mode,
+      })),
+      eases: KEYFRAME_EASES.map((ease) => ({
+        value: ease,
         label: localize(
-          `Creator.Animate.${preset[0].toUpperCase()}${preset.slice(1)}`,
-          `${preset[0].toUpperCase()}${preset.slice(1)}`,
+          `Creator.Animate.Ease${ease[0].toUpperCase()}${ease.slice(1)}`,
+          `${ease[0].toUpperCase()}${ease.slice(1)}`,
         ),
       })),
+      rotationMax: MAX_KEYFRAME_ROTATION,
     },
     labels: {
       animateTitle: localize('Creator.Animate.Title', 'Animate'),
@@ -482,6 +536,17 @@ function prepareCreatorContext(app) {
       animateAddKeyframe: localize('Creator.Animate.AddKeyframe', 'Add keyframe'),
       animateRemoveKeyframe: localize('Creator.Animate.RemoveKeyframe', 'Remove keyframe'),
       animateLength: localize('Creator.Animate.Length', 'Loop length'),
+      animateMode: localize('Creator.Animate.Mode', 'Playback'),
+      animateEase: localize('Creator.Animate.Ease', 'Easing'),
+      animateEaseTooltip: localize(
+        'Creator.Animate.EaseTooltip',
+        'How the selected pin moves from this keyframe to the next: smooth, steady, or holding still until it jumps',
+      ),
+      animateRotation: localize('Creator.Animate.Rotation', 'Rotation'),
+      animateRotationTooltip: localize(
+        'Creator.Animate.RotationTooltip',
+        'Turns the art around the selected pin at this keyframe',
+      ),
       animateHint: localize(
         'Creator.Animate.Hint',
         "Keep moves small: parts can't reveal what is behind them.",
@@ -492,7 +557,7 @@ function prepareCreatorContext(app) {
       ),
       pinTooltip: localize(
         'Creator.Animate.PinTooltip',
-        'Pins: click to add, drag to move or keyframe at the current time, right-click to remove (P)',
+        'Pins: click to add or select, Shift+click to add to the selection, drag to move or keyframe at the current time, right-click to remove (P)',
       ),
       source: localize('Creator.Source', 'Image'),
       browse: localize('Creator.Browse', 'Browse files'),
@@ -701,7 +766,7 @@ function bindPreviewInteractions(app, canvas) {
     if (app.maskTool === 'pin') {
       event.preventDefault();
       if (!canEditPins(app)) return;
-      drag = startPinDrag(app, getTokenPoint(app, canvas, event), event.button);
+      drag = startPinDrag(app, getTokenPoint(app, canvas, event), event.button, event.shiftKey);
       if (drag) canvas.setPointerCapture?.(event.pointerId);
       return;
     }
@@ -793,6 +858,10 @@ function bindPreviewInteractions(app, canvas) {
   });
   const endDrag = () => {
     const wasPin = Boolean(drag?.pinId);
+    if (wasPin && drag.narrow && !drag.moved) {
+      app.selectedPinIds = [drag.pinId];
+      renderCreatorPreview(app);
+    }
     drag = null;
     syncMaskControls(app);
     if (wasPin) syncAnimationControls(app);
@@ -919,6 +988,14 @@ function handleCreatorInput(app, event) {
     setAnimationTime(app, Number(target.value) / 100);
     return;
   }
+  if (name === 'animationRotation') {
+    const degrees = Math.max(
+      -MAX_KEYFRAME_ROTATION,
+      Math.min(MAX_KEYFRAME_ROTATION, Number(target.value) || 0),
+    );
+    setPrimaryKeyframe(app, { rot: (degrees * Math.PI) / 180 });
+    return;
+  }
   if (!name || !(name in app.creatorOptions)) return;
 
   updateCreatorOption(app, target);
@@ -946,6 +1023,17 @@ async function handleCreatorChange(app, event) {
   if (target?.name === 'animationDuration') {
     app.animation = normalizeAnimation({ ...app.animation, duration: Number(target.value) });
     syncAnimationControls(app);
+    return;
+  }
+  if (target?.name === 'animationMode') {
+    if (!ANIMATION_MODES.includes(target.value)) return;
+    app.animation = normalizeAnimation({ ...app.animation, mode: target.value });
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+    return;
+  }
+  if (target?.name === 'animationEase') {
+    if (KEYFRAME_EASES.includes(target.value)) setPrimaryKeyframe(app, { ease: target.value });
     return;
   }
   if (!target?.name || !(target.name in app.creatorOptions)) return;
@@ -1630,13 +1718,16 @@ function formatLoopPercent(t) {
   return `${Math.round(t * 100)}%`;
 }
 
+/** The primary (first) selected pin, which the keyframe controls edit. */
 function getSelectedPin(app) {
-  return app.animation.pins.find((pin) => pin.id === app.selectedPinId) ?? null;
+  const id = app.selectedPinIds[0];
+  return app.animation.pins.find((pin) => pin.id === id) ?? null;
 }
 
 function setAnimationPins(app, pins) {
   app.animation = { ...app.animation, pins };
-  if (!pins.some((pin) => pin.id === app.selectedPinId)) app.selectedPinId = null;
+  const ids = new Set(pins.map((pin) => pin.id));
+  app.selectedPinIds = app.selectedPinIds.filter((id) => ids.has(id));
   if (!pins.length) stopAnimationPlayback(app);
 }
 
@@ -1651,7 +1742,7 @@ function updateAnimationPin(app, id, change) {
 function clearAnimationPins(app) {
   stopAnimationPlayback(app);
   app.animation = resetAnimationForNewSource(app.animation);
-  app.selectedPinId = null;
+  app.selectedPinIds = [];
   app._previewBend = null;
   syncAnimationControls(app);
 }
@@ -1680,6 +1771,7 @@ function findPinAt(app, point) {
     layout: getPreviewLayout(app),
     cutoutWidth: app.cutout.width,
     t: app.animationTime,
+    mode: app.animation.mode,
   });
   let best = null;
   const canvas = getCreatorRoot(app)?.querySelector?.('.pf2e-tokener-creator-preview');
@@ -1700,11 +1792,12 @@ function findPinAt(app, point) {
 }
 
 /**
- * Pin tool press: right-click removes the pin under the pointer; a left press selects that pin or
- * adds one, and returns the drag that follows. Dragging places the pin (new pins, or while the
- * animation has no keyframes yet) or keyframes its offset at the current time.
+ * Pin tool press: right-click removes the pin under the pointer; a left press selects that pin
+ * (Shift toggles it in the selection instead, without dragging) or adds one, and returns the drag
+ * that follows. Dragging places the pin (new pins, or while the animation has no keyframes yet) or
+ * keyframes its offset at the current time; only the dragged pin moves.
  */
-function startPinDrag(app, point, button) {
+function startPinDrag(app, point, button, additive = false) {
   const hit = findPinAt(app, point);
   if (button === 2) {
     if (hit) {
@@ -1721,18 +1814,33 @@ function startPinDrag(app, point, button) {
   stopAnimationPlayback(app);
   const source = previewPointToSource(app, point);
   let pin = hit ? app.animation.pins.find((entry) => entry.id === hit.id) : null;
-  if (!pin) {
+  let narrow = false;
+  if (pin && additive) {
+    app.selectedPinIds = toggleSelection(app.selectedPinIds, pin.id, true);
+    syncAnimationControls(app);
+    renderCreatorPreview(app);
+    return null;
+  }
+  if (pin) {
+    // Pressing a pin that is already selected keeps the selection while it is dragged alone; a
+    // click without moving narrows the selection to it (see endDrag).
+    narrow = app.selectedPinIds.includes(pin.id) && app.selectedPinIds.length > 1;
+    if (!app.selectedPinIds.includes(pin.id))
+      app.selectedPinIds = toggleSelection(app.selectedPinIds, pin.id, false);
+  } else {
     const { width, height } = app.cutout;
     if (source.x < 0 || source.y < 0 || source.x >= width || source.y >= height) return null;
-    pin = createPin({ x: source.x, y: source.y });
+    pin = createPin({ x: source.x, y: source.y, arm: getRotationArm(app.cutout) });
     setAnimationPins(app, [...app.animation.pins, pin]);
+    app.selectedPinIds = toggleSelection(app.selectedPinIds, pin.id, additive);
   }
-  app.selectedPinId = pin.id;
-  const offset = samplePinOffset(pin, app.animationTime);
+  const offset = samplePinOffset(pin, app.animationTime, app.animation.mode);
   syncAnimationControls(app);
   renderCreatorPreview(app);
   return {
     pinId: pin.id,
+    narrow,
+    moved: false,
     moveRest: getPinDragMode(pin) === 'rest',
     grabX: source.x - (pin.x + offset.dx),
     grabY: source.y - (pin.y + offset.dy),
@@ -1740,13 +1848,19 @@ function startPinDrag(app, point, button) {
 }
 
 function dragPin(app, drag, point) {
+  drag.moved = true;
   const source = previewPointToSource(app, point);
   const x = source.x - drag.grabX;
   const y = source.y - drag.grabY;
   updateAnimationPin(app, drag.pinId, (pin) =>
     drag.moveRest
       ? { ...pin, x, y }
-      : setKeyframe(pin, app.animationTime, { dx: x - pin.x, dy: y - pin.y }),
+      : updateKeyframeAt(
+          pin,
+          app.animationTime,
+          { dx: x - pin.x, dy: y - pin.y },
+          app.animation.mode,
+        ),
   );
   renderCreatorPreview(app);
 }
@@ -1756,7 +1870,27 @@ function addKeyframeAtTime(app) {
   if (!pin || !canEditPins(app)) return;
   stopAnimationPlayback(app);
   const t = app.animationTime;
-  updateAnimationPin(app, pin.id, (entry) => setKeyframe(entry, t, samplePinOffset(entry, t)));
+  updateAnimationPin(app, pin.id, (entry) => updateKeyframeAt(entry, t, {}, app.animation.mode));
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+}
+
+/**
+ * Sets the easing and/or rotation of the primary pin's keyframe at the current time, creating the
+ * keyframe from the current pose when there is none. Pins made before rotation existed get an arm.
+ */
+function setPrimaryKeyframe(app, changes) {
+  const pin = getSelectedPin(app);
+  if (!pin || !canEditPins(app)) return;
+  stopAnimationPlayback(app);
+  updateAnimationPin(app, pin.id, (entry) => {
+    const next = updateKeyframeAt(entry, app.animationTime, changes, app.animation.mode);
+    if (!(next.arm > 0) && 'rot' in changes) {
+      const arm = getRotationArm(app.cutout);
+      if (arm > 0) next.arm = arm;
+    }
+    return next;
+  });
   syncAnimationControls(app);
   renderCreatorPreview(app);
 }
@@ -1772,9 +1906,10 @@ function removeKeyframeAtTime(app) {
 
 function applyAnimationPreset(app, preset) {
   if (!ANIMATION_PRESETS.includes(preset) || !canEditPins(app)) return;
-  if (!isPresetAvailable(app.animation.pins, app.selectedPinId, preset)) return;
-  const ids = getPresetTargets(app.animation.pins, app.selectedPinId, preset);
-  const amplitude = PRESET_AMPLITUDE * Math.max(app.cutout.width, app.cutout.height);
+  if (!isPresetAvailable(app.animation.pins, app.selectedPinIds, preset)) return;
+  // Selection order matters: Wave staggers its sway along it.
+  const ids = getPresetTargets(app.animation.pins, app.selectedPinIds, preset);
+  const amplitude = getPresetAmplitude(preset, app.cutout);
   setAnimationPins(app, applyPreset(app.animation.pins, ids, preset, { amplitude }));
   syncAnimationControls(app);
   renderCreatorPreview(app);
@@ -1868,7 +2003,10 @@ function drawPreviewToken(context, app, size) {
   app._previewBend = { key, bent };
 }
 
-/** Pin dots while the pin tool is active: selected pins get a gold ring, anchors are hollow. */
+/**
+ * Pin dots while the pin tool is active: selected pins get a gold ring (the primary a wider,
+ * thicker one), anchors are hollow.
+ */
 function drawPins(context, app, viewport, size) {
   if (app.maskTool !== 'pin' || !canEditPins(app) || !app.animation.pins.length) return;
   const points = getPinPreviewPoints({
@@ -1876,7 +2014,8 @@ function drawPins(context, app, viewport, size) {
     layout: getPreviewLayout(app, size),
     cutoutWidth: app.cutout.width,
     t: app.animationTime,
-    selectedId: app.selectedPinId,
+    mode: app.animation.mode,
+    selectedIds: app.selectedPinIds,
   });
   for (const point of points) {
     const x = viewport.x + point.x * viewport.scale;
@@ -1895,9 +2034,15 @@ function drawPins(context, app, viewport, size) {
     context.strokeStyle = PIN_COLOR;
     context.stroke();
     if (point.selected) {
+      const ring = PIN_RADIUS + (point.primary ? PIN_PRIMARY_RING : 3.5);
       context.beginPath();
-      context.arc(x, y, PIN_RADIUS + 3.5, 0, Math.PI * 2);
-      context.lineWidth = 2;
+      context.arc(x, y, ring, 0, Math.PI * 2);
+      if (point.primary) {
+        context.lineWidth = 4.5;
+        context.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+        context.stroke();
+      }
+      context.lineWidth = point.primary ? 3 : 2;
       context.strokeStyle = PIN_SELECTED_COLOR;
       context.stroke();
     }
@@ -1922,9 +2067,10 @@ function syncAnimationControls(app) {
     if (action === 'animation-preset')
       disabled ||= !isPresetAvailable(
         app.animation.pins,
-        app.selectedPinId,
+        app.selectedPinIds,
         control.dataset.preset,
       );
+    if (control.dataset.keyframeControl !== undefined) disabled ||= !pin;
     if (action === 'animation-play') disabled ||= !moving && !app.animationPlaying;
     control.disabled = disabled;
   });
@@ -1943,6 +2089,9 @@ function syncAnimationControls(app) {
   }
   const duration = root.querySelector('select[name="animationDuration"]');
   if (duration) duration.value = String(app.animation.duration);
+  root.querySelectorAll('input[name="animationMode"]').forEach((radio) => {
+    radio.checked = radio.value === app.animation.mode;
+  });
 
   const row = root.querySelector('[data-animation-keyframes]');
   if (row) {
@@ -1976,6 +2125,28 @@ function syncAnimationTime(app) {
   root.querySelectorAll('.pf2e-tokener-creator-keyframe').forEach((marker) => {
     marker.classList.toggle('is-current', isAtTime(Number(marker.dataset.time), t));
   });
+  syncKeyframeControls(app, root);
+}
+
+/**
+ * Easing and rotation controls show the primary pin's keyframe at the current time, or the
+ * sampled rotation and the default easing when there is no keyframe there.
+ */
+function syncKeyframeControls(app, root) {
+  const pin = getSelectedPin(app);
+  const key = pin ? getKeyframeAt(pin, app.animationTime) : null;
+  const rot = key
+    ? (key.rot ?? 0)
+    : pin
+      ? samplePinOffset(pin, app.animationTime, app.animation.mode).rot
+      : 0;
+  const degrees = Math.round((rot * 180) / Math.PI);
+  const ease = root.querySelector('select[name="animationEase"]');
+  if (ease) ease.value = key?.ease ?? 'smooth';
+  const rotation = root.querySelector('input[name="animationRotation"]');
+  if (rotation && root.ownerDocument?.activeElement !== rotation) rotation.value = String(degrees);
+  const label = root.querySelector('[data-animation-rotation]');
+  if (label) label.textContent = `${degrees}°`;
 }
 
 function isPopOutEnabled(app) {

@@ -1,4 +1,10 @@
-import { DEFAULT_ANIMATION, hasMotion, samplePinOffset, samplePins } from './animation.js';
+import {
+  DEFAULT_ANIMATION,
+  hasMotion,
+  samplePinOffset,
+  samplePins,
+  setKeyframe,
+} from './animation.js';
 import {
   drawGlow,
   drawParticles,
@@ -502,10 +508,66 @@ export function shouldBendPreview({ maskTool, pointerMode }) {
   return canPlayWithTool(maskTool) && !pointerMode;
 }
 
-/** Breathe scales pins about their centre, so it needs at least two pins to do anything useful. */
-export function isPresetAvailable(pins, selectedPinId, preset) {
-  if (preset === 'breathe' && (pins?.length ?? 0) < 2) return false;
-  return getPresetTargets(pins, selectedPinId, preset).length > 0;
+/** Presets that act on every pin rather than the selection. */
+const ALL_PIN_PRESETS = ['breathe', 'hover'];
+/** Preset amplitude as a share of the cut-out's long side (Shiver is a small jitter). */
+const PRESET_AMPLITUDE = 0.03;
+const SHIVER_AMPLITUDE = 0.01;
+/** Rotation arm of a new pin as a share of the cut-out's long side. */
+export const ROTATION_ARM_RATIO = 0.12;
+/** Keyframes within this loop distance of the current time count as "at" it (as in setKeyframe). */
+const KEYFRAME_TOLERANCE = 1 / 120;
+
+/**
+ * Whether a preset can run: Breathe scales pins about their centre (2+ pins), Hover lifts every
+ * pin (1+), Wave staggers the selection (2+ selected), the rest need a selected pin.
+ */
+export function isPresetAvailable(pins, selectedIds, preset) {
+  const count = pins?.length ?? 0;
+  if (preset === 'breathe') return count >= 2;
+  if (preset === 'hover') return count >= 1;
+  const targets = getPresetTargets(pins, selectedIds, preset).length;
+  return preset === 'wave' ? targets >= 2 : targets >= 1;
+}
+
+/** Click selects only `id`; an additive (Shift) click toggles it, keeping selection order. */
+export function toggleSelection(ids, id, additive) {
+  const list = Array.isArray(ids) ? ids : [];
+  if (!additive) return [id];
+  return list.includes(id) ? list.filter((entry) => entry !== id) : [...list, id];
+}
+
+/** Preset amplitude in source pixels for a cut-out of this size. */
+export function getPresetAmplitude(preset, { width, height }) {
+  const ratio = preset === 'shiver' ? SHIVER_AMPLITUDE : PRESET_AMPLITUDE;
+  return ratio * Math.max(width || 0, height || 0);
+}
+
+/** Rotation arm (source pixels) given to new pins so rotating them visibly bends the art. */
+export function getRotationArm({ width, height }) {
+  return Math.round(ROTATION_ARM_RATIO * Math.max(width || 0, height || 0));
+}
+
+function loopGap(a, b) {
+  const gap = Math.abs(a - b);
+  return Math.min(gap, 1 - gap);
+}
+
+/** The pin's keyframe at loop time t (within 1/120), or null. */
+export function getKeyframeAt(pin, t) {
+  return pin?.keyframes?.find((key) => loopGap(key.t, t) < KEYFRAME_TOLERANCE) ?? null;
+}
+
+/**
+ * Changes `rot` and/or `ease` of the pin's keyframe at t, creating the keyframe from the sampled
+ * pose when there is none. Returns a new pin.
+ */
+export function updateKeyframeAt(pin, t, changes, mode = 'loop') {
+  const key = getKeyframeAt(pin, t);
+  const base = key
+    ? { dx: key.dx, dy: key.dy, rot: key.rot ?? 0, ease: key.ease ?? 'smooth' }
+    : { ...samplePinOffset(pin, t, mode), ease: 'smooth' };
+  return setKeyframe(pin, key ? key.t : t, { ...base, ...changes });
 }
 
 /**
@@ -521,37 +583,49 @@ export function resetAnimationForNewSource(animation) {
   return { ...DEFAULT_ANIMATION, ...(animation ?? {}), pins: [] };
 }
 
-/** True when a pin never moves, so it holds the art still around it. */
+/** True when a pin never moves or turns, so it holds the art still around it. */
 export function isAnchorPin(pin) {
-  return !pin.keyframes?.some((k) => k.dx !== 0 || k.dy !== 0);
+  return !pin.keyframes?.some((k) => k.dx !== 0 || k.dy !== 0 || (k.rot ?? 0) !== 0);
 }
 
 /**
- * Maps pins (source-image pixels) to preview points at loop time `t`, using the preview `layout`
- * of the cut-out (`getPreviewLayout`). Each point says whether it is selected or an anchor.
+ * Maps pins (source-image pixels) to preview points at loop time `t` (sampled in `mode`), using the
+ * preview `layout` of the cut-out (`getPreviewLayout`). Each point says whether it is selected,
+ * the primary (first) selected pin, or an anchor.
  */
-export function getPinPreviewPoints({ pins, layout, cutoutWidth, t = 0, selectedId = null }) {
+export function getPinPreviewPoints({
+  pins,
+  layout,
+  cutoutWidth,
+  t = 0,
+  mode = 'loop',
+  selectedIds = [],
+}) {
   const scale = layout.width / Math.max(1, cutoutWidth);
+  const selected = new Set(selectedIds ?? []);
+  const primary = selectedIds?.[0] ?? null;
   return (pins ?? []).map((pin) => {
-    const { dx, dy } = samplePinOffset(pin, t);
+    const { dx, dy } = samplePinOffset(pin, t, mode);
     return {
       id: pin.id,
       x: layout.x + (pin.x + dx) * scale,
       y: layout.y + (pin.y + dy) * scale,
-      selected: pin.id === selectedId,
+      selected: selected.has(pin.id),
+      primary: pin.id === primary,
       anchor: isAnchorPin(pin),
     };
   });
 }
 
 /**
- * Which pins a preset writes: Bob and Sway move the selected pin only (none when nothing is
- * selected); Breathe scales every pin about their shared centre.
+ * Which pins a preset writes, in selection order (Wave staggers along it): Bob, Sway, Look,
+ * Shiver, Flap and Wave move the selected pins; Breathe and Hover move every pin.
  */
-export function getPresetTargets(pins, selectedPinId, preset) {
+export function getPresetTargets(pins, selectedIds, preset) {
   const list = pins ?? [];
-  if (preset === 'breathe') return list.map((pin) => pin.id);
-  return list.some((pin) => pin.id === selectedPinId) ? [selectedPinId] : [];
+  if (ALL_PIN_PRESETS.includes(preset)) return list.map((pin) => pin.id);
+  const known = new Set(list.map((pin) => pin.id));
+  return (selectedIds ?? []).filter((id) => known.has(id));
 }
 
 /** Dragging a pin without keyframes moves where it rests; otherwise it sets its offset now. */

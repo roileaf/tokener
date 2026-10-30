@@ -2686,6 +2686,35 @@
   background: #ffd166;
 }
 
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-presets .pf2e-tokener-creator-button {
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-keyframe {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 7px 12px;
+  align-items: end;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-keyframe select:disabled,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-keyframe input:disabled,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-animate-mode input:disabled + span {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-animate-length select {
   width: auto;
   height: 22px;

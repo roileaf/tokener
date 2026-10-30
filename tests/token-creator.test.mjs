@@ -908,29 +908,105 @@ test('pin dots map from source to preview space with the current layout', async 
     },
   ];
   const layout = { x: 5, y: -10, width: 200, height: 200 };
-  const points = getPinPreviewPoints({ pins, layout, cutoutWidth: 100, t: 0.5, selectedId: 'b' });
+  const points = getPinPreviewPoints({
+    pins,
+    layout,
+    cutoutWidth: 100,
+    t: 0.5,
+    selectedIds: ['b', 'a'],
+  });
   assert.deepEqual(points, [
-    { id: 'a', x: 25, y: 30, selected: false, anchor: true },
-    { id: 'b', x: 125, y: 90, selected: true, anchor: false },
+    { id: 'a', x: 25, y: 30, selected: true, primary: false, anchor: true },
+    { id: 'b', x: 125, y: 90, selected: true, primary: true, anchor: false },
   ]);
   const atStart = getPinPreviewPoints({ pins, layout, cutoutWidth: 100, t: 0 });
   assert.equal(atStart[1].x, 105);
   assert.equal(atStart[1].selected, false);
+  // Ping-pong at t = 0.75 plays back to u = 0.5, where the pin is fully moved.
+  const back = getPinPreviewPoints({ pins, layout, cutoutWidth: 100, t: 0.75, mode: 'pingpong' });
+  assert.equal(back[1].x, 125);
 });
 
-test('preset targets: bob and sway use the selected pin, breathe uses every pin', async () => {
+test('preset targets: selected-pin presets keep selection order; breathe and hover use all', async () => {
   const { getPresetTargets } = await import('../scripts/token-animation.js');
   const pins = [
     { id: 'a', x: 0, y: 0, keyframes: [] },
     { id: 'b', x: 10, y: 0, keyframes: [] },
     { id: 'c', x: 0, y: 10, keyframes: [] },
   ];
-  assert.deepEqual(getPresetTargets(pins, 'b', 'bob'), ['b']);
-  assert.deepEqual(getPresetTargets(pins, 'b', 'sway'), ['b']);
-  assert.deepEqual(getPresetTargets(pins, null, 'bob'), []);
-  assert.deepEqual(getPresetTargets(pins, 'missing', 'sway'), []);
-  assert.deepEqual(getPresetTargets(pins, null, 'breathe'), ['a', 'b', 'c']);
-  assert.deepEqual(getPresetTargets(pins, 'b', 'breathe'), ['a', 'b', 'c']);
+  for (const preset of ['bob', 'sway', 'look', 'shiver', 'flap', 'wave']) {
+    assert.deepEqual(getPresetTargets(pins, ['c', 'a'], preset), ['c', 'a'], preset);
+    assert.deepEqual(getPresetTargets(pins, [], preset), [], preset);
+    assert.deepEqual(getPresetTargets(pins, ['missing', 'b'], preset), ['b'], preset);
+  }
+  for (const preset of ['breathe', 'hover']) {
+    assert.deepEqual(getPresetTargets(pins, [], preset), ['a', 'b', 'c'], preset);
+    assert.deepEqual(getPresetTargets(pins, ['b'], preset), ['a', 'b', 'c'], preset);
+  }
+  assert.deepEqual(getPresetTargets(undefined, ['a'], 'bob'), []);
+});
+
+test('preset availability: flap 1+, wave 2+ selected, breathe 2+ pins, hover 1+ pin', async () => {
+  const { isPresetAvailable } = await import('../scripts/token-animation.js');
+  const one = [{ id: 'a', x: 0, y: 0, keyframes: [] }];
+  const two = [...one, { id: 'b', x: 5, y: 5, keyframes: [] }];
+  assert.equal(isPresetAvailable(two, ['a'], 'flap'), true);
+  assert.equal(isPresetAvailable(two, [], 'flap'), false);
+  assert.equal(isPresetAvailable(two, ['a'], 'wave'), false);
+  assert.equal(isPresetAvailable(two, ['a', 'b'], 'wave'), true);
+  assert.equal(isPresetAvailable(two, ['a', 'missing'], 'wave'), false);
+  assert.equal(isPresetAvailable(one, ['a'], 'breathe'), false);
+  assert.equal(isPresetAvailable(two, [], 'breathe'), true);
+  assert.equal(isPresetAvailable([], [], 'hover'), false);
+  assert.equal(isPresetAvailable(one, [], 'hover'), true);
+  for (const preset of ['bob', 'sway', 'look', 'shiver']) {
+    assert.equal(isPresetAvailable(two, [], preset), false, preset);
+    assert.equal(isPresetAvailable(two, ['b'], preset), true, preset);
+  }
+});
+
+test('toggleSelection: click selects one, shift toggles in order', async () => {
+  const { toggleSelection } = await import('../scripts/token-animation.js');
+  assert.deepEqual(toggleSelection(['a', 'b'], 'c', false), ['c']);
+  assert.deepEqual(toggleSelection(['a', 'b'], 'b', false), ['b']);
+  assert.deepEqual(toggleSelection(['a'], 'c', true), ['a', 'c']);
+  assert.deepEqual(toggleSelection(['a', 'c'], 'a', true), ['c']);
+  assert.deepEqual(toggleSelection([], 'a', true), ['a']);
+  assert.deepEqual(toggleSelection(undefined, 'a', false), ['a']);
+  const ids = ['a'];
+  toggleSelection(ids, 'b', true);
+  assert.deepEqual(ids, ['a']);
+});
+
+test('preset amplitude is 3% of the long side, shiver 1%; rotation arm is 12%', async () => {
+  const { getPresetAmplitude, getRotationArm } = await import('../scripts/token-animation.js');
+  assert.equal(getPresetAmplitude('bob', { width: 200, height: 400 }), 12);
+  assert.equal(getPresetAmplitude('wave', { width: 400, height: 100 }), 12);
+  assert.equal(getPresetAmplitude('shiver', { width: 200, height: 400 }), 4);
+  assert.equal(getRotationArm({ width: 300, height: 410 }), 49);
+  assert.equal(getRotationArm({ width: 0, height: 0 }), 0);
+});
+
+test('keyframe controls edit the keyframe at the current time, creating it when missing', async () => {
+  const { getKeyframeAt, updateKeyframeAt } = await import('../scripts/token-animation.js');
+  const { createPin, setKeyframe } = await import('../scripts/animation.js');
+  let pin = setKeyframe(createPin({ x: 0, y: 0, arm: 10 }), 0, { dx: 0, dy: 0 });
+  pin = setKeyframe(pin, 0.5, { dx: 10, dy: 0 });
+  assert.equal(getKeyframeAt(pin, 0.25), null);
+  assert.deepEqual(getKeyframeAt(pin, 0.5 + 1 / 500), { t: 0.5, dx: 10, dy: 0 });
+
+  const eased = updateKeyframeAt(pin, 0.5, { ease: 'hold' });
+  assert.deepEqual(eased.keyframes[1], { t: 0.5, dx: 10, dy: 0, ease: 'hold' });
+  const rotated = updateKeyframeAt(eased, 0.5, { rot: 0.3 });
+  assert.deepEqual(rotated.keyframes[1], { t: 0.5, dx: 10, dy: 0, rot: 0.3, ease: 'hold' });
+
+  // No keyframe at 0.25: one is created from the sampled pose.
+  const created = updateKeyframeAt(pin, 0.25, { rot: -0.2 });
+  assert.equal(created.keyframes.length, 3);
+  const { dx, ...rest } = created.keyframes[1];
+  assert.ok(Math.abs(dx - 5) < 1e-9);
+  assert.deepEqual(rest, { t: 0.25, dy: 0, rot: -0.2 });
+  assert.equal(pin.keyframes.length, 2);
 });
 
 test('breathe on three pins through the creator path gives real motion', async () => {
@@ -941,7 +1017,7 @@ test('breathe on three pins through the creator path gives real motion', async (
     { id: 'b', x: 100, y: 0, keyframes: [] },
     { id: 'c', x: 50, y: 90, keyframes: [] },
   ];
-  const ids = getPresetTargets(pins, 'a', 'breathe');
+  const ids = getPresetTargets(pins, ['a'], 'breathe');
   const next = applyPreset(pins, ids, 'breathe', { amplitude: 3 });
   assert.equal(hasMotion({ pins: next }), true);
   assert.ok(next.every((pin) => pin.keyframes.length === 2));
@@ -1049,4 +1125,13 @@ test('the pop-out brush button stands for both brush modes', async () => {
   assert.equal(getToolButton('cut'), 'cut');
   assert.equal(getToolButton('restore'), 'cut');
   assert.equal(getToolButton(null), 'move');
+});
+
+test('a pin that only rotates is not drawn as an anchor', async () => {
+  const { isAnchorPin } = await import('../scripts/token-animation.js');
+  assert.equal(isAnchorPin({ id: 'a', x: 0, y: 0, keyframes: [{ t: 0, dx: 0, dy: 0 }] }), true);
+  assert.equal(
+    isAnchorPin({ id: 'a', x: 0, y: 0, keyframes: [{ t: 0, dx: 0, dy: 0, rot: 0.2 }] }),
+    false,
+  );
 });

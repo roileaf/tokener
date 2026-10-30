@@ -154,10 +154,10 @@ test('the preview stays unbent while a mask tool or a mask stroke works on the s
 test('Breathe needs at least two pins; Bob and Sway need a selected pin', () => {
   const one = [{ id: 'a', x: 0, y: 0, keyframes: [] }];
   const two = [...one, { id: 'b', x: 5, y: 5, keyframes: [] }];
-  assert.equal(isPresetAvailable(one, null, 'breathe'), false);
-  assert.equal(isPresetAvailable(two, null, 'breathe'), true);
-  assert.equal(isPresetAvailable(one, 'a', 'bob'), true);
-  assert.equal(isPresetAvailable(one, null, 'sway'), false);
+  assert.equal(isPresetAvailable(one, [], 'breathe'), false);
+  assert.equal(isPresetAvailable(two, [], 'breathe'), true);
+  assert.equal(isPresetAvailable(one, ['a'], 'bob'), true);
+  assert.equal(isPresetAvailable(one, [], 'sway'), false);
 });
 
 test('pin hit radius follows CSS scaling of the preview canvas and viewport zoom', () => {
