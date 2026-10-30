@@ -307,6 +307,10 @@ function bendLayers({
     const canvas = getRegionCanvas(effect, regions);
     if (canvas && !regionCanvases.has(effect.region)) regionCanvases.set(effect.region, canvas);
   }
+  // Region pins' areas too, so the preview can tint a region where the art has moved it.
+  for (const pin of regionPins)
+    if (!regionCanvases.has(pin.region))
+      regionCanvases.set(pin.region, getPinRegionCanvas(pin, regions));
 
   let displaced = false;
   const motions = [];
@@ -349,7 +353,7 @@ function bendLayers({
     still
       ? drawStill(image, layout, size, createCanvas)
       : warpData(paddedData(image), visible, size, createCanvas);
-  // Regions are bent on first read: only some effects (region glow) draw them.
+  // Regions are bent on first read: only region glow and the preview's region tint draw them.
   const bentRegions = {};
   for (const [key, canvas] of regionCanvases) {
     let bent = null;
