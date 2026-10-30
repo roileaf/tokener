@@ -674,10 +674,78 @@ test('a region pin hands back its region moved with the art, for the preview tin
   const artRow = bent.art.getContext('2d').getImageData(0, 80, size, 1).data;
   const inRegion = (x) => regionRow[x * 4 + 3] > 128;
   const green = (x) => artRow[x * 4 + 1] > 128 && artRow[x * 4] < 128;
-  let left = -1;
-  for (let x = 0; x < size; x += 1) {
-    assert.equal(inRegion(x), green(x), `tint and art agree at x ${x}`);
-    if (left < 0 && inRegion(x)) left = x;
+  const edges = (inside) => {
+    let first = -1;
+    let last = -1;
+    for (let x = 0; x < size; x += 1)
+      if (inside(x)) {
+        if (first < 0) first = x;
+        last = x;
+      }
+    return [first, last];
+  };
+  const [regionLeft, regionRight] = edges(inRegion);
+  const [artLeft, artRight] = edges(green);
+  // The tint lies on the art, to within the anti-aliased edge pixel.
+  assert.ok(Math.abs(regionLeft - artLeft) <= 1, `left ${regionLeft} vs ${artLeft}`);
+  assert.ok(Math.abs(regionRight - artRight) <= 1, `right ${regionRight} vs ${artRight}`);
+  assert.ok(regionLeft >= 64, `the region moved right with the pin (left edge ${regionLeft})`);
+});
+
+test('a region moved further than its soft edge still moves whole, not squashed in place', () => {
+  const size = 480;
+  const cutout = createCanvas(size, size);
+  const art = cutout.getContext('2d');
+  art.fillStyle = '#c03020';
+  art.fillRect(0, 0, size, size);
+  art.fillStyle = '#00ff00';
+  art.fillRect(190, 190, 100, 100);
+  const region = createCanvas(size, size);
+  region.getContext('2d').fillStyle = '#ffffff';
+  region.getContext('2d').fillRect(190, 190, 100, 100);
+  for (const [dx, rot] of [
+    [60, 0],
+    [100, 0],
+    [0, 0.5],
+  ]) {
+    const pin = {
+      id: 'p',
+      x: 240,
+      y: 240,
+      arm: 0,
+      region: 'p',
+      keyframes: [
+        { t: 0, dx, dy: 0, rot },
+        { t: 0.5, dx, dy: 0, rot },
+      ],
+    };
+    const bent = renderAnimationFrame({
+      context: createCanvas(size, size).getContext('2d'),
+      size,
+      t: 0.25,
+      art: { cutout, popOutImage: null, regions: { p: region } },
+      view: VIEW,
+      animation: { duration: 2, fps: 30, mode: 'loop', pins: [pin], effects: [] },
+      createCanvas,
+      drawFrame: () => {},
+    });
+    const row = bent.art.getContext('2d').getImageData(0, 240, size, 1).data;
+    let left = -1;
+    let right = -1;
+    for (let x = 0; x < size; x += 1)
+      if (row[x * 4 + 1] > 128 && row[x * 4] < 128) {
+        if (left < 0) left = x;
+        right = x;
+      }
+    // Moved rigidly: shifted by dx, or (turned half a radian about its centre) as wide as the
+    // square's diagonal reach along the row, never smeared from its old place.
+    if (rot) {
+      const half = 50 / Math.cos(rot);
+      assert.ok(Math.abs(left - (240 - half)) <= 4, `turned: left ${left}`);
+      assert.ok(Math.abs(right - (240 + half)) <= 4, `turned: right ${right}`);
+    } else {
+      assert.ok(Math.abs(left - (190 + dx)) <= 3, `dx ${dx}: left ${left}`);
+      assert.ok(Math.abs(right - (289 + dx)) <= 3, `dx ${dx}: right ${right}`);
+    }
   }
-  assert.ok(left >= 64, `the region moved right with the pin (left edge ${left})`);
 });

@@ -18,7 +18,7 @@ import {
 } from './animation-effects.js';
 import { buildWarpGrid, sampleGrid, warpImageData } from './puppet-warp.js';
 import { clipFrameIndex, drawClipFrame } from './sequencer-clips.js';
-import { buildRegionField, moveGridByRegions } from './region-motion.js';
+import { buildRegionField, getMaskRadius, moveGridByRegions } from './region-motion.js';
 import { getTokenFrameLayout } from './token-composer.js';
 
 /** Largest edge, in pixels, of a saved animated token: VP9 + per-frame warps get slow beyond it. */
@@ -47,6 +47,12 @@ function drawLayout(image, layout, size, margin, createCanvas) {
 
 /** Share of the token over which a moved region blends into the still art around it. */
 const REGION_FEATHER = 0.08;
+/**
+ * A region's soft edge is at least this many times the furthest its pin moves it over the loop.
+ * The blend is drawn by inverting it, which only works while the move stays within the soft
+ * edge (its steepest slope is 1.5 per feather); a move past it squashes the region in place.
+ */
+const REGION_REACH_FEATHER = 2;
 
 /** Grid spacing of the warp mesh, in token pixels. */
 const WARP_STEP = 8;
@@ -241,16 +247,48 @@ function getPinRegionCanvas(pin, regions) {
  * The warp-mesh weight field of a pin's region at this layout. It only changes with the paint or
  * the layout, so the last one per region canvas is cached (cleared with the effect caches).
  */
-function getRegionField(canvas, paddedData, { layout, size, margin }) {
-  const key = [size, margin, layout.x, layout.y, layout.width, layout.height].join('|');
+/**
+ * The weight field of a region pin's area on the padded warp mesh, cached per canvas. Its soft
+ * edge widens with the pin's `reach` over the whole loop (`shift` in token px, `turn` in radians
+ * about `pivot`), so even a long move keeps the region whole.
+ */
+function getRegionField(canvas, paddedData, { layout, size, margin, pivot, reach }) {
+  const key = [
+    size,
+    margin,
+    layout.x,
+    layout.y,
+    layout.width,
+    layout.height,
+    pivot.x,
+    pivot.y,
+    reach.shift,
+    reach.turn,
+  ].join('|');
   const cached = regionFieldCache.get(canvas);
   if (cached?.key === key) return cached.field;
-  const field = buildRegionField(paddedData(canvas), {
-    step: WARP_STEP,
-    feather: size * REGION_FEATHER,
-  });
+  const mask = paddedData(canvas);
+  const radius = reach.turn
+    ? getMaskRadius(mask, { step: WARP_STEP, cx: pivot.x, cy: pivot.y })
+    : 0;
+  const feather = Math.max(
+    size * REGION_FEATHER,
+    REGION_REACH_FEATHER * (reach.shift + reach.turn * radius),
+  );
+  const field = buildRegionField(mask, { step: WARP_STEP, feather });
   regionFieldCache.set(canvas, { key, field });
   return field;
+}
+
+/** The furthest a pin shifts (source px) and turns (radians) at any of its keyframes. */
+function getPinReach(pin) {
+  let shift = 0;
+  let turn = 0;
+  for (const key of pin.keyframes ?? []) {
+    shift = Math.max(shift, Math.hypot(key.dx || 0, key.dy || 0));
+    turn = Math.max(turn, Math.abs(key.rot || 0));
+  }
+  return { shift, turn };
 }
 
 /**
@@ -318,8 +356,15 @@ function bendLayers({
     const { dx, dy, rot } = samplePinOffset(pin, t, animation.mode);
     if (!dx && !dy && !rot) continue;
     const pivot = toPadded(pin);
+    const reach = getPinReach(pin);
     motions.push({
-      field: getRegionField(getPinRegionCanvas(pin, regions), paddedData, { layout, size, margin }),
+      field: getRegionField(getPinRegionCanvas(pin, regions), paddedData, {
+        layout,
+        size,
+        margin,
+        pivot,
+        reach: { shift: reach.shift * scale, turn: reach.turn },
+      }),
       cx: pivot.x,
       cy: pivot.y,
       dx: dx * scale,

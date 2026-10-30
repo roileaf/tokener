@@ -147,6 +147,28 @@ export function pickPartMask(masks, { figure, tip, chest, avoid = [] }) {
   return best;
 }
 
+/** Share of a part lying inside a bigger part at which it is the same limb, not a part of its own. */
+const NESTED_SHARE = 0.5;
+
+/**
+ * Keeps one part per limb: of the `found` parts (a Map of pin id to `{ rgba, area }`), any that
+ * lies mostly inside a bigger one is dropped (its pin stays a plain pin). Keeps the map's order.
+ */
+export function dropNestedParts(found) {
+  const bySize = [...found].sort((a, b) => b[1].area - a[1].area);
+  const kept = [];
+  for (const [id, part] of bySize) {
+    const nested = kept.some(([, bigger]) => {
+      let shared = 0;
+      for (let i = 3; i < part.rgba.length; i += 4) if (part.rgba[i] && bigger.rgba[i]) shared += 1;
+      return shared > part.area * NESTED_SHARE;
+    });
+    if (!nested) kept.push([id, part]);
+  }
+  const keep = new Set(kept.map(([id]) => id));
+  return new Map([...found].filter(([id]) => keep.has(id)));
+}
+
 /**
  * Keyframes that moved the `tip` become keyframes that turn the part about `hinge` instead: the
  * turn that carries the tip by about the same offset, capped at a natural swing.

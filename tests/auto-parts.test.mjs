@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  dropNestedParts,
   findPartClick,
   fitPartMask,
   pickPartMask,
@@ -172,4 +173,21 @@ test('specks of the mask apart from the clicked part are dropped', () => {
   assert.equal(alphaAt(part.rgba, 34, 29), 0, 'the speck is not part of the wing');
   assert.equal(part.area, 400);
   assert.deepEqual(part.hinge, { x: 50, y: 29 });
+});
+
+test('a part found mostly inside a bigger one is dropped, so one limb gets one part', () => {
+  const part = (...boxes) => {
+    const rgba = image(...boxes).data;
+    let area = 0;
+    for (let i = 3; i < rgba.length; i += 4) if (rgba[i]) area += 1;
+    return { rgba, area };
+  };
+  const found = new Map([
+    ['wing', part(WING)],
+    // A strip along the wing's edge, nearly all of it inside the wing.
+    ['strip', part({ x0: 60, y0: 26, x1: 92, y1: 30 })],
+    ['head', part({ x0: 10, y0: 52, x1: 30, y1: 60 })],
+  ]);
+  assert.deepEqual([...dropNestedParts(found).keys()], ['wing', 'head']);
+  assert.equal(dropNestedParts(new Map()).size, 0);
 });
