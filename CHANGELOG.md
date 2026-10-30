@@ -7,6 +7,15 @@
 - **Remove** and **Restore** are now one **Touch-up brush** (**Q**): drag removes leftovers, right-drag or Alt-drag brings the original back (**R** still starts it in restore mode and **X** swaps).
 - **Paint** and **Erase** are now one **Pop-out brush** (**B**): drag to pop parts out, right-drag or Alt-drag to keep them inside (**E** still starts it in keep-inside mode and **X** swaps). The brush only works outside the frame opening, so strokes can cross the frame edge freely, and the outline and tint of popped parts are shown only where they actually pop out.
 
+### Added
+
+- Animation studio, motion: Shift+click selects several pins (Escape clears the selection with the pin tool); each keyframe has an easing (**Smooth**, **Linear**, **Hold**) and a rotation (-45 to 45 degrees) so pins can tilt parts of the art; playback can **Loop** or **Ping-pong**.
+- New presets **Flap**, **Wave**, **Hover**, **Shiver** and **Look** beside **Bob**, **Sway** and **Breathe**. Bob, Sway, Look, Shiver and Flap act on the selected pins, **Wave** on 2+ selected pins in selection order with follow-through delay, **Breathe** needs 2+ pins, and Breathe and Hover move all pins.
+- **Auto animate** places pins (head, chest, two base anchors, up to two limb or weapon tips) and an idle: Breathe plus Bob on the head, Flap or Sway on the tips.
+- **Effects** in the Animate card: **Wind**, **Wobble**, **Flicker**, **Glow** and **Particles** (embers, smoke, sparkles, snow, drips), each on the whole figure or a painted region (region brush **F**: drag paints, right-drag or Alt-drag removes). **Glow** on the whole figure is an aura behind the art inside the frame; on a painted region (such as eyes) it glows on top. All effects loop seamlessly, and tokens with effects save as an animated WebM.
+- **Ring effects** in the Frame card (dynamic token ring): **Pulse**, **Gradient**, **Background wave** and **Spectral**, Foundry's built-in ring effects. They work on still tokens and need no video or https. The ticked effects are applied to the ring; none ticked turns them off.
+- Projects: every save also writes `<token>.tokener.json` next to the token (sources added by upload or paste are saved as `<token>-source.png`) and the token or prototype remembers it. Opening the creator on that token reloads the full project (images, framing, options, masks, touch-ups, pins, effects, regions) while the token still shows that art. **Open project** in the Image card loads any project file, for example after **Save only**. If a project cannot be loaded the creator stays as it was and shows why; a failed project save never blocks the token save.
+
 ## 2.3.1 - 2026-10-30
 
 ### Fixed
