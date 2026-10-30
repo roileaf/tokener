@@ -36,6 +36,7 @@ import {
   ANIMATION_PRESETS,
   applyPreset,
   createPin,
+  getFrameTimes,
   hasMotion,
   normalizeAnimation,
   removeKeyframe,
@@ -45,12 +46,13 @@ import {
 import { applyCreatedTokenCandidate, getCreatedTokenApplyActions } from './picker-app.js';
 import {
   bendTokenArt,
+  getAnimatedSavePlan,
   getPinPreviewPoints,
   getPinDragMode,
   getPresetTargets,
   resetAnimationForNewSource,
 } from './token-animation.js';
-import { canEncodeAnimation } from './webm-alpha.js';
+import { canEncodeAnimation, encodeAlphaWebm } from './webm-alpha.js';
 import {
   colorizeRingBackground,
   colorizeRingFrame,
@@ -2922,13 +2924,22 @@ export async function createToken(app, action) {
     const now = new Date();
     const label = tokenWorkspace.source.label;
     const size = app.creatorOptions.outputSize;
-    const tokenCanvas = createCanvas(size, size);
-    withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
-    const tokenSrc = await uploadCanvas(
-      tokenCanvas,
-      folder,
-      buildCreatedTokenFileName(label, { now }),
-    );
+    const animated =
+      getAnimatedSavePlan({ animation: app.animation, canEncode: canEncodeAnimation() }) ===
+      'animated';
+    let tokenSrc;
+    if (animated) {
+      tokenSrc = await uploadBlob(
+        await encodeTokenAnimation(app, size),
+        folder,
+        buildCreatedTokenFileName(label, { now, extension: 'webm' }),
+      );
+      setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
+    } else {
+      const tokenCanvas = createCanvas(size, size);
+      withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
+      tokenSrc = await uploadCanvas(tokenCanvas, folder, buildCreatedTokenFileName(label, { now }));
+    }
 
     const ringMode = app.creatorOptions.frameStyle === 'ring';
     const subjectSrc = ringMode ? tokenSrc : undefined;
@@ -2971,6 +2982,7 @@ export async function createToken(app, action) {
       subjectSrc,
       ringColors,
       breakoutScale: 1 / getActiveRingScale(app),
+      animated,
     });
     if (action) {
       await applyCreatedTokenCandidate(action, candidate, app.tokenDocument);
@@ -3000,10 +3012,68 @@ export async function createToken(app, action) {
   }
 }
 
+/** Frames rendered between yields to the browser while an animation is prepared. */
+const ANIMATION_FRAMES_PER_YIELD = 4;
+
+/**
+ * Renders every loop frame of the token (bent art under a still frame or ring) at `size` and
+ * encodes them into a transparent looping WebM. The status line counts the rendered frames.
+ */
+async function encodeTokenAnimation(app, size) {
+  const animation = app.animation;
+  const times = getFrameTimes(animation);
+  const canvas = createCanvas(size, size);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const frames = [];
+  for (const [index, t] of times.entries()) {
+    setCreatorStatus(app, getEncodingStatus(index, times.length));
+    frames.push(
+      withEditTarget(app, 'token', () => {
+        const bent = bendTokenArt({
+          cutout: app.cutout,
+          popOutImage: isPopOutEnabled(app) ? getPopOutImage(app) : null,
+          view: app.view,
+          size,
+          animation,
+          t,
+          createCanvas,
+        });
+        context.clearRect(0, 0, size, size);
+        drawCreatedToken(context, app, size, { bent });
+        return context.getImageData(0, 0, size, size);
+      }),
+    );
+    if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();
+  }
+  setCreatorStatus(app, getEncodingStatus(times.length, times.length));
+  await yieldToBrowser();
+  return encodeAlphaWebm({
+    frames,
+    width: size,
+    height: size,
+    fps: animation.fps,
+    durationMs: animation.duration * 1000,
+    bitrate: size * size * 8,
+  });
+}
+
+function getEncodingStatus(done, total) {
+  return localize('Creator.Animate.Encoding', 'Encoding animation… {n}/{total}')
+    .replace('{n}', String(done))
+    .replace('{total}', String(total));
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 async function uploadCanvas(canvas, folder, fileName) {
+  return uploadBlob(await canvasToBlob(canvas, 'image/webp', 0.92), folder, fileName);
+}
+
+async function uploadBlob(blob, folder, fileName) {
   const FilePicker = getFilePickerImplementation();
   if (!FilePicker?.upload) throw new Error('FilePicker upload is unavailable.');
-  const blob = await canvasToBlob(canvas, 'image/webp', 0.92);
   const file = new File([blob], fileName, { type: blob.type || 'image/webp' });
   const response = await FilePicker.upload('data', folder, file, {}, { notify: false });
   if (response?.status === 'error' || response === false)

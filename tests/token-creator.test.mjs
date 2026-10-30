@@ -949,3 +949,16 @@ test('dragging a pin moves its rest position until it has keyframes', async () =
     'keyframe',
   );
 });
+
+test('anchors-only or unavailable encoding saves a still image', async () => {
+  const { getAnimatedSavePlan } = await import('../scripts/token-animation.js');
+  const { createPin, setKeyframe } = await import('../scripts/animation.js');
+  const moving = setKeyframe(createPin({ x: 1, y: 1 }), 0.5, { dx: 2, dy: 0 });
+  const animatedFixture = { duration: 2, fps: 30, pins: [moving] };
+  assert.equal(
+    getAnimatedSavePlan({ animation: { pins: [createPin({ x: 1, y: 1 })] }, canEncode: true }),
+    'still',
+  );
+  assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: false }), 'still');
+  assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: true }), 'animated');
+});

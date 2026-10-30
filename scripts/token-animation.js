@@ -54,6 +54,14 @@ export function bendTokenArt({ cutout, popOutImage, view, size, animation, t, cr
   return { art, popOut };
 }
 
+/**
+ * How the token is saved: an animated WebM loop only when some pin moves and this browser can
+ * encode one; otherwise the usual still image.
+ */
+export function getAnimatedSavePlan({ animation, canEncode }) {
+  return canEncode && hasMotion(animation) ? 'animated' : 'still';
+}
+
 /** A fresh animation for a newly loaded token image: pins belong to the old art, the loop length stays. */
 export function resetAnimationForNewSource(animation) {
   return { ...DEFAULT_ANIMATION, ...(animation ?? {}), pins: [] };

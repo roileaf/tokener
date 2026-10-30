@@ -244,6 +244,7 @@
   "PF2ETokener.Creator.Animate.Breathe": "Breathe",
   "PF2ETokener.Creator.Animate.Length": "Loop length",
   "PF2ETokener.Creator.Animate.Hint": "Keep moves small: parts can't reveal what is behind them.",
+  "PF2ETokener.Creator.Animate.Encoding": "Encoding animation… {n}/{total}",
   "PF2ETokener.Creator.Animate.Unavailable": "Animated tokens need Foundry opened over https or localhost.",
   "PF2ETokener.Creator.Animate.PinTooltip": "Pins: click to add, drag to move or keyframe at the current time, right-click to remove (P)",
   "PF2ETokener.Settings.TokenHudButton.Name": "Show Token HUD button",
