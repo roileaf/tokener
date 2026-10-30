@@ -962,3 +962,49 @@ test('anchors-only or unavailable encoding saves a still image', async () => {
   assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: false }), 'still');
   assert.equal(getAnimatedSavePlan({ animation: animatedFixture, canEncode: true }), 'animated');
 });
+
+test('pop-out never draws semi-transparent art twice inside the frame opening', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawRingSubject, drawTokenFrame } = await import('../scripts/token-composer.js');
+  const size = 100;
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = 'rgba(200, 40, 40, 0.5)';
+  artContext.fillRect(0, 0, size, size);
+  const mask = createCanvas(size, size);
+  mask.getContext('2d').drawImage(art, 0, 0);
+
+  const alphaAt = (canvas, x, y) => canvas.getContext('2d').getImageData(x, y, 1, 1).data[3];
+  for (const popOutImage of [null, mask]) {
+    const ring = createCanvas(size, size);
+    drawRingSubject(ring.getContext('2d'), art, {
+      size,
+      clipRadius: 0.6,
+      popOut: true,
+      popOutImage,
+    });
+    // Inside the opening, above and below the automatic cutoff line: same density.
+    assert.equal(alphaAt(ring, 50, 35), alphaAt(ring, 50, 70));
+
+    // The pop-out shadow never darkens art inside the opening either.
+    const shaded = createCanvas(size, size);
+    drawRingSubject(shaded.getContext('2d'), art, {
+      size,
+      clipRadius: 0.6,
+      popOut: true,
+      popOutImage,
+      popOutShadow: true,
+    });
+    const pixel = (x, y) => [...shaded.getContext('2d').getImageData(x, y, 1, 1).data];
+    assert.deepEqual(pixel(50, 35), pixel(50, 70));
+
+    const frame = createCanvas(size, size);
+    drawTokenFrame(frame.getContext('2d'), art, {
+      size,
+      borderWidth: 4,
+      popOut: true,
+      popOutImage,
+    });
+    assert.equal(alphaAt(frame, 50, 20), alphaAt(frame, 50, 80));
+  }
+});

@@ -250,17 +250,28 @@ export function drawTokenFrame(
 function drawPopOut(context, image, layout, { center, radius, popOut, popOutImage, popOutShadow }) {
   if (!popOut) return;
   if (popOutShadow) drawPopOutShadow(context, image, layout, { center, radius, popOutImage });
-  if (popOutImage) {
-    context.drawImage(popOutImage, layout.x, layout.y, layout.width, layout.height);
-    return;
-  }
-  const size = center * 2;
   context.save();
-  context.beginPath();
-  context.rect(0, 0, size, getAutoPopOutCutoff(size, radius));
-  context.clip();
-  context.drawImage(image, layout.x, layout.y, layout.width, layout.height);
+  clipToPopOutArea(context, { center, radius, popOutImage });
+  context.drawImage(popOutImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
+}
+
+/**
+ * Where popped parts are drawn: outside the opening only, and above the automatic cutoff line when
+ * no mask was painted. The art inside the opening is already drawn; drawing semi-transparent parts
+ * there again (or shading them) would show a seam at the cutoff line.
+ */
+function clipToPopOutArea(context, { center, radius, popOutImage }) {
+  const size = center * 2;
+  if (!popOutImage) {
+    context.beginPath();
+    context.rect(0, 0, size, getAutoPopOutCutoff(size, radius));
+    context.clip();
+  }
+  context.beginPath();
+  context.rect(0, 0, size, size);
+  context.arc(center, center, radius, 0, Math.PI * 2, true);
+  context.clip('evenodd');
 }
 
 /**
@@ -272,10 +283,7 @@ function drawPopOutShadow(context, image, layout, { center, radius, popOutImage 
   const size = center * 2;
   const away = size * 4;
   context.save();
-  context.beginPath();
-  context.rect(0, 0, size, popOutImage ? size : getAutoPopOutCutoff(size, radius));
-  context.arc(center, center, radius, 0, Math.PI * 2, true);
-  context.clip('evenodd');
+  clipToPopOutArea(context, { center, radius, popOutImage });
   context.shadowColor = 'rgba(0, 0, 0, 0.55)';
   context.shadowBlur = size * 0.025;
   context.shadowOffsetX = away;

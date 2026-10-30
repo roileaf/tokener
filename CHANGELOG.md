@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Fixed a visible line across pop-out tokens just below the centre: art above the automatic pop-out line was drawn a second time inside the frame, so semi-transparent parts (soft edges, wings, AI cut-outs) looked denser there, and the pop-out shadow darkened the art below the line. Popped parts and their shadow are now drawn only outside the frame opening.
+
 ## 2.3.0 - 2026-10-30
 
 ### Added
