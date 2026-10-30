@@ -186,6 +186,9 @@ const PIN_HIT_RADIUS = 10;
 const PIN_COLOR = '#8fb9d6';
 const PIN_SELECTED_COLOR = '#ffd166';
 const PIN_PRIMARY_RING = 5;
+/** The pin the selected animation effect follows gets an orange dashed ring. */
+const PIN_FOLLOWED_COLOR = '#ff9a3c';
+const PIN_FOLLOWED_RING = 8;
 // Preset button icons (Font Awesome) and the keyframe easing / loop mode choices.
 const PRESET_ICONS = {
   bob: 'fa-arrows-up-down',
@@ -3628,8 +3631,15 @@ function drawPreviewToken(context, app, size) {
  * Pin dots while the pin tool is active: selected pins get a gold ring (the primary a wider,
  * thicker one), anchors are hollow.
  */
+/**
+ * Pins, numbered as in an animation's Follows choice, while the pin tool is active or an
+ * animation effect is selected; the pin that animation follows gets a dashed ring.
+ */
 function drawPins(context, app, viewport, size) {
-  if (app.maskTool !== 'pin' || !canEditPins(app) || !app.animation.pins.length) return;
+  if (!canEditPins(app) || !app.animation.pins.length) return;
+  const clip = getSelectedEffect(app);
+  const following = clip?.type === 'sequencer';
+  if (app.maskTool !== 'pin' && !following) return;
   const points = getPinPreviewPoints({
     pins: app.animation.pins,
     layout: getPreviewLayout(app, size),
@@ -3637,6 +3647,7 @@ function drawPins(context, app, viewport, size) {
     t: app.animationTime,
     mode: app.animation.mode,
     selectedIds: app.selectedPinIds,
+    followedId: following ? clip.pin : null,
   });
   const regionPins = new Set(
     app.animation.pins
@@ -3675,8 +3686,33 @@ function drawPins(context, app, viewport, size) {
       context.strokeStyle = PIN_SELECTED_COLOR;
       context.stroke();
     }
+    if (point.followed) {
+      context.beginPath();
+      context.arc(x, y, PIN_RADIUS + PIN_FOLLOWED_RING, 0, Math.PI * 2);
+      context.setLineDash([4, 3]);
+      context.lineWidth = 2;
+      context.strokeStyle = PIN_FOLLOWED_COLOR;
+      context.stroke();
+      context.setLineDash([]);
+    }
+    drawPinNumber(context, point.number, x + PIN_RADIUS + 2, y - PIN_RADIUS - 2);
     context.restore();
   }
+}
+
+/** A pin's number beside it, outlined so it reads over any art. */
+function drawPinNumber(context, number, x, y) {
+  context.save();
+  context.font = 'bold 12px sans-serif';
+  context.textAlign = 'left';
+  context.textBaseline = 'bottom';
+  context.lineJoin = 'round';
+  context.lineWidth = 3;
+  context.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+  context.strokeText(String(number), x, y);
+  context.fillStyle = '#ffffff';
+  context.fillText(String(number), x, y);
+  context.restore();
 }
 
 function syncAnimationControls(app) {
