@@ -90,6 +90,7 @@ import {
   serializeProject,
   shouldLoadProject,
 } from './creator-project.js';
+import { flipCanvas, flipPins, flipView, normalizeFlip, toggleFlip } from './image-flip.js';
 import { registerCreatedTokenSubjectPath } from './ring-video.js';
 import {
   colorizeRingBackground,
@@ -533,6 +534,7 @@ function prepareCreatorContext(app) {
       label: formatZoom(getActiveView(app).zoom),
     },
     editTarget: app.editTarget,
+    canFlip: canFlip(app),
     editTargets: EDIT_TARGETS.map((target) => ({
       ...target,
       label: localize(`Creator.EditTarget.${target.value}`, target.value),
@@ -687,6 +689,16 @@ function prepareCreatorContext(app) {
         'Open a saved Token Creator project (.tokener.json) to keep editing it.',
       ),
       upload: localize('Creator.Upload', 'Upload'),
+      flipHorizontal: localize('Creator.FlipHorizontal', 'Flip horizontal'),
+      flipHorizontalTooltip: localize(
+        'Creator.FlipHorizontalTooltip',
+        'Mirror the image left to right, with its touch-ups, pop-out, effect regions and pins. In Portrait mode this flips the token too while the portrait uses the same image.',
+      ),
+      flipVertical: localize('Creator.FlipVertical', 'Flip vertical'),
+      flipVerticalTooltip: localize(
+        'Creator.FlipVerticalTooltip',
+        'Mirror the image top to bottom, with its touch-ups, pop-out, effect regions and pins. In Portrait mode this flips the token too while the portrait uses the same image.',
+      ),
       portrait: localize('Creator.UsePortrait', 'Use portrait'),
       dropHint: localize(
         'Creator.DropHint',
@@ -1272,6 +1284,10 @@ async function handleCreatorClick(app, event) {
     case 'upload':
       getCreatorRoot(app)?.querySelector('input[name="upload"]')?.click();
       return;
+    case 'flip-x':
+    case 'flip-y':
+      flipWorkspace(app, button.dataset.creatorAction === 'flip-x' ? 'x' : 'y');
+      return;
     case 'portrait': {
       const portrait = getDocumentActor(app.tokenDocument)?.img;
       if (portrait) await loadCreatorSource(app, { path: portrait });
@@ -1569,9 +1585,13 @@ function loadProjectImage(src) {
 
 /** Loads every image a parsed project refers to into canvases, without touching the app. */
 async function decodeProject(project, loadImage) {
-  const loadSource = async (path) => {
-    const canvas = drawToWorkingCanvas(await loadImage(path));
+  // The source file is unflipped; the saved flip is applied to it here. Masks and regions are
+  // saved already flipped, so they are restored as they are.
+  const loadSource = async (path, flip) => {
+    let canvas = drawToWorkingCanvas(await loadImage(path));
     canvas.getContext('2d').getImageData(0, 0, 1, 1);
+    if (flip.x) canvas = flipCanvas(canvas, 'x', createCanvas);
+    if (flip.y) canvas = flipCanvas(canvas, 'y', createCanvas);
     return canvas;
   };
   // Masks and regions are stored at source resolution; drawing them at the source size keeps
@@ -1584,12 +1604,17 @@ async function decodeProject(project, loadImage) {
     return canvas;
   };
   const loadWorkspace = async (workspace, shared) => {
+    const flip = normalizeFlip(workspace.flip);
     const canvas =
-      shared && workspace.sourcePath === shared.path
+      shared &&
+      workspace.sourcePath === shared.path &&
+      flip.x === shared.flip.x &&
+      flip.y === shared.flip.y
         ? shared.canvas
-        : await loadSource(workspace.sourcePath);
+        : await loadSource(workspace.sourcePath, flip);
     return {
       path: workspace.sourcePath,
+      flip,
       canvas,
       popOutMask: await loadMask(workspace.popOutMask, canvas),
       keep: await loadMask(workspace.cleanup.keep, canvas),
@@ -1615,7 +1640,13 @@ function applyLoadedProject(app, { project, token, portrait, regions }) {
   const label = project.label || deriveSourceLabel(app, token.path, null);
   const workspace = (loaded, sharedSource) => ({
     ...createWorkspace(),
-    source: sharedSource ?? { canvas: loaded.canvas, path: loaded.path, file: null, label },
+    source: sharedSource ?? {
+      canvas: loaded.canvas,
+      path: loaded.path,
+      file: null,
+      label,
+      flip: loaded.flip,
+    },
     cleanup: { keep: loaded.keep, remove: loaded.remove },
   });
   const tokenWorkspace = workspace(token);
@@ -1711,11 +1742,14 @@ async function updateCutout(app, workspace = app.workspace) {
       context.drawImage(source, 0, 0);
     }
     if (token !== workspace.cutoutToken) return null;
+    // A flip during the removal replaced the source: start over on the mirrored image.
+    if (workspace.source?.canvas !== source) return updateCutout(app, workspace);
     workspace.autoCutout = cutout;
     workspace.cutout = composeCleanCutout(workspace);
     setCreatorStatus(app, '');
   } catch (error) {
     if (token !== workspace.cutoutToken) return null;
+    if (workspace.source?.canvas !== source) return updateCutout(app, workspace);
     console.error(`${MODULE_ID} | Background removal failed`, error);
     workspace.autoCutout = source;
     workspace.cutout = composeCleanCutout(workspace);
@@ -1759,6 +1793,78 @@ function cloneWorkspace(workspace) {
   };
 }
 
+/**
+ * Flip horizontal (`axis` 'x') / vertical ('y') for the workspace being edited. Its source is
+ * replaced by a mirrored copy (dropping per-image caches such as the click-to-select analysis),
+ * and every workspace showing that same source flips with it: its cut-out and touch-ups, and
+ * for the token workspace also the pop-out mask, effect regions, pins and token framing. The
+ * portrait framing flips when the portrait shows the flipped image. Flipping twice restores
+ * everything exactly. Undo steps for the flipped image no longer line up, so they are cleared.
+ * Returns false when there is nothing to flip.
+ */
+export function flipWorkspace(app, axis) {
+  if (axis !== 'x' && axis !== 'y') return false;
+  const previous = app.workspace?.source;
+  if (!previous?.canvas) return false;
+  // One mirrored copy per canvas, so canvases the workspaces share stay shared.
+  const mirrored = new Map();
+  const flip = (canvas) => {
+    if (!canvas) return null;
+    if (!mirrored.has(canvas)) mirrored.set(canvas, flipCanvas(canvas, axis, createCanvas));
+    return mirrored.get(canvas);
+  };
+  const { width, height } = previous.canvas;
+  const source = {
+    canvas: flip(previous.canvas),
+    path: previous.path ?? null,
+    file: previous.file ?? null,
+    label: previous.label,
+    flip: toggleFlip(previous.flip, axis),
+  };
+  if (previous.aiCutout) source.aiCutout = flip(previous.aiCutout);
+
+  const { token, portrait } = app.workspaces;
+  const flipped = [token, portrait].filter((workspace) => workspace?.source === previous);
+  for (const workspace of flipped) {
+    workspace.source = source;
+    workspace.autoCutout = flip(workspace.autoCutout);
+    workspace.cleanup = {
+      keep: flip(workspace.cleanup?.keep),
+      remove: flip(workspace.cleanup?.remove),
+    };
+    workspace.cutout = workspace.autoCutout
+      ? composeCleanCutout(workspace)
+      : flip(workspace.cutout);
+  }
+  if (flipped.includes(token)) {
+    app.popOutMask = flip(app.popOutMask);
+    app._maskVersion += 1;
+    // Mirrored in place: the regions object is shared with the preview.
+    for (const key of Object.keys(app.effectRegions ?? {}))
+      app.effectRegions[key] = flip(app.effectRegions[key]);
+    app._regionVersion += 1;
+    app.animation = {
+      ...app.animation,
+      pins: flipPins(app.animation.pins, axis, { width, height }),
+    };
+    app.view = flipView(app.view, axis);
+  }
+  if (flipped.includes(portrait ?? token)) app.portraitView = flipView(app.portraitView, axis);
+
+  app._maskHistory = { undo: [], redo: [] };
+  app._compose = null;
+  app._previewBend = null;
+  app._popOutImage = null;
+  app._maskHighlight = null;
+  app._regionTint = null;
+  app._removedGhost = null;
+  clearEffectCaches();
+  syncMaskControls(app);
+  syncAnimationControls(app);
+  renderCreatorPreview(app);
+  return true;
+}
+
 /** Runs `draw` as if `target` were being edited, so saving never mixes token and portrait. */
 function withEditTarget(app, target, draw) {
   const previous = app.editTarget;
@@ -1775,6 +1881,7 @@ function setPortraitImageMode(app, mode) {
   else app.workspaces.portrait = null;
   app._maskHistory = { undo: [], redo: [] };
   syncPortraitControls(app);
+  syncFlipControls(app);
   syncMaskControls(app);
   renderCreatorPreview(app);
 }
@@ -1959,8 +2066,21 @@ function renderPortraitCanvas(app) {
   return canvas;
 }
 
+/** Flip needs an image in the workspace being edited and an idle creator. */
+function canFlip(app) {
+  return Boolean(app.workspace?.source?.canvas) && !app.busy;
+}
+
+function syncFlipControls(app) {
+  const disabled = !canFlip(app);
+  getCreatorRoot(app)
+    ?.querySelectorAll?.('[data-creator-action="flip-x"], [data-creator-action="flip-y"]')
+    .forEach((button) => (button.disabled = disabled));
+}
+
 function setEditTarget(app, target) {
   app.editTarget = target === 'portrait' ? 'portrait' : 'token';
+  syncFlipControls(app);
   if (app.editTarget === 'portrait') stopAnimationPlayback(app);
   if (app.editTarget === 'portrait' && !isCleanupTool(app.maskTool)) setMaskTool(app, null);
   getCreatorSection(app)?.setAttribute('data-edit-target', app.editTarget);
@@ -3059,6 +3179,7 @@ function syncAnimationControls(app) {
   const atKeyframe = Boolean(pin && getKeyframeAt(pin, app.animationTime, app.animation.mode));
   const moving = hasActiveMotion(app.animation, app.effectRegions);
   const enabled = available && Boolean(app.cutout) && !app.busy;
+  syncFlipControls(app);
   syncEffectControls(app);
   root.querySelectorAll('[data-animation-control]').forEach((control) => {
     const action = control.dataset.creatorAction;
@@ -4333,19 +4454,22 @@ export async function createToken(app, action) {
  * reference (they are replaced, never drawn into); masks and regions are painted in place, so
  * they are copied.
  */
-function snapshotProjectState(app) {
+export function snapshotProjectState(app) {
   const token = app.workspaces.token;
   const portrait = app.workspaces.portrait?.source ? app.workspaces.portrait : null;
   const cleanup = (workspace) => ({
     keep: copyCanvas(workspace.cleanup?.keep),
     remove: copyCanvas(workspace.cleanup?.remove),
   });
+  // A source without a path is uploaded as it is now (already mirrored), so it has no flip.
+  const flip = (source) => (source?.path ? normalizeFlip(source.flip) : normalizeFlip(null));
   return {
     label: token.source?.label ?? '',
     options: structuredClone(app.creatorOptions),
     token: {
       source: token.source,
       view: { ...app.view },
+      flip: flip(token.source),
       popOutMask: copyCanvas(app.popOutMask),
       cleanup: cleanup(token),
     },
@@ -4353,6 +4477,7 @@ function snapshotProjectState(app) {
       ? {
           source: portrait.source,
           view: { ...app.portraitView },
+          flip: flip(portrait.source),
           popOutMask: null,
           cleanup: cleanup(portrait),
         }
@@ -4377,23 +4502,16 @@ async function saveCreatorProject(state, { folder, tokenSrc }) {
   const uploadSource = async (source, fileName) =>
     source.path || uploadBlob(await canvasToBlob(source.canvas, 'image/png'), folder, fileName);
   const tokenPath = await uploadSource(state.token.source, `${stem}-source.png`);
-  let portrait = null;
-  if (state.portrait) {
-    const portraitPath =
+  let portraitPath = null;
+  if (state.portrait)
+    portraitPath =
       state.portrait.source === state.token.source
         ? tokenPath
         : await uploadSource(state.portrait.source, `${stem}-portrait-source.png`);
-    portrait = { ...state.portrait, sourcePath: portraitPath };
-  }
-  const project = serializeProject({
-    label: state.label,
+  const project = serializeProjectSnapshot(state, {
+    tokenPath,
+    portraitPath,
     output: tokenSrc,
-    options: state.options,
-    token: { ...state.token, sourcePath: tokenPath },
-    portrait,
-    portraitView: state.portraitView,
-    animation: state.animation,
-    regions: state.regions,
     toDataUrl: (canvas) => canvas.toDataURL('image/png'),
   });
   return uploadBlob(
@@ -4401,6 +4519,24 @@ async function saveCreatorProject(state, { folder, tokenSrc }) {
     folder,
     buildProjectFileName(tokenFileName),
   );
+}
+
+/**
+ * The project object for a snapshot whose sources are stored at `tokenPath` / `portraitPath`
+ * (the portrait path only matters while the portrait has its own workspace).
+ */
+export function serializeProjectSnapshot(state, { tokenPath, portraitPath, output, toDataUrl }) {
+  return serializeProject({
+    label: state.label,
+    output,
+    options: state.options,
+    token: { ...state.token, sourcePath: tokenPath },
+    portrait: state.portrait ? { ...state.portrait, sourcePath: portraitPath } : null,
+    portraitView: state.portraitView,
+    animation: state.animation,
+    regions: state.regions,
+    toDataUrl,
+  });
 }
 
 /** Frames rendered between yields to the browser while an animation is prepared. */

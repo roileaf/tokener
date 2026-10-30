@@ -6,6 +6,7 @@
 import { normalizeAnimation } from './animation.js';
 import { isSafeEffectKey, normalizeEffects } from './animation-effects.js';
 import { MODULE_ID } from './constants.js';
+import { normalizeFlip } from './image-flip.js';
 
 export const PROJECT_VERSION = 1;
 export const PROJECT_FLAG_KEY = 'project';
@@ -22,8 +23,9 @@ export function buildProjectFileName(tokenFileName) {
 
 /**
  * The project object for one save. `token` / `portrait` are workspace descriptors
- * `{ sourcePath, view, popOutMask, cleanup: { keep, remove } }` whose masks are canvases (or
- * null); `portrait` is null while the portrait shares the token's image. Only regions an
+ * `{ sourcePath, view, flip, popOutMask, cleanup: { keep, remove } }` whose masks are canvases
+ * (or null) and `flip` is `{ x, y }` (how the source at `sourcePath` is mirrored; the masks are
+ * stored already mirrored); `portrait` is null while the portrait shares the token's image. Only regions an
  * effect still uses are kept.
  */
 export function serializeProject({
@@ -44,6 +46,7 @@ export function serializeProject({
       ? {
           sourcePath: descriptor.sourcePath ?? null,
           view: normalizeView(descriptor.view),
+          flip: normalizeFlip(descriptor.flip),
           popOutMask: encode(descriptor.popOutMask),
           cleanup: {
             keep: encode(descriptor.cleanup?.keep),
@@ -145,6 +148,7 @@ function parseWorkspace(value) {
   return {
     sourcePath: value.sourcePath,
     view: normalizeView(value.view),
+    flip: normalizeFlip(value.flip),
     popOutMask: dataUrlOrNull(value.popOutMask),
     cleanup: { keep: dataUrlOrNull(cleanup.keep), remove: dataUrlOrNull(cleanup.remove) },
   };

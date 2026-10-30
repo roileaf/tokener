@@ -548,3 +548,236 @@ test('a new token image drops effects with their painted regions and region undo
   assert.equal(app._regionVersion, 1);
   assert.equal(app._previewBend, null);
 });
+
+test('serialize → parse keeps each workspace flip, defaulting to no flip', () => {
+  const input = sampleInput();
+  input.token.flip = { x: true, y: false };
+  input.portrait.flip = { x: false, y: true };
+  const project = serializeProject(input);
+  assert.deepEqual(project.token.flip, { x: true, y: false });
+  assert.deepEqual(project.portrait.flip, { x: false, y: true });
+  const parsed = parseProject(JSON.parse(JSON.stringify(project)));
+  assert.deepEqual(parsed.token.flip, { x: true, y: false });
+  assert.deepEqual(parsed.portrait.flip, { x: false, y: true });
+
+  const plain = serializeProject(sampleInput());
+  assert.deepEqual(plain.token.flip, { x: false, y: false });
+  const legacy = JSON.parse(JSON.stringify(plain));
+  delete legacy.token.flip;
+  legacy.portrait.flip = { x: 'yes', y: null };
+  const parsedLegacy = parseProject(legacy);
+  assert.deepEqual(parsedLegacy.token.flip, { x: false, y: false });
+  assert.deepEqual(parsedLegacy.portrait.flip, { x: false, y: false });
+});
+
+/** A 40×20 image whose left and right halves differ, so a mirror is visible. */
+function asymmetricCanvas(createCanvas) {
+  const canvas = createCanvas(40, 20);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ff0000';
+  context.fillRect(0, 0, 40, 20);
+  context.fillStyle = '#0000ff';
+  context.fillRect(0, 0, 8, 6);
+  return canvas;
+}
+
+const readPixels = (canvas) =>
+  Array.from(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data);
+
+const pixelAt = (canvas, x, y) => Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data);
+
+/** Loads a one-workspace project whose token has a pop-out mask, a removed area, pins and a region. */
+async function loadFlipFixture(app, loadCreatorProject, createCanvas, source) {
+  const mask = (x) => {
+    const canvas = createCanvas(40, 20);
+    canvas.getContext('2d').fillRect(x, 0, 6, 20);
+    return canvas;
+  };
+  const masks = { popout: mask(2), remove: mask(30), region1: mask(12) };
+  const project = savedProject({ options: { backgroundMode: 'none', popOut: true } });
+  const loaded = await loadCreatorProject(app, PROJECT_PATH, {
+    fetchJson: async () => JSON.parse(JSON.stringify(project)),
+    loadImage: async (src) => {
+      if (src === 'worlds/w/tokener/dragon-source.png') return source;
+      const name = /base64,(\w+)$/.exec(src)?.[1];
+      if (masks[name]) return masks[name];
+      throw new Error(`unexpected ${src}`);
+    },
+  });
+  assert.equal(loaded, true);
+}
+
+function captureFlipState(app) {
+  const token = app.workspaces.token;
+  return {
+    source: readPixels(token.source.canvas),
+    autoCutout: readPixels(token.autoCutout),
+    cutout: readPixels(token.cutout),
+    remove: readPixels(token.cleanup.remove),
+    popOut: readPixels(app.popOutMask),
+    region: readPixels(app.effectRegions.r1),
+    pins: structuredClone(app.animation.pins),
+    view: { ...app.view },
+    portraitView: { ...app.portraitView },
+  };
+}
+
+test('flipping the token mirrors the art, masks, regions, pins and view; twice restores it', async () => {
+  const { createCanvas } = await import('canvas');
+  const { flipWorkspace, loadCreatorProject, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(app, loadCreatorProject, createCanvas, asymmetricCanvas(createCanvas));
+    const before = captureFlipState(app);
+    app._maskHistory = { undo: [{ layer: 'popout' }], redo: [] };
+    app._previewBend = { key: 'old' };
+
+    assert.equal(flipWorkspace(app, 'x'), true);
+    const token = app.workspaces.token;
+    assert.deepEqual(token.source.flip, { x: true, y: false });
+    // The blue corner moved from the top-left to the top-right, in every layer alike.
+    assert.deepEqual(pixelAt(token.source.canvas, 39, 0), [0, 0, 255, 255]);
+    assert.deepEqual(pixelAt(token.source.canvas, 0, 0), [255, 0, 0, 255]);
+    // The removed strip (x 30–35) is now at x 4–9: transparent in the cut-out.
+    assert.equal(pixelAt(token.cutout, 6, 10)[3], 0);
+    assert.equal(pixelAt(token.cutout, 32, 10)[3], 255);
+    assert.equal(pixelAt(app.popOutMask, 35, 10)[3], 255);
+    assert.equal(pixelAt(app.popOutMask, 3, 10)[3], 0);
+    assert.equal(pixelAt(app.effectRegions.r1, 25, 10)[3], 255);
+    assert.equal(pixelAt(app.effectRegions.r1, 13, 10)[3], 0);
+    assert.equal(app.animation.pins[0].x, 30);
+    assert.equal(app.animation.pins[0].keyframes[1].dx, -4);
+    assert.equal(app.animation.pins[0].keyframes[1].rot, -0.2);
+    assert.deepEqual(app.view, { zoom: 1.5, offsetX: 12, offsetY: 7 });
+    assert.deepEqual(app.portraitView, { zoom: 2, offsetX: -0.1, offsetY: -0.2 });
+    assert.deepEqual(app._maskHistory, { undo: [], redo: [] });
+    assert.equal(app._previewBend, null);
+
+    flipWorkspace(app, 'x');
+    assert.deepEqual(captureFlipState(app), before);
+    assert.deepEqual(app.workspaces.token.source.flip, { x: false, y: false });
+
+    flipWorkspace(app, 'y');
+    flipWorkspace(app, 'y');
+    assert.deepEqual(captureFlipState(app), before);
+  });
+});
+
+test('a portrait sharing the token image flips both; its own image flips only the portrait', async () => {
+  const { createCanvas } = await import('canvas');
+  const { flipWorkspace, loadCreatorProject, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    // Linked ("Same as token"): Portrait mode flips the shared image and so the token too.
+    const linked = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(linked, loadCreatorProject, createCanvas, asymmetricCanvas(createCanvas));
+    linked.editTarget = 'portrait';
+    flipWorkspace(linked, 'x');
+    assert.deepEqual(linked.workspaces.token.source.flip, { x: true, y: false });
+    assert.equal(linked.animation.pins[0].x, 30);
+    assert.deepEqual(linked.view, { zoom: 1.5, offsetX: 12, offsetY: 7 });
+    assert.deepEqual(linked.portraitView, { zoom: 2, offsetX: -0.1, offsetY: -0.2 });
+
+    // A separate portrait that still shares the token's source object: both workspaces flip.
+    const cloned = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(cloned, loadCreatorProject, createCanvas, asymmetricCanvas(createCanvas));
+    const tokenWorkspace = cloned.workspaces.token;
+    cloned.workspaces.portrait = {
+      ...tokenWorkspace,
+      cleanup: { keep: null, remove: null },
+      cutout: tokenWorkspace.autoCutout,
+      cutoutToken: 0,
+    };
+    cloned.editTarget = 'portrait';
+    flipWorkspace(cloned, 'y');
+    assert.equal(cloned.workspaces.portrait.source, cloned.workspaces.token.source);
+    assert.deepEqual(cloned.workspaces.token.source.flip, { x: false, y: true });
+    assert.equal(cloned.workspaces.portrait.autoCutout, cloned.workspaces.token.autoCutout);
+    assert.equal(cloned.animation.pins[0].y, 0);
+
+    // The portrait's own image: only the portrait and its framing flip.
+    const own = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(own, loadCreatorProject, createCanvas, asymmetricCanvas(createCanvas));
+    const portraitCanvas = asymmetricCanvas(createCanvas);
+    own.workspaces.portrait = {
+      source: { canvas: portraitCanvas, path: 'art/p.png', file: null, label: 'p' },
+      autoCutout: portraitCanvas,
+      cutout: portraitCanvas,
+      cleanup: { keep: null, remove: null },
+      cutoutToken: 0,
+    };
+    const tokenBefore = captureFlipState(own);
+    own.editTarget = 'portrait';
+    flipWorkspace(own, 'x');
+    assert.deepEqual(own.workspaces.portrait.source.flip, { x: true, y: false });
+    assert.deepEqual(pixelAt(own.workspaces.portrait.cutout, 39, 0), [0, 0, 255, 255]);
+    assert.deepEqual(
+      { ...captureFlipState(own), portraitView: tokenBefore.portraitView },
+      tokenBefore,
+      'the token workspace, pins, regions and token view are untouched',
+    );
+    assert.deepEqual(own.portraitView, { zoom: 2, offsetX: -0.1, offsetY: -0.2 });
+  });
+});
+
+test('a flipped project reopens with the same cut-out, masks, regions and pins', async () => {
+  const { createCanvas } = await import('canvas');
+  const {
+    flipWorkspace,
+    loadCreatorProject,
+    normalizeTokenCreatorOptions,
+    serializeProjectSnapshot,
+    snapshotProjectState,
+  } = await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const original = asymmetricCanvas(createCanvas);
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    await loadFlipFixture(app, loadCreatorProject, createCanvas, original);
+    flipWorkspace(app, 'x');
+    flipWorkspace(app, 'y');
+    const before = captureFlipState(app);
+
+    const stored = new Map();
+    const project = serializeProjectSnapshot(snapshotProjectState(app), {
+      tokenPath: app.workspaces.token.source.path,
+      output: 'worlds/w/tokener/dragon.webm',
+      toDataUrl: (canvas) => {
+        const url = `data:image/png;base64,m${stored.size}`;
+        stored.set(url, canvas);
+        return url;
+      },
+    });
+    assert.deepEqual(project.token.flip, { x: true, y: true });
+
+    const reopened = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    const loaded = await loadCreatorProject(reopened, PROJECT_PATH, {
+      fetchJson: async () => JSON.parse(JSON.stringify(project)),
+      // The source is loaded by path, unflipped, exactly as it is on disk.
+      loadImage: async (src) => {
+        if (src === 'worlds/w/tokener/dragon-source.png') return original;
+        if (stored.has(src)) return stored.get(src);
+        throw new Error(`unexpected ${src}`);
+      },
+    });
+    assert.equal(loaded, true);
+    assert.deepEqual(reopened.workspaces.token.source.flip, { x: true, y: true });
+    assert.deepEqual(captureFlipState(reopened), before);
+  });
+});
+
+test('a source without a path is saved already flipped, so its project flip is none', async () => {
+  const { createCanvas } = await import('canvas');
+  const { flipWorkspace, normalizeTokenCreatorOptions, snapshotProjectState } =
+    await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    const canvas = asymmetricCanvas(createCanvas);
+    app.workspaces.token.source = { canvas, path: null, file: {}, label: 'pasted' };
+    app.workspaces.token.autoCutout = canvas;
+    app.workspaces.token.cutout = canvas;
+    flipWorkspace(app, 'x');
+    assert.deepEqual(app.workspaces.token.source.flip, { x: true, y: false });
+    assert.deepEqual(snapshotProjectState(app).token.flip, { x: false, y: false });
+  });
+});

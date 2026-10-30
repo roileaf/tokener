@@ -2286,6 +2286,11 @@
   gap: 5px;
 }
 
+/* Flip horizontal / vertical share the row evenly. */
+.pf2e-tokener-creator-app .pf2e-tokener-creator-flip .pf2e-tokener-creator-button {
+  flex: 1 1 0;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-button {
   display: inline-flex;
   flex: 1 1 auto;

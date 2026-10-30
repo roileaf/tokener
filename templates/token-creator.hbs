@@ -216,6 +216,22 @@
             data-tooltip='{{labels.fromPortraitTooltip}}'
           ><i class='fas fa-image-portrait'></i> {{labels.fromPortrait}}</button>
         </div>
+        <div class='pf2e-tokener-creator-row pf2e-tokener-creator-flip'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='flip-x'
+            data-tooltip='{{labels.flipHorizontalTooltip}}'
+            {{#unless canFlip}}disabled{{/unless}}
+          ><i class='fas fa-left-right'></i> {{labels.flipHorizontal}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='flip-y'
+            data-tooltip='{{labels.flipVerticalTooltip}}'
+            {{#unless canFlip}}disabled{{/unless}}
+          ><i class='fas fa-up-down'></i> {{labels.flipVertical}}</button>
+        </div>
         <p class='pf2e-tokener-creator-hint' data-portrait-separate-only>{{labels.portraitSeparateHint}}</p>
         <input type='file' name='upload' accept='image/*' hidden />
       </section>
