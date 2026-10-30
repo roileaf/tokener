@@ -5004,3 +5004,28 @@ test('revert state captures and restores ring.effects', () => {
   });
   assert.equal(bare.token.ring.effects, 1);
 });
+
+test('actor sheet adds a Create token image button beside Tokener when the creator is allowed', () => {
+  const previousGame = globalThis.game;
+  const render = (user) => {
+    const host = createFakeElement();
+    const image = createFakeElement();
+    const root = createFakeElement();
+    root.ownerDocument = { createElement: createFakeElement };
+    root.querySelector = () => image;
+    image.closest = () => host;
+    host.classList = { add: () => {} };
+    globalThis.game = { user, settings: { get: () => true } };
+    renderActorSheetTokenerEntry({ actor: { isOwner: true } }, root);
+    return host.children.map((child) => child.className);
+  };
+  try {
+    const gm = render({ id: 'gm', isGM: true });
+    assert.deepEqual(gm, [
+      'pf2e-tokener-actor-sheet-button',
+      'pf2e-tokener-actor-sheet-button pf2e-tokener-actor-sheet-create',
+    ]);
+  } finally {
+    globalThis.game = previousGame;
+  }
+});

@@ -1,6 +1,7 @@
 import { REVERT_FLAG_PATH } from './actions.js';
 import { canUseActorTokenerEntry } from './permissions.js';
 import { openTokenPicker } from './picker-app.js';
+import { canUseTokenCreator, openTokenCreator } from './token-creator.js';
 import { localize, normalizeHudElement, pruneStaleDependentTokens } from './utils.js';
 
 const ACTOR_SHEET_IMAGE_SELECTOR = [
@@ -18,6 +19,7 @@ const ACTOR_SHEET_IMAGE_HOST_SELECTOR = [
   'figure',
 ].join(',');
 const ACTOR_SHEET_BUTTON_CLASS = 'pf2e-tokener-actor-sheet-button';
+const ACTOR_SHEET_CREATE_CLASS = 'pf2e-tokener-actor-sheet-create';
 const ACTOR_SHEET_IMAGE_HOST_CLASS = 'pf2e-tokener-actor-sheet-image-host';
 const ACTOR_DIRECTORY_ENTRY_SELECTOR = '[data-document-id],[data-entry-id],[data-actor-id]';
 
@@ -110,22 +112,41 @@ function installActorSheetTokenerButton(root, actor) {
 
   host.classList?.add(ACTOR_SHEET_IMAGE_HOST_CLASS);
   host.append?.(button);
+  // Straight to the Token Creator, without loading the art list first (slow on big libraries).
+  if (canUseTokenCreator()) {
+    const create = createActorSheetButton(root, {
+      className: `${ACTOR_SHEET_BUTTON_CLASS} ${ACTOR_SHEET_CREATE_CLASS}`,
+      tooltip: localize('HUD.ActorSheetCreateTooltip', 'Create token image'),
+      icon: 'fa-wand-magic-sparkles',
+      onClick: () => openTokenCreator(createActorTokenDocument(actor)),
+    });
+    if (create) host.append?.(create);
+  }
 }
 
 function createActorSheetTokenerButton(root, actor) {
+  return createActorSheetButton(root, {
+    className: ACTOR_SHEET_BUTTON_CLASS,
+    tooltip: localize('HUD.ActorSheetButtonTooltip', 'Open Tokener'),
+    icon: 'fa-images',
+    onClick: () => openTokenPickerForActor(actor),
+  });
+}
+
+function createActorSheetButton(root, { className, tooltip, icon, onClick }) {
   const document = root?.ownerDocument ?? globalThis.document;
   const button = document?.createElement?.('button');
   if (!button) return null;
 
   button.type = 'button';
-  button.className = ACTOR_SHEET_BUTTON_CLASS;
-  button.dataset.tooltip = localize('HUD.ActorSheetButtonTooltip', 'Open Tokener');
+  button.className = className;
+  button.dataset.tooltip = tooltip;
   button.dataset.tooltipDirection = 'UP';
-  button.innerHTML = '<i class="fas fa-images" aria-hidden="true"></i>';
+  button.innerHTML = `<i class="fas ${icon}" aria-hidden="true"></i>`;
   button.addEventListener?.('click', async (event) => {
     event.preventDefault?.();
     event.stopPropagation?.();
-    await openTokenPickerForActor(actor);
+    await onClick();
   });
   return button;
 }

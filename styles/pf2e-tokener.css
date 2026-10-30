@@ -51,6 +51,11 @@
   border-color: rgba(143, 185, 214, 0.95);
 }
 
+/* Create token image sits just right of the Tokener button. */
+.pf2e-tokener-actor-sheet-button.pf2e-tokener-actor-sheet-create {
+  left: 36px;
+}
+
 .pf2e-tokener-actor-sheet-button i {
   margin: 0;
   line-height: 1;

@@ -227,6 +227,7 @@ export function drawTokenFrame(
     popOutImage = null,
     popOutShadow = false,
     ringScale = 1,
+    insideImage = null,
   },
 ) {
   const { center, outerRadius } = getRingGeometry({ size, ringScale });
@@ -250,7 +251,7 @@ export function drawTokenFrame(
     context.fillStyle = fillColor;
     context.fillRect(0, 0, size, size);
   }
-  context.drawImage(image, layout.x, layout.y, layout.width, layout.height);
+  context.drawImage(insideImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
 
   if (borderWidth > 0) {
@@ -348,6 +349,7 @@ export function drawRingSubject(
     guide = null,
     layers = [],
     ringScale = 1,
+    insideImage = null,
   },
 ) {
   const { center, ringSize, offset } = getRingGeometry({ size, ringScale });
@@ -381,7 +383,7 @@ export function drawRingSubject(
   context.beginPath();
   context.arc(center, center, radius, 0, Math.PI * 2);
   context.clip();
-  context.drawImage(image, layout.x, layout.y, layout.width, layout.height);
+  context.drawImage(insideImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
   drawPopOut(context, image, layout, { center, radius, popOut, popOutImage, popOutShadow });
 }

@@ -262,6 +262,7 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   fillColor: '#1b1b1b',
   popOut: false,
   popOutShadow: true,
+  originalInside: false,
   breakoutRoom: 25,
   ringColors: false,
   ringEffects: Object.freeze({ pulse: false, gradient: false, wave: false, spectral: false }),
@@ -331,6 +332,7 @@ export function normalizeTokenCreatorOptions(value = {}) {
     fillColor: normalizeColor(options.fillColor, defaults.fillColor),
     popOut: Boolean(options.popOut),
     popOutShadow: Boolean(options.popOutShadow),
+    originalInside: Boolean(options.originalInside),
     breakoutRoom: clamp(
       Math.round(numberOr(options.breakoutRoom, defaults.breakoutRoom) / 5) * 5,
       0,
@@ -754,6 +756,11 @@ function prepareCreatorContext(app) {
       popOut: localize('Creator.PopOut', 'Pop out of frame'),
       breakoutRoom: localize('Creator.BreakoutRoom', 'Breakout room'),
       popOutShadow: localize('Creator.PopOutShadow', 'Shadow under popped parts'),
+      originalInside: localize('Creator.OriginalInside', 'Original background inside the frame'),
+      originalInsideTooltip: localize(
+        'Creator.OriginalInsideTooltip',
+        'Inside the frame, show the picture as it was, backdrop included; only the cut-out parts pop out over the frame',
+      ),
       breakoutRoomTooltip: localize(
         'Creator.BreakoutRoomTooltip',
         'Space around the frame for popped-out parts to reach past its edge. The token is scaled up in Foundry so the frame still fits the grid.',
@@ -1321,7 +1328,10 @@ export async function handleCreatorChange(app, event) {
   }
   if (target.name === 'backgroundMode') {
     syncBackgroundControls(app);
+    if (!canUsePopOutTools(app) && ['paint', 'erase', 'select'].includes(app.maskTool))
+      setMaskTool(app, null);
     await updateAllCutouts(app);
+    syncMaskControls(app);
   }
   if (target.name === 'portraitImage') return;
 }
@@ -2304,6 +2314,7 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
   // A bent art canvas is already laid out in token space, so it draws at an identity layout.
   const art = bent ? bent.art : app.cutout;
   const popOutImage = bent ? bent.popOut : getPopOutImage(app);
+  const insideImage = bent ? (bent.background ?? null) : getInsideImage(app);
   const view = bent
     ? { zoom: 1, offsetX: 0, offsetY: 0 }
     : { zoom: app.view.zoom, offsetX: app.view.offsetX * size, offsetY: app.view.offsetY * size };
@@ -2321,6 +2332,7 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
       popOut: isPopOutEnabled(app),
       popOutImage,
       popOutShadow: options.popOutShadow,
+      insideImage,
       layers: layers ?? [],
       guide:
         preview && !layers
@@ -2345,7 +2357,17 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
     popOutImage,
     popOutShadow: options.popOutShadow,
     ringScale,
+    insideImage,
   });
+}
+
+/**
+ * The original picture, backdrop included, to show inside the frame opening when the option is
+ * on and parts pop out (the cut-out still provides the popped parts); null otherwise.
+ */
+function getInsideImage(app) {
+  if (!app.creatorOptions.originalInside || !isPopOutEnabled(app)) return null;
+  return app.insideImage ?? app.source?.canvas ?? null;
 }
 
 /** Pointer mode for the brush cursor; the pin tool never paints. */
@@ -3342,6 +3364,7 @@ function drawPreviewToken(context, app, size) {
     offsetY: app.view.offsetY,
     cutout: app.cutout,
     popOutImage,
+    background: getInsideImage(app),
     regions,
     size,
   };
@@ -3352,7 +3375,7 @@ function drawPreviewToken(context, app, size) {
     context,
     size,
     t: app.animationTime,
-    art: { cutout: app.cutout, popOutImage, regions },
+    art: { cutout: app.cutout, popOutImage, background: key.background, regions },
     view: app.view,
     animation: app.animation,
     createCanvas,
@@ -3539,6 +3562,13 @@ function getActiveRingScale(app) {
   return isPopOutEnabled(app) ? getRingScale(app.creatorOptions.breakoutRoom) : 1;
 }
 
+/** The pop-out brushes work on the token's cut-out; Keep background leaves nothing to pop out. */
+export function canUsePopOutTools(app) {
+  return Boolean(
+    app.cutout && app.creatorOptions.backgroundMode !== 'none' && app.editTarget !== 'portrait',
+  );
+}
+
 function canMask(app) {
   return Boolean(app.cutout && app.editTarget !== 'portrait' && isPopOutEnabled(app));
 }
@@ -3568,8 +3598,7 @@ function selectMaskTool(app, tool) {
     if (app.cutout) setMaskTool(app, tool);
     return;
   }
-  if (!app.cutout || app.creatorOptions.backgroundMode === 'none') return;
-  if (app.editTarget === 'portrait') return;
+  if (!canUsePopOutTools(app)) return;
   if (!app.creatorOptions.popOut) {
     app.creatorOptions = normalizeTokenCreatorOptions({ ...app.creatorOptions, popOut: true });
     saveCreatorDefaults(app.creatorOptions);
@@ -3872,6 +3901,8 @@ function syncMaskControls(app) {
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
       button.classList.toggle('is-active', active);
     }
+    // Pop-out brushes need a cut-out with its background removed, on the token.
+    if (button.hasAttribute('data-pop-out-tools')) button.disabled = !canUsePopOutTools(app);
     if (action === 'mask-undo') button.disabled = !app._maskHistory.undo.length;
     if (action === 'mask-redo') button.disabled = !app._maskHistory.redo.length;
   });
@@ -4890,6 +4921,7 @@ function snapshotTokenAnimation(app) {
       ringAssets: app.ringAssets,
       tokenDocument: app.tokenDocument,
       popOutMask: null,
+      insideImage: getInsideImage(app) ? copyCanvas(getInsideImage(app)) : null,
     },
     popOutImage: isPopOutEnabled(app) ? copyCanvas(getPopOutImage(app)) : null,
     regions: Object.fromEntries(
@@ -4917,7 +4949,7 @@ async function encodeTokenAnimation(app, size) {
       context,
       size,
       t,
-      art: { cutout: snapshot.cutout, popOutImage, regions },
+      art: { cutout: snapshot.cutout, popOutImage, background: snapshot.insideImage, regions },
       view: snapshot.view,
       animation,
       createCanvas,
