@@ -4,7 +4,13 @@
 
 ### Added
 
+- **Original background inside the frame** (with pop-out): the picture as it was, backdrop included, fills the frame opening while only the cut-out parts (heads, horns, weapons) pop out over the frame. Works with Auto and AI removal and with animation.
+- **Create token image** button on the actor sheet portrait, beside Tokener: opens the Token Creator directly without loading the token art list first.
 - **AI background removal model** setting (per browser): **Fast** (MODNet, ~7 MB, the default), **Better** (ISNet, ~44 MB) or **Best** (RMBG-1.4, ~44 MB), or **Custom** with any Hugging Face model id that has a transformers.js background-removal build. The larger models cut illustrated art and soft gradient backgrounds more cleanly and take a few seconds per image. ISNet is AGPL-3.0 and RMBG-1.4 is non-commercial, so check the license before commercial use.
+
+### Fixed
+
+- With **Keep background** on, the pop-out brushes (**B** / **E**) and click-to-select are greyed out instead of looking usable and doing nothing.
 
 ## 2.3.2 - 2026-10-30
 

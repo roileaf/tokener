@@ -416,6 +416,15 @@
           <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
           <span>{{labels.popOutShadow}}</span>
         </label>
+        <label
+          class='pf2e-tokener-creator-check'
+          data-pop-out-tools
+          data-tooltip='{{labels.originalInsideTooltip}}'
+        >
+          <input type='checkbox' name='originalInside' {{#if options.originalInside}}checked{{/if}} />
+          <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+          <span>{{labels.originalInside}}</span>
+        </label>
         <p class='pf2e-tokener-creator-hint' data-pop-out-tools>{{labels.maskHint}}</p>
       </section>
 

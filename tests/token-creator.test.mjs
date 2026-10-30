@@ -2221,3 +2221,70 @@ test('an animated original-background portrait bends the source under the cut-ou
     globalThis.document = previous;
   }
 });
+
+test('pop-out brushes only work on a token cut-out with its background removed', async () => {
+  const { canUsePopOutTools } = await import('../scripts/token-creator.js');
+  const app = (backgroundMode, editTarget = 'token', cutout = {}) => ({
+    cutout,
+    editTarget,
+    creatorOptions: { backgroundMode },
+  });
+  assert.equal(canUsePopOutTools(app('auto')), true);
+  assert.equal(canUsePopOutTools(app('ai')), true);
+  assert.equal(canUsePopOutTools(app('none')), false, 'Keep background leaves nothing to pop out');
+  assert.equal(canUsePopOutTools(app('auto', 'portrait')), false);
+  assert.equal(canUsePopOutTools(app('auto', 'token', null)), false);
+});
+
+test('the original picture can fill the frame opening while the cut-out pops out over it', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawRingSubject, drawTokenFrame } = await import('../scripts/token-composer.js');
+  const size = 100;
+  // The original: a green backdrop with a red figure. The cut-out: the figure alone, reaching up
+  // past the opening.
+  const original = createCanvas(size, size);
+  const originalContext = original.getContext('2d');
+  originalContext.fillStyle = '#00ff00';
+  originalContext.fillRect(0, 0, size, size);
+  originalContext.fillStyle = '#ff0000';
+  originalContext.fillRect(45, 0, 10, 100);
+  const cutout = createCanvas(size, size);
+  const cutoutContext = cutout.getContext('2d');
+  cutoutContext.fillStyle = '#ff0000';
+  cutoutContext.fillRect(45, 0, 10, 100);
+  const pixel = (canvas, x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+
+  for (const draw of [
+    (context) =>
+      drawRingSubject(context, cutout, {
+        size,
+        clipRadius: 0.6,
+        popOut: true,
+        insideImage: original,
+      }),
+    (context) =>
+      drawTokenFrame(context, cutout, {
+        size,
+        borderWidth: 4,
+        popOut: true,
+        insideImage: original,
+      }),
+  ]) {
+    const canvas = createCanvas(size, size);
+    draw(canvas.getContext('2d'));
+    // The backdrop shows inside the opening...
+    assert.deepEqual(pixel(canvas, 30, 50), [0, 255, 0, 255]);
+    assert.deepEqual(pixel(canvas, 50, 50), [255, 0, 0, 255]);
+    // ...and only the figure pops out above it, never the backdrop.
+    assert.deepEqual(pixel(canvas, 50, 3), [255, 0, 0, 255]);
+    assert.equal(pixel(canvas, 30, 3)[3], 0);
+  }
+});
+
+test('keeping the original inside the frame is a saved creator option', async () => {
+  const { normalizeTokenCreatorOptions, DEFAULT_TOKEN_CREATOR_OPTIONS } =
+    await import('../scripts/token-creator.js');
+  assert.equal(DEFAULT_TOKEN_CREATOR_OPTIONS.originalInside, false);
+  assert.equal(normalizeTokenCreatorOptions({ originalInside: 1 }).originalInside, true);
+  assert.equal(normalizeTokenCreatorOptions({}).originalInside, false);
+});
