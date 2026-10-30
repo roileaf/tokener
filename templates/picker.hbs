@@ -66,6 +66,15 @@
             data-tooltip='{{favorites.tooltip}}'
             data-tooltip-direction='UP'
           >{{favorites.buttonLabel}}</button>
+          <button
+            class='pf2e-tokener-rescan-button'
+            type='button'
+            data-picker-action='rescan-index'
+            aria-label='{{rescan.label}}'
+            data-tooltip='{{rescan.tooltip}}'
+            data-tooltip-direction='UP'
+            {{#if rescan.disabled}}disabled{{/if}}
+          ><i class='fas fa-rotate{{#if loading}} fa-spin{{/if}}'></i></button>
       </div>
 
       <div class='pf2e-tokener-grid-size'>
@@ -304,7 +313,7 @@
           >{{paging.showMoreLabel}}</button>
         {{/if}}
       {{else}}
-        <div class='pf2e-tokener-state'>{{emptyMessage}}</div>
+        <div class='pf2e-tokener-state{{#if loading}} is-loading{{/if}}'>{{#if loading}}<i class='fas fa-spinner fa-spin'></i> {{/if}}{{emptyMessage}}</div>
       {{/if}}
     </div>
   </div>

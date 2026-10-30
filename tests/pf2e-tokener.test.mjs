@@ -4577,7 +4577,9 @@ test('favorite controls render on token cards and in the sidebar filter row', ()
   assert.match(template, /data-favorites-filter=['"]toggle['"]/);
   assert.match(template, /data-favorite-candidate-id=['"]{{viewId}}['"]/);
   assert.match(template, /aria-pressed=['"]{{favoriteAriaPressed}}['"]/);
-  assert.match(filterRowRule, /grid-template-columns:\s*1fr;/);
+  // Favorites stretch; the Rescan icon button sits beside them.
+  assert.match(filterRowRule, /grid-template-columns:\s*1fr auto;/);
+  assert.match(template, /data-picker-action=['"]rescan-index['"]/);
   assert.match(cardFavoriteRule, /position:\s*absolute;/);
   assert.match(cardFavoriteRule, /top:\s*4px;/);
   assert.match(activeFavoriteRule, /color:\s*#d6b56d;/);

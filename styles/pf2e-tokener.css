@@ -637,8 +637,20 @@
 
 .pf2e-tokener-app .pf2e-tokener-filter-row {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr auto;
   gap: 5px;
+}
+
+.pf2e-tokener-app .pf2e-tokener-rescan-button {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  line-height: 1;
+}
+
+.pf2e-tokener-app .pf2e-tokener-rescan-button:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 #token-hud .pf2e-tokener-grid-size,

@@ -2,11 +2,11 @@ import { MODULE_ID } from './constants.js';
 import { renderActorDirectoryTokenerEntry, renderActorSheetTokenerEntry } from './actor-entry.js';
 import { registerCustomFolderSettings } from './custom-folders.js';
 import { registerFavoriteSettings } from './favorites.js';
-import { installApi } from './foundry-index.js';
+import { installApi, warmIndexInBackground } from './foundry-index.js';
 import { registerPickerGridSizeSetting } from './grid-size.js';
 import { renderTokenHud, updateOpenPanelsCanvasZoom } from './hud.js';
 import { registerImageTagSettings } from './image-tags.js';
-import { registerPermissionSettings } from './permissions.js';
+import { canUseTokener, registerPermissionSettings } from './permissions.js';
 import { registerRingVideoPlayback } from './ring-video.js';
 import { registerTokenCreatorSettings, syncCreatedTokenSubjectPath } from './token-creator.js';
 
@@ -84,7 +84,14 @@ export {
   registerImageTagSettings,
   setImageTagOverrides,
 } from './image-tags.js';
-export { ensureIndex, rebuildIndex, state } from './foundry-index.js';
+export {
+  ensureIndex,
+  isIndexReady,
+  rebuildIndex,
+  state,
+  warmIndexInBackground,
+} from './foundry-index.js';
+export { getIndexSignature, readIndexCache, writeIndexCache } from './index-cache.js';
 export { renderTokenHud, updateOpenPanelsCanvasZoom } from './hud.js';
 export {
   buildCandidateSearchQuery,
@@ -95,6 +102,7 @@ export {
   resolveHandlebarsApplicationMixin,
 } from './picker-app.js';
 export {
+  canUseTokener,
   canUseTokenHudDocument,
   canUseActorTokenerEntry,
   canUserUpdateDocument,
@@ -187,6 +195,8 @@ function registerFoundryIntegration() {
     }
     hooks.on('renderActorDirectory', renderActorDirectoryTokenerEntry);
     hooks.on('canvasPan', updateOpenPanelsCanvasZoom);
+    // Build (or load from cache) the art index while the world is idle, never blocking startup.
+    if (canUseTokener()) warmIndexInBackground();
   });
 }
 

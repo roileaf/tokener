@@ -1,4 +1,6 @@
 import {
+  CUSTOM_FOLDERS_SETTING_KEY,
+  IMAGE_TAGS_SETTING_KEY,
   MODULE_ID,
   MIXED_ART_FOLDER_ROOTS,
   PORTRAIT_FOLDER_ROOTS,
@@ -16,6 +18,7 @@ import {
 } from './candidates.js';
 import { getCustomFolderSources } from './custom-folders.js';
 import { applyImageTagOverrides } from './image-tags.js';
+import { getIndexSignature, readIndexCache, writeIndexCache } from './index-cache.js';
 import { getCurrentSystemProfile } from './system-profile.js';
 import { isObject, normalizePath } from './utils.js';
 
@@ -32,27 +35,108 @@ export const state = {
   index: [],
   indexing: null,
   errors: [],
+  rescanning: false,
+  builtIndex: null,
+  generation: 0,
 };
 
-export async function rebuildIndex() {
-  state.indexing = buildFoundryIndex()
-    .then((index) => {
-      state.index = applyImageTagOverrides(dedupeCandidates(index));
-      return state.index;
-    })
+const WARM_UP_DELAY_MS = 3000;
+
+/**
+ * Loads the art index: a matching IndexedDB cache is used as-is, otherwise every source is
+ * browsed and the cache overwritten. `force` (the picker's Rescan) always browses.
+ */
+export async function rebuildIndex({ force = false } = {}) {
+  const generation = ++state.generation;
+  if (force) state.rescanning = true;
+  const indexing = loadIndex({ force })
     .catch((error) => {
       state.errors.push(error);
       console.error(`${MODULE_ID} | Failed to build token index`, error);
-      state.index = [];
-      return state.index;
+      return [];
+    })
+    .then((index) => {
+      // A newer rebuild started meanwhile: let it own the result.
+      if (generation !== state.generation) return state.indexing ?? state.index;
+      state.index = index;
+      state.builtIndex = index;
+      state.rescanning = false;
+      state.indexing = null;
+      return index;
     });
-  return state.indexing;
+  state.indexing = indexing;
+  return indexing;
 }
 
 export async function ensureIndex() {
-  if (state.indexing) await state.indexing;
-  if (!state.index.length && !state.indexing) await rebuildIndex();
+  while (state.indexing) await state.indexing;
+  if (!hasLoadedIndex()) await rebuildIndex();
   return state.index;
+}
+
+/** True when an index is available to show and no forced rescan is replacing it. */
+export function isIndexReady() {
+  return !state.rescanning && hasLoadedIndex() && !(state.indexing && !state.index.length);
+}
+
+/** Builds (or loads) the index once the world is idle so the first picker open is instant. */
+export function warmIndexInBackground({ schedule = scheduleIdle } = {}) {
+  schedule(() => {
+    if (state.indexing || hasLoadedIndex()) return;
+    void ensureIndex();
+  });
+}
+
+function scheduleIdle(callback) {
+  if (typeof globalThis.requestIdleCallback === 'function')
+    globalThis.requestIdleCallback(callback, { timeout: WARM_UP_DELAY_MS });
+  else globalThis.setTimeout(callback, WARM_UP_DELAY_MS);
+}
+
+function hasLoadedIndex() {
+  return state.index.length > 0 || (state.builtIndex !== null && state.index === state.builtIndex);
+}
+
+async function loadIndex({ force }) {
+  const modules = getIndexedModules();
+  const signature = getCurrentIndexSignature(modules);
+  if (!force) {
+    const cached = await readIndexCache(signature);
+    if (cached) {
+      console.info(`${MODULE_ID} | art index loaded from cache (${cached.length} candidates)`);
+      return cached;
+    }
+  }
+
+  const started = now();
+  const index = applyImageTagOverrides(dedupeCandidates(await buildFoundryIndex(modules)));
+  console.info(
+    `${MODULE_ID} | art index built in ${Math.round(now() - started)} ms (${index.length} candidates, ${modules.length} modules)`,
+  );
+  await writeIndexCache(signature, index);
+  return index;
+}
+
+function getCurrentIndexSignature(modules) {
+  return getIndexSignature({
+    systemId: getCurrentSystemProfile().id ?? globalThis.game?.system?.id,
+    modules,
+    customFolders: readSetting(CUSTOM_FOLDERS_SETTING_KEY),
+    imageTags: readSetting(IMAGE_TAGS_SETTING_KEY),
+    version: globalThis.game?.modules?.get?.(MODULE_ID)?.version,
+  });
+}
+
+function readSetting(key) {
+  try {
+    return globalThis.game?.settings?.get?.(MODULE_ID, key);
+  } catch {
+    return undefined;
+  }
+}
+
+function now() {
+  return globalThis.performance?.now?.() ?? Date.now();
 }
 
 export function installApi() {
@@ -70,8 +154,11 @@ export function installApi() {
   };
 }
 
-async function buildFoundryIndex() {
-  const modules = getFoundryModules().filter((module) => module && module.id !== MODULE_ID);
+function getIndexedModules() {
+  return getFoundryModules().filter((module) => module && module.id !== MODULE_ID);
+}
+
+async function buildFoundryIndex(modules = getIndexedModules()) {
   const profile = getCurrentSystemProfile();
   const candidates = [];
 
