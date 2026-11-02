@@ -25,3 +25,4 @@ export const AI_TOOLS_SETTING_KEY = 'enableAiTools';
 export const AI_MODEL_SETTING_KEY = 'aiBackgroundModel';
 export const AI_CUSTOM_MODEL_SETTING_KEY = 'aiBackgroundCustomModel';
 export const AI_TOP_DOWN_SETTING_KEY = 'aiTopDownTokens';
+export const TOP_DOWN_FACE_MOVEMENT_SETTING_KEY = 'topDownFaceMovement';

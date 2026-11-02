@@ -6,6 +6,7 @@ import {
   buildArtToggleUpdate,
   buildArtViewsUpdate,
   buildLookUpdate,
+  getMovementRotation,
   getShownLook,
   listLooks,
   isShowingTopDown,
@@ -401,4 +402,52 @@ test('stances change the pose only, without naming parts or items', () => {
     /they are in the middle of an attack/,
   );
   assert.equal(buildTopDownPrompt({ name: 'Ezren', stance: 'dancing' }), asis);
+});
+
+test('tokens showing a top-down look turn towards where they move', () => {
+  const views = (facing) => ({
+    regular: look('ring.webp'),
+    topDown: { ...look('top.webp'), facing },
+  });
+  const at = (src, facing, extra = {}) => ({
+    ...token({ src }, views(facing)),
+    x: 100,
+    y: 100,
+    ...extra,
+  });
+  const front = at('top.webp', 'front');
+  // A front look faces the bottom of its image: moving down needs no turn, right turns it 270.
+  assert.equal(getMovementRotation(front, { y: 200 }), 0);
+  assert.equal(getMovementRotation(front, { x: 200 }), 270);
+  assert.equal(getMovementRotation(front, { y: 0 }), 180);
+  assert.equal(getMovementRotation(front, { x: 0 }), 90);
+  // A back look faces the top: moving up needs no turn.
+  assert.equal(getMovementRotation(at('top.webp', 'back'), { y: 0 }), 0);
+  assert.equal(getMovementRotation(at('top.webp', 'back'), { x: 200 }), 90);
+  assert.equal(getMovementRotation(front, { x: 200, y: 200 }), 315);
+  // Left alone: no move, regular look, unknown facing, locked rotation.
+  assert.equal(getMovementRotation(front, { elevation: 5 }), null);
+  assert.equal(getMovementRotation(at('ring.webp', 'front'), { x: 200 }), null);
+  assert.equal(getMovementRotation(at('top.webp', undefined), { x: 200 }), null);
+  assert.equal(
+    getMovementRotation(at('top.webp', 'front', { lockRotation: true }), { x: 200 }),
+    null,
+  );
+});
+
+test('switching looks keeps the rotation and facing of each look', () => {
+  const saved = {
+    ...token(
+      { src: 'top.webp' },
+      {
+        regular: { ...look('ring.webp'), rotation: 0 },
+        topDown: { ...look('top.webp'), facing: 'front' },
+      },
+    ),
+    rotation: 270,
+  };
+  const update = buildLookUpdate(saved, 'regular');
+  assert.equal(update.rotation, 0);
+  assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.rotation, 270);
+  assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.facing, 'front');
 });

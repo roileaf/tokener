@@ -457,6 +457,7 @@ export function buildCreatedTokenCandidate({
   animated = false,
   projectSrc,
   look = 'regular',
+  facing,
 }) {
   const candidate = {
     id: `${CREATED_TOKEN_SOURCE_ID}:${tokenSrc}`,
@@ -471,6 +472,7 @@ export function buildCreatedTokenCandidate({
   // AI top-down art (a look id such as 'topDown' or a stance): applying it keeps the regular art
   // for the Token HUD's look picker.
   if (look !== 'regular') candidate.look = look;
+  if (facing) candidate.facing = facing;
   if (subjectSrc) {
     // An animated token is a video: Foundry's ring then uses the token texture itself as the
     // subject, so no separate subject image is set.

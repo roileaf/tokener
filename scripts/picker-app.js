@@ -1814,6 +1814,13 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
 
   try {
     const look = candidate.look ?? 'regular';
+    // Where each top-down look faces, so it can turn towards its movement.
+    const facings = Object.fromEntries(
+      [
+        [look, candidate.facing],
+        ...Object.entries(candidate.otherLooks ?? {}).map(([id, other]) => [id, other.facing]),
+      ].filter(([, facing]) => facing),
+    );
     // A created token saved with its other looks (regular, top-down, stances) gets them all.
     const otherLooks = (document) =>
       candidate.otherLooks
@@ -1835,6 +1842,7 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
         ...buildArtViewsUpdate(tokenDocument, tokenUpdate, {
           look,
           others: otherLooks(tokenDocument),
+          facings,
         }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(tokenDocument, revertSnapshot, {
           replaceSnapshot: previewSnapshot,
@@ -1851,6 +1859,7 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
           look,
           prefix: 'prototypeToken.',
           others: otherLooks(actor.prototypeToken),
+          facings,
         }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(actor, revertSnapshot),
       });

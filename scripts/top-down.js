@@ -1,4 +1,9 @@
-import { AI_TOP_DOWN_SETTING_KEY, MODULE_ID } from './constants.js';
+import {
+  AI_TOP_DOWN_SETTING_KEY,
+  MODULE_ID,
+  TOP_DOWN_FACE_MOVEMENT_SETTING_KEY,
+} from './constants.js';
+import { getMovementRotation } from './art-views.js';
 import { buildTopDownPrompt, getCreatureProfile, getDefaultFacing } from './top-down-prompt.js';
 import { loadTransformers } from './ai-tools.js';
 import { localize } from './utils.js';
@@ -68,6 +73,35 @@ export function registerTopDownSetting(settings = globalThis.game?.settings) {
     type: Boolean,
     default: false,
   });
+  settings?.register?.(MODULE_ID, TOP_DOWN_FACE_MOVEMENT_SETTING_KEY, {
+    name: localize('Settings.TopDownFaceMovement.Name', 'Top-down tokens face where they move'),
+    hint: localize(
+      'Settings.TopDownFaceMovement.Hint',
+      'Tokens showing a top-down look turn to face the direction they move in. Regular looks and tokens with locked rotation are left alone.',
+    ),
+    scope: 'world',
+    config: true,
+    type: Boolean,
+    default: true,
+  });
+}
+
+/** Turns tokens showing a top-down look towards where they move (world setting, on by default). */
+export function registerTopDownMovement(hooks = globalThis.Hooks) {
+  hooks?.on?.('preUpdateToken', (document, changes, _options, userId) => {
+    if (userId !== globalThis.game?.user?.id || changes.rotation !== undefined) return;
+    if (!readSetting(TOP_DOWN_FACE_MOVEMENT_SETTING_KEY, true)) return;
+    const rotation = getMovementRotation(document, changes);
+    if (rotation !== null && rotation !== document.rotation) changes.rotation = rotation;
+  });
+}
+
+function readSetting(key, fallback) {
+  try {
+    return globalThis.game?.settings?.get?.(MODULE_ID, key) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function isTopDownEnabled(settings = globalThis.game?.settings) {

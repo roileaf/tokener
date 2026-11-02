@@ -14,7 +14,12 @@ const ART_FIELDS = Object.freeze({
   ring: 'ring.enabled',
   subject: 'ring.subject.texture',
   subjectScale: 'ring.subject.scale',
+  // Each look keeps its own turn: a top-down look turns to face its movement, the regular one
+  // stays as it was set.
+  rotation: 'rotation',
 });
+/** Where each made look faces in its image: front looks face the bottom, back looks the top. */
+const FACING_HEADINGS = Object.freeze({ front: 90, back: 270 });
 
 /** The look a token (or prototype token) shows now, with `update`'s pending changes on top. */
 export function readTokenArt(documentLike, update = {}) {
@@ -69,7 +74,7 @@ export function isShowingTopDown(documentLike) {
 export function buildArtViewsUpdate(
   documentLike,
   update,
-  { look = 'regular', prefix = '', others = null } = {},
+  { look = 'regular', prefix = '', others = null, facings = {} } = {},
 ) {
   const pending = {};
   for (const [key, value] of Object.entries(update ?? {}))
@@ -80,7 +85,7 @@ export function buildArtViewsUpdate(
     const views = { [look]: after };
     for (const [id, otherUpdate] of Object.entries(others))
       views[id] = readTokenArt(documentLike, otherUpdate);
-    return { [path]: storedViews(views) };
+    return { [path]: storedViews(withFacings(views, facings)) };
   }
   const existing = readArtViews(documentLike);
   if (look !== 'regular') {
@@ -89,7 +94,7 @@ export function buildArtViewsUpdate(
         ? existing.regular
         : readTokenArt(documentLike);
     if (!regular.src || regular.src === after.src) return {};
-    return { [path]: storedViews({ ...existing, regular, [look]: after }) };
+    return { [path]: storedViews(withFacings({ ...existing, regular, [look]: after }, facings)) };
   }
   if (!existing) return {};
   return { [path]: storedViews({ ...existing, regular: after }) };
@@ -107,8 +112,37 @@ export function buildLookUpdate(documentLike, id) {
   const update = {};
   for (const [key, path] of Object.entries(ART_FIELDS))
     if (Object.hasOwn(target, key)) update[path] = target[key];
-  update[ART_VIEWS_FLAG_PATH] = storedViews({ ...views, [shown]: readTokenArt(documentLike) });
+  update[ART_VIEWS_FLAG_PATH] = storedViews({
+    ...views,
+    [shown]: { ...views[shown], ...readTokenArt(documentLike) },
+  });
   return update;
+}
+
+/**
+ * The rotation that turns a token showing a top-down look towards where `changes` moves it, or
+ * null (no move, a regular look, a look with no known facing, or a token whose rotation is
+ * locked). Foundry rotates clockwise from the image as drawn; a front look faces the bottom of
+ * its image, a back look the top.
+ */
+export function getMovementRotation(documentLike, changes) {
+  const views = readArtViews(documentLike);
+  const shown = getShownLook(documentLike, views);
+  const heading = FACING_HEADINGS[views?.[shown]?.facing];
+  if (!heading || shown === 'regular' || documentLike?.lockRotation) return null;
+  const dx = Number(changes?.x ?? documentLike.x) - Number(documentLike.x);
+  const dy = Number(changes?.y ?? documentLike.y) - Number(documentLike.y);
+  if (!dx && !dy) return null;
+  const rotation = (Math.atan2(dy, dx) * 180) / Math.PI - heading;
+  return Math.round(((rotation % 360) + 360) % 360);
+}
+
+/** `views` with each look's facing (`facings`: look id -> 'front' | 'back') recorded on it. */
+function withFacings(views, facings) {
+  const out = { ...views };
+  for (const [id, facing] of Object.entries(facings ?? {}))
+    if (out[id] && FACING_HEADINGS[facing]) out[id] = { ...out[id], facing };
+  return out;
 }
 
 /** Between the regular look and the top-down one (or the first other look there is). */

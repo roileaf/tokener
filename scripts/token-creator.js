@@ -5076,6 +5076,7 @@ async function runTopDown(app) {
     app._topDownStances ??= {};
     app._topDownStances[stance] = {
       label: regular.label,
+      facing: getTopDownFacing(app),
       images,
       applied: -1,
       workspace: createTopDownWorkspace(),
@@ -5569,6 +5570,7 @@ export async function createToken(app, action) {
         portraitSrc,
         projectSrc,
         look: look.look,
+        facing: look.facing,
       });
     }
     const stance = getTopDownStance(app);
