@@ -1,5 +1,16 @@
 #token-hud .pf2e-tokener-button {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Narrow glyphs (the look toggle's person) sit centred like the wider ones. */
+#token-hud .pf2e-tokener-button > i {
+  width: 1.25em;
+  margin: 0;
+  line-height: 1;
+  text-align: center;
 }
 
 #token-hud .pf2e-tokener-button.is-overridden {
