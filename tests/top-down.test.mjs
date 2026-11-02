@@ -13,6 +13,7 @@ import {
   listLooks,
   isShowingTopDown,
   readArtViews,
+  readTokenArt,
 } from '../scripts/art-views.js';
 import {
   buildTopDownPrompt,
@@ -458,6 +459,29 @@ test('switching looks keeps the rotation and facing of each look', () => {
   assert.equal(update.rotation, 0);
   assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.rotation, 270);
   assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.facing, 'front');
+});
+
+test('an animated look never sets a video as the ring subject', () => {
+  const saved = token(
+    { src: 'top.webp' },
+    {
+      regular: { ...look('dragon.webm'), ring: true, subject: 'dragon.webm' },
+      topDown: look('top.webp'),
+    },
+  );
+  assert.equal(buildLookUpdate(saved, 'regular')['ring.subject.texture'], '');
+  // Foundry fills the prepared subject from the token video; the look keeps the stored one.
+  const prepared = {
+    ...saved,
+    texture: { src: 'dragon.webm' },
+    ring: { enabled: true, subject: { texture: 'dragon.webm' } },
+    _source: {
+      ...saved,
+      texture: { src: 'dragon.webm' },
+      ring: { enabled: true, subject: { texture: '' } },
+    },
+  };
+  assert.equal(readTokenArt(prepared).subject, '');
 });
 
 test('high detail is on by default for Large and bigger creatures', () => {

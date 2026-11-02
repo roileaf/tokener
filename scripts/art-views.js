@@ -25,14 +25,20 @@ const ART_FIELDS = Object.freeze({
   // stays as it was set.
   rotation: 'rotation',
 });
+const VIDEO_PATTERN = /\.(webm|mp4|m4v|ogv)(\?.*)?$/i;
 /** Where each made look faces in its image: front looks face the bottom, back looks the top. */
 const FACING_HEADINGS = Object.freeze({ front: 90, back: 270 });
 
-/** The look a token (or prototype token) shows now, with `update`'s pending changes on top. */
+/**
+ * The look a token (or prototype token) shows now, with `update`'s pending changes on top. Read
+ * from the stored data: Foundry fills an empty ring subject with the token image when it prepares
+ * the token, and an animated token's image is a video, which the subject field refuses.
+ */
 export function readTokenArt(documentLike, update = {}) {
   const art = {};
+  const stored = documentLike?._source ?? documentLike;
   for (const [key, path] of Object.entries(ART_FIELDS)) {
-    const value = Object.hasOwn(update, path) ? update[path] : readPath(documentLike, path);
+    const value = Object.hasOwn(update, path) ? update[path] : readPath(stored, path);
     if (value !== undefined) art[key] = value ?? null;
   }
   return art;
@@ -119,6 +125,9 @@ export function buildLookUpdate(documentLike, id) {
   const update = {};
   for (const [key, path] of Object.entries(ART_FIELDS))
     if (Object.hasOwn(target, key)) update[path] = target[key];
+  // Looks saved before the fix above may hold the token video as their subject; an empty subject
+  // is what animated tokens use (Foundry then rings the token video itself).
+  if (VIDEO_PATTERN.test(update['ring.subject.texture'] ?? '')) update['ring.subject.texture'] = '';
   // The regular look is never turned: top-down looks turn to face their movement, it does not.
   if (id === 'regular') update.rotation = 0;
   update[ART_VIEWS_FLAG_PATH] = storedViews({
