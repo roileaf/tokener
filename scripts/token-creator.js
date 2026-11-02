@@ -951,7 +951,7 @@ function prepareCreatorContext(app) {
       topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
       topDownHint: localize(
         'Creator.TopDownHint',
-        'Made from the image on the Token tab, as seen from directly above, with no frame or ring. Saving makes both tokens; the Token HUD switches between them.',
+        'Made from the image on the Portrait tab, as seen from directly above, with no frame or ring. Saving makes both tokens; the Token HUD switches between them.',
       ),
       topDownLooks: localize('Creator.TopDownLooks', 'Looks like'),
       topDownLooksPlaceholder: localize(
@@ -1510,7 +1510,6 @@ async function handleCreatorClick(app, event) {
       await applyComposeCandidate(app, Number(button.dataset.composeIndex));
       return;
     case 'token-from-portrait':
-      clearTopDown(app);
       await useEditedPortraitAsToken(app);
       return;
     case 'top-down':
@@ -1645,9 +1644,9 @@ function openProjectFilePicker(app) {
 async function loadCreatorSource(app, { path, file }) {
   // An image picked while a project is still opening wins over that project.
   app._projectLoadToken = (app._projectLoadToken ?? 0) + 1;
-  // The Top-down tab's image is made from the token image, never loaded.
-  if (app.editTarget === 'topdown') setEditTarget(app, 'token');
-  if (app.workspace === app.workspaces.token) clearTopDown(app);
+  // The Top-down tab's image is made from the portrait image, never loaded.
+  if (app.editTarget === 'topdown') setEditTarget(app, 'portrait');
+  if (app.workspace === getPortraitWorkspace(app)) clearTopDown(app);
   setCreatorStatus(app, localize('Creator.Loading', 'Loading image...'));
   try {
     const image = await loadImageElement(file ? URL.createObjectURL(file) : path, Boolean(file));
@@ -4980,18 +4979,14 @@ function describeComposeCandidate(candidate) {
 }
 
 /**
- * Top-down: the AI redraws the token's image as seen from directly above, three times (different
- * seeds), into the Top-down tab's own image. It is a separate token with no frame or ring;
+ * Top-down: the AI redraws the portrait's image (the whole art, as the model was tested on) as
+ * seen from directly above, three times (different seeds), into the Top-down tab's own image. It is a separate token with no frame or ring;
  * saving makes both, and the Token HUD switches between them.
  */
 async function runTopDown(app) {
-  const regular = app.workspaces.token.source;
+  const regular = getPortraitWorkspace(app).source;
   if (!regular?.canvas) {
-    setCreatorStatus(
-      app,
-      localize('Creator.TopDownNoImage', 'Choose the token image on the Token tab first.'),
-      true,
-    );
+    setCreatorStatus(app, localize('Creator.TopDownNoImage', 'Choose an image first.'), true);
     return;
   }
   const support = await checkTopDownSupport();
@@ -5016,8 +5011,8 @@ async function runTopDown(app) {
       createCanvas,
       onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
     });
-    // A token image loaded meanwhile wins.
-    if (app.workspaces.token.source !== regular) return;
+    // A portrait image loaded meanwhile wins.
+    if (getPortraitWorkspace(app).source !== regular) return;
     app._topDown = { regular, images, applied: -1 };
     renderTopDownOptions(app);
     await applyTopDownOption(app, 0);
@@ -5045,7 +5040,7 @@ async function runTopDown(app) {
 
 /** Fills the Looks like field from the image, on request. */
 async function describeTopDownCreature(app) {
-  const source = app.workspaces.token.source;
+  const source = getPortraitWorkspace(app).source;
   if (!source?.canvas) {
     setCreatorStatus(app, localize('Creator.NoImage', 'Choose an image first.'), true);
     return;
@@ -5135,7 +5130,12 @@ async function applyTopDownOption(app, index) {
   await updateCutout(app, workspace);
 }
 
-/** Forgets the top-down token (a new token image makes it stale). */
+/** The portrait's own workspace, or the token's while the portrait shares its image. */
+function getPortraitWorkspace(app) {
+  return app.workspaces.portrait ?? app.workspaces.token;
+}
+
+/** Forgets the top-down token (a new portrait image makes it stale). */
 function clearTopDown(app) {
   if (!app._topDown && !app.workspaces.topDown?.source) return;
   app._topDown = null;

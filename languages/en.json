@@ -407,6 +407,6 @@
   "PF2ETokener.Creator.EditTarget.topdown": "Top-down",
   "PF2ETokener.Creator.TopDownGenerate": "Generate top-down token",
   "PF2ETokener.Creator.TopDownHeading": "Top-down token",
-  "PF2ETokener.Creator.TopDownHint": "Made from the image on the Token tab, as seen from directly above, with no frame or ring. Saving makes both tokens; the Token HUD switches between them.",
-  "PF2ETokener.Creator.TopDownNoImage": "Choose the token image on the Token tab first."
+  "PF2ETokener.Creator.TopDownHint": "Made from the image on the Portrait tab, as seen from directly above, with no frame or ring. Saving makes both tokens; the Token HUD switches between them.",
+  "PF2ETokener.Creator.TopDownNoImage": "Choose an image first."
 }
