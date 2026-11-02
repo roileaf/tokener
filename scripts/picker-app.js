@@ -1813,10 +1813,17 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
   card?.classList.add('is-applying');
 
   try {
-    const topDown = Boolean(candidate.topDown);
-    // A created token saved with its other look (regular or top-down) gets both at once.
-    const pairedUpdate = (document) =>
-      candidate.pairedCandidate ? buildTokenUpdate(candidate.pairedCandidate, { document }) : null;
+    const look = candidate.look ?? 'regular';
+    // A created token saved with its other looks (regular, top-down, stances) gets them all.
+    const otherLooks = (document) =>
+      candidate.otherLooks
+        ? Object.fromEntries(
+            Object.entries(candidate.otherLooks).map(([id, other]) => [
+              id,
+              buildTokenUpdate(other, { document }),
+            ]),
+          )
+        : null;
     if (targets.token) {
       const tokenUpdate = buildTokenUpdate(candidate, {
         scale,
@@ -1826,8 +1833,8 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
       await tokenDocument.update({
         ...tokenUpdate,
         ...buildArtViewsUpdate(tokenDocument, tokenUpdate, {
-          topDown,
-          paired: pairedUpdate(tokenDocument),
+          look,
+          others: otherLooks(tokenDocument),
         }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(tokenDocument, revertSnapshot, {
           replaceSnapshot: previewSnapshot,
@@ -1841,9 +1848,9 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
       await actor.update({
         ...actorUpdate,
         ...buildArtViewsUpdate(actor.prototypeToken, actorUpdate, {
-          topDown,
+          look,
           prefix: 'prototypeToken.',
-          paired: pairedUpdate(actor.prototypeToken),
+          others: otherLooks(actor.prototypeToken),
         }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(actor, revertSnapshot),
       });

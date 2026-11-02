@@ -92,7 +92,7 @@ import {
 } from './token-animation.js';
 import { fillLasso } from './region-motion.js';
 import { describeCreature } from './creature-caption.js';
-import { TOP_DOWN_FACINGS } from './top-down-prompt.js';
+import { TOP_DOWN_FACINGS, TOP_DOWN_STANCES } from './top-down-prompt.js';
 import {
   checkTopDownSupport,
   cropCanvas,
@@ -477,7 +477,11 @@ export function getTokenCreatorApplicationClass() {
       // The token and portrait can each have their own image. While `portrait` is null both
       // targets share the token workspace ("Same as token").
       // The Top-down tab's image is the AI top-down version of the token image.
-      this.workspaces = { token: createWorkspace(), portrait: null, topDown: createWorkspace() };
+      this.workspaces = {
+        token: createWorkspace(),
+        portrait: null,
+        topDown: createTopDownWorkspace(),
+      };
       this.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
       this.busy = false;
       this._cutoutToken = 0;
@@ -588,7 +592,7 @@ export function getTokenCreatorApplicationClass() {
       globalThis.removeEventListener?.('keyup', this._onKeyUp, true);
       if (activeCreator === this) activeCreator = null;
       // The top-down model holds gigabytes of GPU memory; it reloads from the cache when needed.
-      if (this._topDown) releaseTopDownModels();
+      if (this._topDownStances) releaseTopDownModels();
       await super._onClose?.(options);
     }
   };
@@ -636,6 +640,12 @@ function prepareCreatorContext(app) {
     })),
     aiTools: areAiToolsEnabled(),
     topDown: isTopDownEnabled(),
+    topDownStances: TOP_DOWN_STANCES.map((stance) => ({
+      value: stance,
+      label: localize(`Creator.TopDownStance.${stance}`, stance),
+      selected: getTopDownStance(app) === stance,
+      made: Boolean(app._topDownStances?.[stance]?.workspace?.cutout),
+    })),
     topDownFacings: TOP_DOWN_FACINGS.map((facing) => ({
       value: facing,
       label: localize(`Creator.TopDownFacing.${facing}`, facing),
@@ -966,6 +976,11 @@ function prepareCreatorContext(app) {
       ),
       topDown: localize('Creator.TopDownGenerate', 'Generate top-down token'),
       topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
+      topDownStance: localize('Creator.TopDownStanceLabel', 'Stance'),
+      topDownStanceTooltip: localize(
+        'Creator.TopDownStanceTooltip',
+        'Make the token in more stances: each keeps its own versions, and saving keeps every stance made, so the Token HUD can switch between them.',
+      ),
       topDownHint: localize(
         'Creator.TopDownHint',
         "The Portrait tab's image is redrawn as seen from directly above, with no frame or ring; the picture decides how it looks. Its background is removed with AI (RMBG-1.4, ~44 MB, non-commercial license). Saving makes both tokens; the Token HUD switches between them.",
@@ -1335,6 +1350,11 @@ export function handleCreatorInput(app, event) {
   }
   if (name === 'topDownLooks') {
     app._topDownLooks = target.value;
+    return;
+  }
+  if (name === 'topDownStance') {
+    if (TOP_DOWN_STANCES.includes(target.value) && !app.busy) setTopDownStance(app, target.value);
+    else syncTopDownStances(app);
     return;
   }
   if (name === 'topDownFacing') {
@@ -1921,7 +1941,7 @@ async function updateCutout(app, workspace = app.workspace) {
   const token = ++workspace.cutoutToken;
   const { tolerance, feather } = app.creatorOptions;
   // Top-down versions always go through RMBG-1.4, whatever the token's background mode.
-  const topDown = workspace === app.workspaces.topDown;
+  const topDown = Boolean(workspace.topDown);
   const backgroundMode = topDown ? 'ai' : app.creatorOptions.backgroundMode;
   const source = workspace.source.canvas;
   const cutout = createCanvas(source.width, source.height);
@@ -5039,9 +5059,11 @@ async function runTopDown(app) {
     const seeds = TOP_DOWN_SEEDS.map(
       (seed) => seed + (app._topDownRuns - 1) * TOP_DOWN_SEEDS.length,
     );
+    const stance = getTopDownStance(app);
     const prompt = getTopDownPrompt(app.tokenDocument, {
       appearance,
       facing: getTopDownFacing(app),
+      stance,
     });
     const images = await generateTopDown(reference, prompt, {
       seeds,
@@ -5050,14 +5072,22 @@ async function runTopDown(app) {
     });
     // A portrait image loaded meanwhile wins.
     if (getPortraitWorkspace(app).source !== regular) return;
-    app._topDown = { regular, images, applied: -1 };
-    renderTopDownOptions(app);
+    // Each stance keeps its own versions, pick, cut-out and framing.
+    app._topDownStances ??= {};
+    app._topDownStances[stance] = {
+      label: regular.label,
+      images,
+      applied: -1,
+      workspace: createTopDownWorkspace(),
+      view: { zoom: 1, offsetX: 0, offsetY: 0 },
+    };
+    setTopDownStance(app, stance);
     await applyTopDownOption(app, 0);
     setCreatorStatus(
       app,
       localize(
         'Creator.TopDownDone',
-        'Top-down token ready. Pick another version below; saving makes both tokens.',
+        'Top-down token ready. Pick another version below, or another stance; saving makes them all.',
       ),
     );
   } catch (error) {
@@ -5191,25 +5221,28 @@ function describeTopDownStatus({ phase, percent, done, total }) {
     .replace('{total}', String(total));
 }
 
-/** Shows top-down version `index` in the Top-down tab. */
+/** Shows version `index` of the current stance in the Top-down tab. */
 async function applyTopDownOption(app, index) {
-  const topDown = app._topDown;
+  const topDown = app._topDownStances?.[getTopDownStance(app)];
   if (!topDown?.images[index]) return;
-  const workspace = app.workspaces.topDown;
+  const workspace = topDown.workspace;
   workspace.source = {
     canvas: topDown.images[index],
     path: null,
     file: null,
-    label: topDown.regular.label,
+    label: topDown.label,
   };
   workspace.cleanup = { keep: null, remove: null };
-  app.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
+  app.topDownView = topDown.view = { zoom: 1, offsetX: 0, offsetY: 0 };
   if (app.editTarget === 'topdown') app._maskHistory = { undo: [], redo: [] };
   topDown.applied = index;
   syncTopDownOptions(app);
   await updateCutout(app, workspace);
   if (workspace.source?.canvas !== topDown.images[index]) return;
+  syncTopDownStances(app);
+  if (app.workspaces.topDown !== workspace) return;
   fitTopDownView(app);
+  topDown.view = app.topDownView;
   syncZoomInput(app);
   renderCreatorPreview(app);
 }
@@ -5234,28 +5267,84 @@ function getPortraitWorkspace(app) {
   return app.workspaces.portrait ?? app.workspaces.token;
 }
 
-/** Forgets the top-down token (a new portrait image makes it stale). */
+/** A Top-down tab image: always cut out with RMBG-1.4, whatever the token's background mode. */
+function createTopDownWorkspace() {
+  return { ...createWorkspace(), topDown: true };
+}
+
+/** The stance being made: the user's pick, As in the picture at first. */
+function getTopDownStance(app) {
+  return (app._topDownStance ??= 'asis');
+}
+
+/**
+ * Shows stance `stance` in the Top-down tab: its versions, pick and framing, or an empty image
+ * until it is generated. The stance being left keeps its framing.
+ */
+function setTopDownStance(app, stance) {
+  const leaving = app._topDownStances?.[getTopDownStance(app)];
+  if (leaving && leaving.workspace === app.workspaces.topDown) leaving.view = app.topDownView;
+  app._topDownStance = stance;
+  const look = app._topDownStances?.[stance];
+  app.workspaces.topDown = look?.workspace ?? createTopDownWorkspace();
+  app.topDownView = look?.view ?? { zoom: 1, offsetX: 0, offsetY: 0 };
+  if (app.editTarget === 'topdown') app._maskHistory = { undo: [], redo: [] };
+  renderTopDownOptions(app);
+  syncTopDownOptions(app);
+  syncTopDownStances(app);
+  syncZoomInput(app);
+  renderCreatorPreview(app);
+}
+
+/** The stance radios: the picked one checked, the ones already made marked. */
+function syncTopDownStances(app) {
+  getCreatorRoot(app)
+    ?.querySelectorAll('input[name="topDownStance"]')
+    .forEach((input) => {
+      input.checked = input.value === getTopDownStance(app);
+      input
+        .closest('label')
+        ?.classList.toggle(
+          'is-made',
+          Boolean(app._topDownStances?.[input.value]?.workspace?.cutout),
+        );
+    });
+}
+
+/** Forgets every top-down stance (a new portrait image makes them stale). */
 function clearTopDown(app) {
-  if (!app._topDown && !app.workspaces.topDown?.source) return;
-  app._topDown = null;
-  app.workspaces.topDown = createWorkspace();
-  const container = getCreatorRoot(app)?.querySelector('.pf2e-tokener-creator-topdown-options');
-  container?.replaceChildren();
-  container?.closest('.pf2e-tokener-creator-topdown')?.classList.remove('has-options');
+  if (!app._topDownStances && !app.workspaces.topDown?.source) return;
+  app._topDownStances = null;
+  app.workspaces.topDown = createTopDownWorkspace();
+  app.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
+  renderTopDownOptions(app);
+  syncTopDownStances(app);
   if (app.editTarget === 'topdown') renderCreatorPreview(app);
 }
 
-/** Whether saving makes a top-down token too. */
-function hasTopDownToken(app) {
-  return Boolean(app.workspaces.topDown?.cutout);
+/** The made top-down stances, each with its look id (As in the picture is the 'topDown' look). */
+function getTopDownLooks(app) {
+  const current = app._topDownStances?.[getTopDownStance(app)];
+  if (current && current.workspace === app.workspaces.topDown) current.view = app.topDownView;
+  return TOP_DOWN_STANCES.filter((stance) => app._topDownStances?.[stance]?.workspace?.cutout).map(
+    (stance) => ({
+      stance,
+      look: stance === 'asis' ? 'topDown' : stance,
+      ...app._topDownStances[stance],
+    }),
+  );
 }
 
-/** The top-down token: its cut-out at the tab's framing, with no frame or ring. */
-function drawTopDownToken(context, app, size) {
+/** A top-down token: a stance's cut-out at its framing, with no frame or ring. */
+function drawTopDownToken(
+  context,
+  app,
+  size,
+  { workspace = app.workspaces.topDown, view = app.topDownView } = {},
+) {
   context.clearRect(0, 0, size, size);
-  const cutout = app.workspaces.topDown.cutout;
+  const cutout = workspace?.cutout;
   if (!cutout) return;
-  const view = app.topDownView;
   const layout = getTokenFrameLayout({
     imageWidth: cutout.width,
     imageHeight: cutout.height,
@@ -5269,9 +5358,13 @@ function drawTopDownToken(context, app, size) {
 
 function renderTopDownOptions(app) {
   const container = getCreatorRoot(app)?.querySelector('.pf2e-tokener-creator-topdown-options');
-  const topDown = app._topDown;
-  if (!container || !topDown) return;
+  if (!container) return;
   container.replaceChildren();
+  const topDown = app._topDownStances?.[getTopDownStance(app)];
+  container
+    .closest('.pf2e-tokener-creator-topdown')
+    ?.classList.toggle('has-options', Boolean(topDown));
+  if (!topDown) return;
   topDown.images.forEach((image, index) => {
     const button = globalThis.document.createElement('button');
     button.type = 'button';
@@ -5293,11 +5386,10 @@ function renderTopDownOptions(app) {
     button.append(canvas);
     container.append(button);
   });
-  container.closest('.pf2e-tokener-creator-topdown')?.classList.add('has-options');
 }
 
 function syncTopDownOptions(app) {
-  const applied = app._topDown?.applied ?? -1;
+  const applied = app._topDownStances?.[getTopDownStance(app)]?.applied ?? -1;
   getCreatorRoot(app)
     ?.querySelectorAll('.pf2e-tokener-creator-topdown-option')
     .forEach((button) =>
@@ -5460,26 +5552,33 @@ export async function createToken(app, action) {
       animated,
       projectSrc,
     });
-    // The top-down token is saved next to it, frameless; the token gets both looks, showing the
-    // one whose tab is open, and the Token HUD switches between them.
-    let shown = candidate;
-    if (hasTopDownToken(app)) {
-      const topDownCanvas = createCanvas(size, size);
-      drawTopDownToken(topDownCanvas.getContext('2d'), app, size);
-      const topDown = buildCreatedTokenCandidate({
+    // Every top-down stance made is saved next to it, frameless; the token gets all the looks,
+    // showing the one whose tab (and stance) is open, and the Token HUD switches between them.
+    const looks = { regular: candidate };
+    for (const look of getTopDownLooks(app)) {
+      const lookCanvas = createCanvas(size, size);
+      drawTopDownToken(lookCanvas.getContext('2d'), app, size, look);
+      const suffix = look.stance === 'asis' ? 'top-down' : `top-down-${look.stance}`;
+      looks[look.look] = buildCreatedTokenCandidate({
         label,
         tokenSrc: await uploadCanvas(
-          topDownCanvas,
+          lookCanvas,
           folder,
-          buildCreatedTokenFileName(label, { now, suffix: 'top-down' }),
+          buildCreatedTokenFileName(label, { now, suffix }),
         ),
         portraitSrc,
         projectSrc,
-        topDown: true,
+        look: look.look,
       });
-      shown = app.editTarget === 'topdown' ? topDown : candidate;
-      shown.pairedCandidate = shown === topDown ? candidate : topDown;
     }
+    const stance = getTopDownStance(app);
+    const shownLook =
+      app.editTarget === 'topdown' ? (stance === 'asis' ? 'topDown' : stance) : 'regular';
+    const shown = looks[shownLook] ?? candidate;
+    if (Object.keys(looks).length > 1)
+      shown.otherLooks = Object.fromEntries(
+        Object.entries(looks).filter(([, other]) => other !== shown),
+      );
     if (action) {
       await applyCreatedTokenCandidate(action, shown, app.tokenDocument);
       app.onApplied?.(shown);

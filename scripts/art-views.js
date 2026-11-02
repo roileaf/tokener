@@ -1,9 +1,12 @@
 import { MODULE_ID } from './constants.js';
 
-// A token can keep two looks, its regular art and an AI top-down version, and switch between them
-// from the Token HUD. Each look remembers the texture and ring fields it was shown with.
+// A token can keep several looks: its regular art, an AI top-down version and top-down versions
+// in other stances, and switch between them from the Token HUD. Each look remembers the texture
+// and ring fields it was shown with.
 export const ART_VIEWS_FLAG_KEY = 'artViews';
 export const ART_VIEWS_FLAG_PATH = `flags.${MODULE_ID}.${ART_VIEWS_FLAG_KEY}`;
+/** Every look a token can have, in the order the Token HUD lists them. */
+export const LOOK_IDS = Object.freeze(['regular', 'topDown', 'attacking', 'casting', 'sneaking']);
 const ART_FIELDS = Object.freeze({
   src: 'texture.src',
   scaleX: 'texture.scaleX',
@@ -23,75 +26,103 @@ export function readTokenArt(documentLike, update = {}) {
   return art;
 }
 
-/** The two saved looks, or null unless both are there. */
+/** The saved looks by id, or null unless there is a regular look and at least one other. */
 export function readArtViews(documentLike) {
-  const views =
+  const stored =
     readPath(documentLike?._source, ART_VIEWS_FLAG_PATH) ??
     readPath(documentLike, ART_VIEWS_FLAG_PATH);
-  return views?.regular?.src && views?.topDown?.src ? views : null;
+  const views = {};
+  for (const id of LOOK_IDS) if (stored?.[id]?.src) views[id] = stored[id];
+  return views.regular && Object.keys(views).length > 1 ? views : null;
 }
 
-/** Whether the document shows its top-down look (null when it has no pair of looks). */
-export function isShowingTopDown(documentLike) {
+/** The saved looks in Token HUD order: `[{ id, art }]` (empty without at least two). */
+export function listLooks(documentLike) {
   const views = readArtViews(documentLike);
+  return views ? LOOK_IDS.filter((id) => views[id]).map((id) => ({ id, art: views[id] })) : [];
+}
+
+/**
+ * The look the document shows now. Art that is none of its looks counts as the regular one, so
+ * switching away never loses it. Null when it has no looks to switch between.
+ */
+export function getShownLook(documentLike, views = readArtViews(documentLike)) {
   if (!views) return null;
-  return readPath(documentLike, 'texture.src') === views.topDown.src;
+  const src = readPath(documentLike, 'texture.src');
+  return LOOK_IDS.find((id) => id !== 'regular' && views[id]?.src === src) ?? 'regular';
+}
+
+/** Whether the document shows a top-down look (null when it has no looks to switch between). */
+export function isShowingTopDown(documentLike) {
+  const shown = getShownLook(documentLike);
+  return shown === null ? null : shown !== 'regular';
 }
 
 /**
  * The flag change that goes with applying new art (`update`, Foundry's flat update keys, each
- * prefixed with `prefix`, e.g. `prototypeToken.`): top-down art keeps what was shown before as
- * the regular look; regular art replaces the regular look of a token that has a top-down one.
- * `paired` (another candidate's token update) sets both looks at once.
+ * prefixed with `prefix`, e.g. `prototypeToken.`), shown as look `look`. `others` (look id ->
+ * that look's unprefixed token update) sets every look at once, as the Token Creator does when it
+ * saves the regular token with its top-down ones. Without it, a top-down look keeps what was
+ * shown before as the regular look, and regular art replaces the regular look of a token that
+ * has others.
  */
 export function buildArtViewsUpdate(
   documentLike,
   update,
-  { topDown = false, prefix = '', paired = null } = {},
+  { look = 'regular', prefix = '', others = null } = {},
 ) {
   const pending = {};
   for (const [key, value] of Object.entries(update ?? {}))
     if (key.startsWith(prefix)) pending[key.slice(prefix.length)] = value;
   const after = readTokenArt(documentLike, pending);
-  const existing = readArtViews(documentLike);
   const path = `${prefix}${ART_VIEWS_FLAG_PATH}`;
-  // Both looks made together (the Token Creator saves a top-down token with the regular one):
-  // `paired` is the other look's update, unprefixed.
-  if (paired) {
-    const other = readTokenArt(documentLike, paired);
-    return {
-      [path]: topDown ? { regular: other, topDown: after } : { regular: after, topDown: other },
-    };
+  if (others) {
+    const views = { [look]: after };
+    for (const [id, otherUpdate] of Object.entries(others))
+      views[id] = readTokenArt(documentLike, otherUpdate);
+    return { [path]: storedViews(views) };
   }
-  if (topDown) {
-    // Replacing one top-down look with another keeps the regular look it was paired with.
+  const existing = readArtViews(documentLike);
+  if (look !== 'regular') {
     const regular =
-      existing && isShowingTopDown(documentLike) ? existing.regular : readTokenArt(documentLike);
+      existing && getShownLook(documentLike, existing) !== 'regular'
+        ? existing.regular
+        : readTokenArt(documentLike);
     if (!regular.src || regular.src === after.src) return {};
-    return { [path]: { regular, topDown: after } };
+    return { [path]: storedViews({ ...existing, regular, [look]: after }) };
   }
   if (!existing) return {};
-  return { [path]: { regular: after, topDown: existing.topDown } };
+  return { [path]: storedViews({ ...existing, regular: after }) };
 }
 
 /**
- * The update that switches a token to its other look, or null when it has no pair. The look
- * being left is saved as it is now, so scale changes made since are kept. Art that is neither
- * look counts as the regular one, so switching to top-down never loses it.
+ * The update that switches a token to look `id`, or null when it has no such look or shows it
+ * already. The look being left is saved as it is now, so scale changes made since are kept.
  */
-export function buildArtToggleUpdate(documentLike) {
+export function buildLookUpdate(documentLike, id) {
   const views = readArtViews(documentLike);
-  if (!views) return null;
-  const current = readTokenArt(documentLike);
-  const showingTopDown = current.src === views.topDown.src;
-  const target = showingTopDown ? views.regular : views.topDown;
+  const target = views?.[id];
+  const shown = getShownLook(documentLike, views);
+  if (!target || shown === id) return null;
   const update = {};
   for (const [key, path] of Object.entries(ART_FIELDS))
     if (Object.hasOwn(target, key)) update[path] = target[key];
-  update[ART_VIEWS_FLAG_PATH] = showingTopDown
-    ? { regular: views.regular, topDown: current }
-    : { regular: current, topDown: views.topDown };
+  update[ART_VIEWS_FLAG_PATH] = storedViews({ ...views, [shown]: readTokenArt(documentLike) });
   return update;
+}
+
+/** Between the regular look and the top-down one (or the first other look there is). */
+export function buildArtToggleUpdate(documentLike) {
+  const views = readArtViews(documentLike);
+  if (!views) return null;
+  if (getShownLook(documentLike, views) !== 'regular')
+    return buildLookUpdate(documentLike, 'regular');
+  return buildLookUpdate(documentLike, views.topDown ? 'topDown' : listLooks(documentLike)[1].id);
+}
+
+/** Every look id set, missing ones to null, so a stored look that is gone is cleared too. */
+function storedViews(views) {
+  return Object.fromEntries(LOOK_IDS.map((id) => [id, views[id]?.src ? views[id] : null]));
 }
 
 function readPath(object, path) {

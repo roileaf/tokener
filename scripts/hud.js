@@ -5,7 +5,7 @@ import {
   revertLastTokenerChange,
   revertTokenerChangeToOriginal,
 } from './actions.js';
-import { buildArtToggleUpdate, isShowingTopDown } from './art-views.js';
+import { buildLookUpdate, getShownLook, listLooks } from './art-views.js';
 import { canUseTokenHudDocument, isTokenHudButtonEnabled } from './permissions.js';
 import {
   openRevertHistoryDialog,
@@ -39,45 +39,78 @@ export function renderTokenHud(app, html) {
     await revertFromHudButton(button, tokenDocument, { resetToOriginal: event.shiftKey });
   });
   target.append(button);
-  const toggle = createArtToggleButton(tokenDocument);
-  if (toggle) target.append(toggle);
+  const looks = createLookPickerButton(tokenDocument);
+  if (looks) target.append(looks);
 }
 
-/** Switches between a token's regular and top-down looks; shown only on tokens that have both. */
-function createArtToggleButton(tokenDocument) {
-  if (isShowingTopDown(tokenDocument) === null) return null;
+/**
+ * The token's looks (regular, top-down, stances), shown only on tokens that have more than one.
+ * A click opens a strip of thumbnails beside the HUD; picking one switches the token, and every
+ * other selected token that has that look, to it.
+ */
+function createLookPickerButton(tokenDocument) {
+  if (listLooks(tokenDocument).length < 2) return null;
   const button = document.createElement('div');
-  button.className = 'control-icon pf2e-tokener-button pf2e-tokener-view-toggle';
-  button.dataset.action = 'pf2e-tokener-view';
-  syncArtToggleButton(button, tokenDocument);
-  button.addEventListener('click', async (event) => {
+  button.className = 'control-icon pf2e-tokener-button pf2e-tokener-look-button';
+  button.dataset.action = 'pf2e-tokener-looks';
+  button.dataset.tooltip = localize('HUD.Looks', 'Token looks');
+  button.innerHTML = '<i class="fas fa-person-rays"></i>';
+  syncLookButton(button, tokenDocument);
+  button.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    await toggleArtViews(tokenDocument, !isShowingTopDown(tokenDocument));
-    syncArtToggleButton(button, tokenDocument);
+    if (event.target.closest('.pf2e-tokener-look-palette')) return;
+    const open = button.querySelector('.pf2e-tokener-look-palette');
+    if (open) open.remove();
+    else button.append(createLookPalette(button, tokenDocument));
   });
   return button;
 }
 
-/** The button shows the look a click switches to; it is lit while the top-down look shows. */
-function syncArtToggleButton(button, tokenDocument) {
-  const showingTopDown = Boolean(isShowingTopDown(tokenDocument));
-  button.classList.toggle('active', showingTopDown);
-  button.dataset.tooltip = showingTopDown
-    ? localize('HUD.ShowRegular', 'Show the regular token')
-    : localize('HUD.ShowTopDown', 'Show the top-down token');
-  button.innerHTML = `<i class="fas ${showingTopDown ? 'fa-person' : 'fa-circle-down'}"></i>`;
+/** Lit while the token shows anything but its regular look. */
+function syncLookButton(button, tokenDocument) {
+  button.classList.toggle('active', getShownLook(tokenDocument) !== 'regular');
 }
 
-/** Switches this token, and every other controlled token with both looks, to one look. */
-async function toggleArtViews(tokenDocument, toTopDown) {
+function createLookPalette(button, tokenDocument) {
+  const palette = document.createElement('div');
+  palette.className = 'pf2e-tokener-look-palette';
+  const shown = getShownLook(tokenDocument);
+  for (const { id, art } of listLooks(tokenDocument)) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'pf2e-tokener-look';
+    item.classList.toggle('is-active', id === shown);
+    item.dataset.look = id;
+    item.dataset.tooltip = localize(`HUD.Look.${id}`, id);
+    item.setAttribute('aria-label', item.dataset.tooltip);
+    const media = /\.(webm|mp4)$/i.test(art.src)
+      ? Object.assign(document.createElement('video'), { muted: true, autoplay: true, loop: true })
+      : document.createElement('img');
+    media.src = art.src;
+    media.alt = '';
+    item.append(media);
+    item.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      palette.remove();
+      await switchLook(tokenDocument, id);
+      syncLookButton(button, tokenDocument);
+    });
+    palette.append(item);
+  }
+  return palette;
+}
+
+/** Switches this token, and every other controlled token that has look `id`, to it. */
+async function switchLook(tokenDocument, id) {
   const controlled = (globalThis.canvas?.tokens?.controlled ?? []).map((token) => token.document);
-  const tokens = [...new Set([tokenDocument, ...controlled])].filter(
-    (token) =>
-      token?.isOwner !== false && canUseTokener(token) && isShowingTopDown(token) === !toTopDown,
-  );
+  const updates = [...new Set([tokenDocument, ...controlled])]
+    .filter((token) => token?.isOwner !== false && canUseTokener(token))
+    .map((token) => [token, buildLookUpdate(token, id)])
+    .filter(([, update]) => update);
   try {
-    await Promise.all(tokens.map((token) => token.update(buildArtToggleUpdate(token))));
+    await Promise.all(updates.map(([token, update]) => token.update(update)));
   } catch (error) {
     console.error('pf2e-tokener | Failed to switch the token look', error);
     globalThis.ui?.notifications?.error?.(

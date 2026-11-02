@@ -196,6 +196,17 @@ const LOOK =
   'Keep the same colours, markings, clothing, equipment and design. Flat, even lighting with no shadows at all: ' +
   'no cast shadow, no drop shadow, nothing on the ground. Isolated on a pure solid white background.';
 
+/** How closely the body follows the picture: exactly, or with a new pose. */
+function keepBody({ group, pose }) {
+  if (pose)
+    return group
+      ? `Keep their look, clothing and equipment exactly as in the reference image, but change their pose: they are ${pose.replace(/\bit carries\b/, 'they carry')}.`
+      : `Keep its look, clothing and equipment exactly as in the reference image, but change its pose: it is ${pose}.`;
+  return group
+    ? 'Keep their bodies exactly as the reference image shows them, and keep everything they hold exactly as in the reference.'
+    : 'Keep its body exactly as the reference image shows it, and keep everything it is holding exactly as in the reference.';
+}
+
 /** A phrase ("a giant spider") as what the image shows; a sentence from a bestiary as it is. */
 function describeLooks(looks) {
   if (!looks) return '';
@@ -245,11 +256,23 @@ export function getDefaultFacing({ name = '', kinds = [] } = {}) {
   return BACK_KINDS.test(text) ? 'back' : 'front';
 }
 
+// Stances that read from directly above (tested on people, an angel, an imp and a kobold): the
+// pose changes, the creature does not. Posture only: naming a body part or item the creature
+// might not have makes the model draw it. A slight crouch or a lean ("ready", "moving") looked
+// the same as the picture's own pose from above, so they are not offered.
+export const TOP_DOWN_STANCES = Object.freeze(['asis', 'attacking', 'casting', 'sneaking']);
+const STANCE_POSES = Object.freeze({
+  attacking:
+    'in the middle of an attack, lunging towards the bottom of the image, whatever it carries swung forward',
+  casting: 'casting a spell, reaching outwards with both hands, with no glow or magic effect added',
+  sneaking: 'sneaking, crouched low and compact, moving carefully',
+});
+
 /**
  * The top-down editing prompt for a creature profile. `appearance` is a short phrase saying what
  * the creature is ("a large spider-like creature"), from the actor's text, the image or the user:
  * it fixed most creatures the model otherwise turned into a generic figure. `group` asks for a
- * whole troop or swarm instead of one creature.
+ * whole troop or swarm instead of one creature. `stance` changes its pose and nothing else.
  */
 export function buildTopDownPrompt({
   name,
@@ -258,7 +281,9 @@ export function buildTopDownPrompt({
   appearance = '',
   facing = 'front',
   group = false,
+  stance = 'asis',
 }) {
+  const pose = STANCE_POSES[stance] ?? null;
   const views = group ? GROUP_VIEWS : VIEWS;
   const view = views[facing] ?? views.front;
   const kindText = kinds.length ? ` (${kinds.slice(0, 4).join(', ')})` : '';
@@ -272,10 +297,10 @@ export function buildTopDownPrompt({
       ? 'Show the whole group of the reference image packed together, and nothing of its surroundings.'
       : 'Show only the one main creature of the reference image, and nothing of its surroundings.',
     view.sees,
-    group
-      ? 'Keep their bodies exactly as the reference image shows them, and keep everything they hold exactly as in the reference.'
-      : 'Keep its body exactly as the reference image shows it, and keep everything it is holding exactly as in the reference.',
-    'Add nothing that is not in the reference image.',
+    keepBody({ group, pose }),
+    pose
+      ? 'Add no creatures, body parts or items that are not in the reference image.'
+      : 'Add nothing that is not in the reference image.',
     size
       ? `${group ? 'The group' : 'It'} is ${SIZE_PHRASES[size]}; give it the build and bulk of that size.`
       : '',

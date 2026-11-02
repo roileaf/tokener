@@ -5,6 +5,9 @@ import {
   ART_VIEWS_FLAG_PATH,
   buildArtToggleUpdate,
   buildArtViewsUpdate,
+  buildLookUpdate,
+  getShownLook,
+  listLooks,
   isShowingTopDown,
   readArtViews,
 } from '../scripts/art-views.js';
@@ -46,11 +49,14 @@ test('applying top-down art keeps the shown art as the regular look', () => {
   const update = buildArtViewsUpdate(
     document,
     { 'texture.src': 'top.webp', 'texture.scaleX': 1, 'texture.scaleY': 1 },
-    { topDown: true },
+    { look: 'topDown' },
   );
   assert.deepEqual(update[ART_VIEWS_FLAG_PATH], {
     regular: look('regular.webp', 1.2),
     topDown: look('top.webp'),
+    attacking: null,
+    casting: null,
+    sneaking: null,
   });
 });
 
@@ -59,7 +65,7 @@ test('replacing a shown top-down look keeps its regular look', () => {
     { src: 'top.webp' },
     { regular: look('regular.webp'), topDown: look('top.webp') },
   );
-  const update = buildArtViewsUpdate(document, { 'texture.src': 'top2.webp' }, { topDown: true });
+  const update = buildArtViewsUpdate(document, { 'texture.src': 'top2.webp' }, { look: 'topDown' });
   assert.equal(update[ART_VIEWS_FLAG_PATH].regular.src, 'regular.webp');
   assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.src, 'top2.webp');
 });
@@ -79,7 +85,7 @@ test('prototype token updates use the prefixed paths', () => {
   const update = buildArtViewsUpdate(
     token({ src: 'regular.webp' }),
     { 'prototypeToken.texture.src': 'top.webp', img: 'portrait.webp' },
-    { topDown: true, prefix: 'prototypeToken.' },
+    { look: 'topDown', prefix: 'prototypeToken.' },
   );
   assert.equal(update[`prototypeToken.${ART_VIEWS_FLAG_PATH}`].topDown.src, 'top.webp');
 });
@@ -247,12 +253,15 @@ test('saving both looks at once stores the other one as given', () => {
     'ring.subject.texture': 'ring.webp',
   };
   const topDown = { 'texture.src': 'top.webp', 'ring.enabled': false };
-  const showingTop = buildArtViewsUpdate(document, topDown, { topDown: true, paired: regular });
+  const showingTop = buildArtViewsUpdate(document, topDown, {
+    look: 'topDown',
+    others: { regular },
+  });
   assert.equal(showingTop[ART_VIEWS_FLAG_PATH].regular.src, 'ring.webp');
   assert.equal(showingTop[ART_VIEWS_FLAG_PATH].regular.ring, true);
   assert.equal(showingTop[ART_VIEWS_FLAG_PATH].topDown.src, 'top.webp');
   assert.equal(showingTop[ART_VIEWS_FLAG_PATH].topDown.ring, false);
-  const showingRegular = buildArtViewsUpdate(document, regular, { paired: topDown });
+  const showingRegular = buildArtViewsUpdate(document, regular, { others: { topDown } });
   assert.equal(showingRegular[ART_VIEWS_FLAG_PATH].regular.src, 'ring.webp');
   assert.equal(showingRegular[ART_VIEWS_FLAG_PATH].topDown.src, 'top.webp');
 });
@@ -348,4 +357,48 @@ test('troops, swarms and hordes are drawn as one group token', () => {
   assert.match(prompt, /this exact group of creatures/);
   assert.match(prompt, /Show the whole group/);
   assert.doesNotMatch(prompt, /only the one main creature/);
+});
+
+test('a token saved with stances lists every look and switches to any of them', () => {
+  const regular = { 'texture.src': 'ring.webp', 'ring.enabled': true };
+  const document = token({ src: 'old.webp' });
+  const flag = buildArtViewsUpdate(document, regular, {
+    others: {
+      topDown: { 'texture.src': 'top.webp', 'ring.enabled': false },
+      casting: { 'texture.src': 'casting.webp', 'ring.enabled': false },
+    },
+  })[ART_VIEWS_FLAG_PATH];
+  assert.equal(flag.attacking, null);
+  const saved = token({ src: 'ring.webp' }, flag);
+  assert.deepEqual(
+    listLooks(saved).map(({ id }) => id),
+    ['regular', 'topDown', 'casting'],
+  );
+  assert.equal(getShownLook(saved), 'regular');
+  const toCasting = buildLookUpdate(saved, 'casting');
+  assert.equal(toCasting['texture.src'], 'casting.webp');
+  assert.equal(toCasting['ring.enabled'], false);
+  assert.equal(buildLookUpdate(saved, 'regular'), null); // already shown
+  assert.equal(buildLookUpdate(saved, 'sneaking'), null); // never made
+  const showingCasting = token({ src: 'casting.webp' }, toCasting[ART_VIEWS_FLAG_PATH]);
+  assert.equal(getShownLook(showingCasting), 'casting');
+  assert.equal(buildLookUpdate(showingCasting, 'regular')['texture.src'], 'ring.webp');
+});
+
+test('stances change the pose only, without naming parts or items', () => {
+  const asis = buildTopDownPrompt({ name: 'Ezren' });
+  const casting = buildTopDownPrompt({ name: 'Ezren', stance: 'casting' });
+  assert.match(asis, /Keep its body exactly as the reference image shows it/);
+  assert.match(casting, /change its pose: it is casting a spell/);
+  assert.match(casting, /Add no creatures, body parts or items/);
+  assert.doesNotMatch(casting, /Keep its body exactly/);
+  assert.doesNotMatch(
+    buildTopDownPrompt({ name: 'X', stance: 'sneaking' }),
+    /\b(wings?|tails?|swords?)\b/,
+  );
+  assert.match(
+    buildTopDownPrompt({ name: 'Rats', group: true, stance: 'attacking' }),
+    /they are in the middle of an attack/,
+  );
+  assert.equal(buildTopDownPrompt({ name: 'Ezren', stance: 'dancing' }), asis);
 });
