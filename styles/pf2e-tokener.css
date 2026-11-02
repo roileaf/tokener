@@ -8,7 +8,10 @@
 }
 
 /* Token looks: a strip of thumbnails beside the HUD column. */
+/* Foundry's HUD only takes clicks on its own controls (pointer-events: none elsewhere), so the
+   strip and its thumbnails opt back in, or clicks fall through to the map. */
 #token-hud .pf2e-tokener-look-palette {
+  pointer-events: all;
   position: absolute;
   top: 50%;
   left: calc(100% + 8px);
@@ -24,6 +27,7 @@
 }
 
 #token-hud .pf2e-tokener-look {
+  pointer-events: all;
   display: block;
   width: 56px;
   height: 56px;
