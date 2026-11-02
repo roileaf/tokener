@@ -3,7 +3,13 @@ import {
   MODULE_ID,
   TOP_DOWN_FACE_MOVEMENT_SETTING_KEY,
 } from './constants.js';
-import { getLookFacing, getMovementRotation, getRotationAlong, getShownLook } from './art-views.js';
+import {
+  getLookFacing,
+  getMovementRotation,
+  getRotationAlong,
+  getShownLook,
+  isShowingTopDown,
+} from './art-views.js';
 import { buildTopDownPrompt, getCreatureProfile, getDefaultFacing } from './top-down-prompt.js';
 import { loadTransformers } from './ai-tools.js';
 import { localize } from './utils.js';
@@ -115,6 +121,20 @@ export function registerTopDownMovement(hooks = globalThis.Hooks) {
     if (changes.rotation !== undefined) return;
     const rotation = getMovementRotation(document, changes, facing);
     if (rotation !== null && rotation !== document.rotation) changes.rotation = rotation;
+  });
+}
+
+// Added to the sort of a token showing a top-down look: seen from above, it covers the creatures
+// beneath it. Foundry stacks by elevation first, so creatures higher up still draw over it.
+const TOP_DOWN_SORT_BOOST = 1e7;
+
+/** Draws tokens showing a top-down look over other tokens at the same elevation. */
+export function registerTopDownLayering(hooks = globalThis.Hooks) {
+  hooks?.on?.('refreshToken', (token) => {
+    const mesh = token?.mesh;
+    if (!mesh || !isShowingTopDown(token.document)) return;
+    const sort = Number(token.document.sort) || 0;
+    if (mesh.sort !== sort + TOP_DOWN_SORT_BOOST) mesh.sort = sort + TOP_DOWN_SORT_BOOST;
   });
 }
 

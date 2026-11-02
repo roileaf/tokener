@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- A token showing a top-down look draws over other tokens at the same elevation, as a creature seen from above covers those beneath it. Tokens higher up still draw over it.
+
 ### Fixed
 
 - The still in PF2e chat cards is the creature itself, without its ring, frame or ring cut, trimmed to fill the chat portrait, and without the ring enlargement and faded edges PF2e gives ring tokens. Re-save animated tokens saved with 3.0.2 to get the frameless still.
