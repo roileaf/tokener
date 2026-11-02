@@ -92,6 +92,7 @@ import {
 } from './token-animation.js';
 import { fillLasso } from './region-motion.js';
 import { describeCreature } from './creature-caption.js';
+import { getTopDownStoreKey, loadTopDownStances, saveTopDownStances } from './top-down-store.js';
 import { TOP_DOWN_FACINGS, TOP_DOWN_STANCES } from './top-down-prompt.js';
 import {
   checkTopDownSupport,
@@ -1579,6 +1580,7 @@ async function handleCreatorClick(app, event) {
       return;
     case 'top-down-pick':
       await applyTopDownOption(app, Number(button.dataset.topDownIndex));
+      void keepTopDown(app, { images: false });
       return;
     case 'cleanup-reset':
       if (!app.cleanup.keep && !app.cleanup.remove) return;
@@ -1728,6 +1730,7 @@ async function loadCreatorSource(app, { path, file }) {
     }
     syncZoomInput(app);
     await updateCutout(app);
+    if (app.workspace === getPortraitWorkspace(app)) void restoreTopDown(app);
   } catch (error) {
     console.error(`${MODULE_ID} | Failed to load token creator image`, error);
     app.source = null;
@@ -1790,6 +1793,7 @@ export async function loadCreatorProject(
   const errors = ((await updateCutouts(app)) ?? []).filter(Boolean);
   if (token !== app._projectLoadToken) return false;
   if (app.rendered && typeof app.render === 'function') await app.render({ parts: ['main'] });
+  void restoreTopDown(app);
   // A failed background removal keeps its error on the status line (the render above cleared it).
   if (errors.length)
     setCreatorStatus(
@@ -5102,6 +5106,7 @@ async function runTopDown(app) {
     };
     setTopDownStance(app, stance);
     await applyTopDownOption(app, 0);
+    void keepTopDown(app);
     setCreatorStatus(
       app,
       localize(
@@ -5291,6 +5296,74 @@ function fitTopDownView(app) {
 /** The portrait's own workspace, or the token's while the portrait shares its image. */
 function getPortraitWorkspace(app) {
   return app.workspaces.portrait ?? app.workspaces.token;
+}
+
+/** The key this creator's top-down versions are kept under (null when they cannot be kept). */
+function getTopDownKey(app) {
+  const owner = app.tokenDocument?.actor?.uuid ?? app.tokenDocument?.uuid ?? null;
+  return getTopDownStoreKey({ ownerUuid: owner, source: getPortraitWorkspace(app)?.source });
+}
+
+/** Keeps the made stances for next time; `images: false` writes only the picks and framing. */
+async function keepTopDown(app, { images = true } = {}) {
+  const key = getTopDownKey(app);
+  if (!key || !app._topDownStances) return;
+  const current = app._topDownStances[getTopDownStance(app)];
+  if (current && current.workspace === app.workspaces.topDown) current.view = app.topDownView;
+  try {
+    await saveTopDownStances(key, app._topDownStances, { images });
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Could not keep the top-down tokens for next time`, error);
+  }
+}
+
+/**
+ * Brings back the top-down versions made earlier from this portrait image: every stance with
+ * its versions, pick and framing. Their cut-outs are made again.
+ */
+async function restoreTopDown(app) {
+  const key = getTopDownKey(app);
+  if (!key || app._topDownStances) return;
+  const stored = await loadTopDownStances(key, createCanvas).catch(() => null);
+  if (!stored || app._topDownStances || getTopDownKey(app) !== key) return;
+  const stances = {};
+  for (const [stance, entry] of Object.entries(stored)) {
+    if (!TOP_DOWN_STANCES.includes(stance) || !entry.images[entry.applied]) continue;
+    const workspace = createTopDownWorkspace();
+    workspace.source = {
+      canvas: entry.images[entry.applied],
+      path: null,
+      file: null,
+      label: entry.label,
+    };
+    stances[stance] = {
+      label: entry.label,
+      facing: entry.facing ?? undefined,
+      images: entry.images,
+      applied: entry.applied,
+      workspace,
+      view: entry.view ?? { zoom: 1, offsetX: 0, offsetY: 0 },
+    };
+  }
+  if (!Object.keys(stances).length) return;
+  app._topDownStances = stances;
+  setCreatorStatus(
+    app,
+    localize('Creator.TopDownRestoring', 'Bringing back the top-down tokens made before...'),
+  );
+  for (const entry of Object.values(stances)) await updateCutout(app, entry.workspace);
+  if (app._topDownStances !== stances) return;
+  setTopDownStance(
+    app,
+    stances[getTopDownStance(app)] ? getTopDownStance(app) : Object.keys(stances)[0],
+  );
+  setCreatorStatus(
+    app,
+    localize(
+      'Creator.TopDownRestored',
+      'Top-down tokens made before are back on the Top-down tab.',
+    ),
+  );
 }
 
 /** A Top-down tab image: always cut out with RMBG-1.4, whatever the token's background mode. */

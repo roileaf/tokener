@@ -21,6 +21,7 @@ import {
   pickAppearance,
 } from '../scripts/top-down-prompt.js';
 import { cleanCaption } from '../scripts/creature-caption.js';
+import { getTopDownStoreKey } from '../scripts/top-down-store.js';
 import { tidyAlphaMask } from '../scripts/ai-tools.js';
 import { getTokenFrameLayout } from '../scripts/token-composer.js';
 import {
@@ -573,4 +574,21 @@ test('a facing fixed on a token can be recorded on the actor default token', () 
     { regular: look('ring.webp'), topDown: { ...look('top.webp'), facing: 'front' } },
   );
   assert.equal(buildSetFacingUpdate(recorded, 'topDown', 'front'), null);
+});
+
+test('top-down tokens are kept per actor and portrait image, flips included', () => {
+  assert.equal(
+    getTopDownStoreKey({ ownerUuid: 'Actor.a', source: { path: 'art/x.webp' } }),
+    'Actor.a|art/x.webp|',
+  );
+  assert.equal(
+    getTopDownStoreKey({
+      ownerUuid: 'Actor.a',
+      source: { path: 'art/x.webp', flip: { x: true, y: true } },
+    }),
+    'Actor.a|art/x.webp|xy',
+  );
+  // An upload or paste has no path to find it by again.
+  assert.equal(getTopDownStoreKey({ ownerUuid: 'Actor.a', source: { path: null } }), null);
+  assert.equal(getTopDownStoreKey({ ownerUuid: null, source: { path: 'art/x.webp' } }), null);
 });
