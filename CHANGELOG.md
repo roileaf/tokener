@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.3 - 2026-11-02
 
 ### Changed
 
@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- The still in PF2e chat cards is the creature itself, without its ring, frame or ring cut, trimmed to fill the chat portrait, and without the ring enlargement and faded edges PF2e gives ring tokens. Re-save animated tokens saved with 3.0.2 to get the frameless still.
+- PF2e chat cards now show an animated token's still: in 3.0.2 it was swapped in before PF2e added its portrait, so the portrait still showed. The still is the creature itself, without its ring, frame or ring cut, trimmed to fill the chat portrait, and without the ring enlargement and faded edges PF2e gives ring tokens. Re-save animated tokens saved with 3.0.2 to get the frameless still.
 
 ## 3.0.2 - 2026-11-02
 
