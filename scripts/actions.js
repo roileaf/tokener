@@ -14,6 +14,9 @@ export const REVERT_FLAG_KEY = 'lastRevert';
 export const REVERT_FLAG_PATH = `flags.${MODULE_ID}.${REVERT_FLAG_KEY}`;
 export const BREAKOUT_FLAG_KEY = 'breakout';
 export const BREAKOUT_FLAG_PATH = `flags.${MODULE_ID}.${BREAKOUT_FLAG_KEY}`;
+// A still image of an animated token (`{ src, image }`: the video it shows and its first frame),
+// for places that only show images, such as PF2e chat cards.
+export const STILL_FLAG_PATH = `flags.${MODULE_ID}.still`;
 const PF2E_AUTOSCALE_PATH = 'flags.pf2e.autoscale';
 
 /**
@@ -138,6 +141,8 @@ export function buildTokenUpdate(candidate, { scale, ringScale, profile, documen
     randomImg: false,
     ...buildBreakoutUpdate(breakout, tokenSrc, document, systemProfile),
   };
+  const stillSrc = getImageSource(candidate?.stillSrc);
+  if (stillSrc) update[STILL_FLAG_PATH] = { src: tokenSrc, image: stillSrc };
   // Created tokens link to their Token Creator project so the creator can reopen it.
   const projectSrc = getImageSource(candidate?.projectSrc);
   if (projectSrc)

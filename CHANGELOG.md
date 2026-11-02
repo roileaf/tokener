@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- PF2e chat cards show an animated token as its still token instead of the actor portrait. PF2e only shows images there, so the Token Creator now saves a still frame next to each animated token and top-down look. Re-save older animated tokens to get one.
+
 ## 3.0.1 - 2026-11-02
 
 ### Fixed

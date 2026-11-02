@@ -8,6 +8,7 @@ import { renderTokenHud, updateOpenPanelsCanvasZoom } from './hud.js';
 import { registerLookRedraw, registerTopDownMovement } from './top-down.js';
 import { registerImageTagSettings } from './image-tags.js';
 import { canUseTokener, registerPermissionSettings } from './permissions.js';
+import { registerChatStill } from './chat-still.js';
 import { registerRingVideoPlayback } from './ring-video.js';
 import { registerTokenCreatorSettings, syncCreatedTokenSubjectPath } from './token-creator.js';
 
@@ -186,6 +187,8 @@ function registerFoundryIntegration() {
 
   // World settings are readable from setup, and the canvas draws tokens before ready.
   hooks.once('setup', () => syncCreatedTokenSubjectPath());
+  // The chat log is drawn before ready: animated tokens' stills must replace the portrait there too.
+  registerChatStill(hooks);
 
   hooks.once('ready', () => {
     installApi();

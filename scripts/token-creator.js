@@ -6185,16 +6185,24 @@ async function createTokenFromTarget(app, action, savedTarget) {
         regions: app.effectRegions,
       }) === 'animated';
     let tokenSrc;
+    let stillSrc;
+    const tokenCanvas = createCanvas(size, size);
+    withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
     if (animated) {
       tokenSrc = await uploadBlob(
         await encodeTokenAnimation(app, getAnimatedOutputSize(size)),
         folder,
         buildCreatedTokenFileName(label, { now, extension: 'webm' }),
       );
+      // Places that only show images (PF2e chat cards) get the still token instead of the
+      // portrait.
+      stillSrc = await uploadCanvas(
+        tokenCanvas,
+        folder,
+        buildCreatedTokenFileName(label, { now, suffix: 'still' }),
+      );
       setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
     } else {
-      const tokenCanvas = createCanvas(size, size);
-      withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
       tokenSrc = await uploadCanvas(tokenCanvas, folder, buildCreatedTokenFileName(label, { now }));
     }
 
@@ -6292,6 +6300,7 @@ async function createTokenFromTarget(app, action, savedTarget) {
       breakoutScale: 1 / getActiveRingScale(app),
       animated,
       projectSrc,
+      stillSrc,
     });
     // Every top-down stance made is saved next to it, frameless; the token gets all the looks,
     // showing the one whose tab (and stance) is open, and the Token HUD switches between them.
@@ -6300,16 +6309,22 @@ async function createTokenFromTarget(app, action, savedTarget) {
     for (const look of getTopDownLooks(app)) {
       const suffix = look.stance === 'asis' ? 'top-down' : `top-down-${look.stance}`;
       const moving = await encodeTopDownAnimation(app, look, size);
+      const lookCanvas = createCanvas(size, size);
+      drawTopDownToken(lookCanvas.getContext('2d'), app, size, look);
       let lookSrc;
+      let lookStill;
       if (moving) {
         lookSrc = await uploadBlob(
           moving,
           folder,
           buildCreatedTokenFileName(label, { now, suffix, extension: 'webm' }),
         );
+        lookStill = await uploadCanvas(
+          lookCanvas,
+          folder,
+          buildCreatedTokenFileName(label, { now, suffix: `${suffix}-still` }),
+        );
       } else {
-        const lookCanvas = createCanvas(size, size);
-        drawTopDownToken(lookCanvas.getContext('2d'), app, size, look);
         lookSrc = await uploadCanvas(
           lookCanvas,
           folder,
@@ -6323,6 +6338,7 @@ async function createTokenFromTarget(app, action, savedTarget) {
         projectSrc,
         look: look.look,
         facing: look.facing,
+        stillSrc: lookStill,
       });
     }
     const stance = getTopDownStance(app);

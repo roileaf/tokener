@@ -24,6 +24,8 @@ const ART_FIELDS = Object.freeze({
   // Each look keeps its own turn: a top-down look turns to face its movement, the regular one
   // stays as it was set.
   rotation: 'rotation',
+  // An animated look's still image (`{ src, image }`), so it follows the look shown.
+  still: `flags.${MODULE_ID}.still`,
 });
 const VIDEO_PATTERN = /\.(webm|mp4|m4v|ogv)(\?.*)?$/i;
 /** Where each made look faces in its image: front looks face the bottom, back looks the top. */

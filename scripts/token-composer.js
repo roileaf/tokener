@@ -458,6 +458,7 @@ export function buildCreatedTokenCandidate({
   projectSrc,
   look = 'regular',
   facing,
+  stillSrc,
 }) {
   const candidate = {
     id: `${CREATED_TOKEN_SOURCE_ID}:${tokenSrc}`,
@@ -469,6 +470,7 @@ export function buildCreatedTokenCandidate({
   if (breakoutScale > 1) candidate.breakoutScale = breakoutScale;
   if (portraitSrc) candidate.portraitSrc = portraitSrc;
   if (projectSrc) candidate.projectSrc = projectSrc;
+  if (stillSrc) candidate.stillSrc = stillSrc;
   // AI top-down art (a look id such as 'topDown' or a stance): applying it keeps the regular art
   // for the Token HUD's look picker.
   if (look !== 'regular') candidate.look = look;
