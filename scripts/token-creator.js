@@ -92,6 +92,7 @@ import {
 } from './token-animation.js';
 import { fillLasso } from './region-motion.js';
 import { describeCreature } from './creature-caption.js';
+import { TOP_DOWN_FACINGS } from './top-down-prompt.js';
 import {
   checkTopDownSupport,
   describeTopDownSupport,
@@ -630,6 +631,12 @@ function prepareCreatorContext(app) {
     })),
     aiTools: areAiToolsEnabled(),
     topDown: isTopDownEnabled(),
+    topDownFacings: TOP_DOWN_FACINGS.map((facing) => ({
+      value: facing,
+      label: localize(`Creator.TopDownFacing.${facing}`, facing),
+      tooltip: localize(`Creator.TopDownFacingTooltip.${facing}`, ''),
+      selected: (app._topDownFacing ?? 'front') === facing,
+    })),
     topDownLooks: isTopDownEnabled()
       ? (app._topDownLooks ??= getActorAppearance(app.tokenDocument))
       : '',
@@ -1323,6 +1330,10 @@ export function handleCreatorInput(app, event) {
   }
   if (name === 'topDownLooks') {
     app._topDownLooks = target.value;
+    return;
+  }
+  if (name === 'topDownFacing') {
+    if (TOP_DOWN_FACINGS.includes(target.value)) app._topDownFacing = target.value;
     return;
   }
   if (name === 'brushSize') {
@@ -5022,7 +5033,10 @@ async function runTopDown(app) {
     const seeds = TOP_DOWN_SEEDS.map(
       (seed) => seed + (app._topDownRuns - 1) * TOP_DOWN_SEEDS.length,
     );
-    const prompt = getTopDownPrompt(app.tokenDocument, { appearance });
+    const prompt = getTopDownPrompt(app.tokenDocument, {
+      appearance,
+      facing: app._topDownFacing ?? 'front',
+    });
     const images = await generateTopDown(regular.canvas, prompt, {
       seeds,
       createCanvas,

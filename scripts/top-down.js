@@ -128,10 +128,10 @@ export function describeTopDownSupport(reason) {
  */
 export function getTopDownPrompt(
   tokenDocument,
-  { appearance, systemId = globalThis.game?.system?.id } = {},
+  { appearance, facing, systemId = globalThis.game?.system?.id } = {},
 ) {
   const profile = getTopDownProfile(tokenDocument, { systemId });
-  return buildTopDownPrompt({ ...profile, appearance: appearance ?? profile.appearance });
+  return buildTopDownPrompt({ ...profile, appearance: appearance ?? profile.appearance, facing });
 }
 
 /** What the actor's own text says the creature looks like ('' for most creatures). */

@@ -266,3 +266,13 @@ test('the top-down mask clean-up drops faint pixels and specks and keeps a soft 
   assert.equal(alpha[1 * width + 18], 0);
   assert.equal(alpha[18 * width + 2], 0);
 });
+
+test('top-down prompts face front by default and can show the back', () => {
+  const front = buildTopDownPrompt({ name: 'Ezren' });
+  assert.match(front, /looking straight down onto this exact creature/);
+  assert.match(front, /It faces the bottom of the image/);
+  const back = buildTopDownPrompt({ name: 'Eagle', facing: 'back' });
+  assert.match(back, /looking straight down at the back of this exact creature/);
+  assert.match(back, /Its head points to the top of the image/);
+  assert.equal(buildTopDownPrompt({ name: 'Ezren', facing: 'sideways' }), front);
+});

@@ -210,6 +210,14 @@
                   aria-label='{{labels.topDownDescribeTooltip}}'
                 ><i class='fas fa-eye'></i></button>
               </div>
+              <div class='pf2e-tokener-creator-segmented'>
+                {{#each topDownFacings}}
+                  <label data-tooltip='{{tooltip}}'>
+                    <input type='radio' name='topDownFacing' value='{{value}}' {{#if selected}}checked{{/if}} />
+                    <span>{{label}}</span>
+                  </label>
+                {{/each}}
+              </div>
               <button
                 type='button'
                 class='pf2e-tokener-creator-button is-primary'

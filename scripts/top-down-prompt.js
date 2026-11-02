@@ -203,16 +203,32 @@ function describeLooks(looks) {
  * the creature is ("a large spider-like creature"), from the actor's text, the image or the user:
  * it fixed most creatures the model otherwise turned into a generic figure.
  */
-export function buildTopDownPrompt({ name, size, kinds = [], appearance = '' }) {
+// Which side faces the camera. Front (the face and chest seen from above, facing the bottom of
+// the image) showed people far better; Back (head to the top, body behind it) suits beasts and
+// flyers, which Front squashed into a creature looking up at the camera.
+export const TOP_DOWN_FACINGS = Object.freeze(['front', 'back']);
+const VIEWS = Object.freeze({
+  front: {
+    onto: 'looking straight down onto this exact creature',
+    sees: 'We see the top of its head, its face, its shoulders and the front of its body from above. It faces the bottom of the image: its face, chest and the front of its clothing point towards the bottom of the image, and its back is towards the top.',
+  },
+  back: {
+    onto: 'looking straight down at the back of this exact creature',
+    sees: 'We see the top of its head and its back. Its head points to the top of the image and the rest of its body extends behind it towards the bottom of the image.',
+  },
+});
+
+export function buildTopDownPrompt({ name, size, kinds = [], appearance = '', facing = 'front' }) {
+  const view = VIEWS[facing] ?? VIEWS.front;
   const kindText = kinds.length ? ` (${kinds.slice(0, 4).join(', ')})` : '';
   const looks = String(appearance ?? '')
     .trim()
     .replace(/[.!?]+$/, '');
   return [
-    `Seen from directly above, looking straight down at the back of this exact creature, ${name || 'creature'}${kindText}, as a figure on a tabletop battle map.`,
+    `Seen from directly above, ${view.onto}, ${name || 'creature'}${kindText}, as a figure on a tabletop battle map.`,
     describeLooks(looks),
     'Show only the one main creature of the reference image, and nothing of its surroundings.',
-    'We see the top of its head and its back. Its head points to the top of the image and the rest of its body extends behind it towards the bottom of the image.',
+    view.sees,
     'Keep its body exactly as the reference image shows it, and keep everything it is holding exactly as in the reference.',
     'Add nothing that is not in the reference image.',
     size ? `It is ${SIZE_PHRASES[size]}; give it the build and bulk of that size.` : '',
