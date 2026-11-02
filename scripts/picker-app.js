@@ -1,4 +1,4 @@
-import { buildArtViewsUpdate } from './art-views.js';
+import { buildArtViewsUpdate, isShowingTopDown } from './art-views.js';
 import { DEFAULT_LIMIT, MODULE_ID } from './constants.js';
 import {
   buildActorUpdate,
@@ -1837,6 +1837,8 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
         ringScale,
         document: tokenDocument,
       });
+      // Leaving a top-down look for regular art undoes the turn it took to face its movement.
+      if (look === 'regular' && isShowingTopDown(tokenDocument)) tokenUpdate.rotation = 0;
       await tokenDocument.update({
         ...tokenUpdate,
         ...buildArtViewsUpdate(tokenDocument, tokenUpdate, {

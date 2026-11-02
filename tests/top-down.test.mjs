@@ -442,7 +442,7 @@ test('switching looks keeps the rotation and facing of each look', () => {
     ...token(
       { src: 'top.webp' },
       {
-        regular: { ...look('ring.webp'), rotation: 0 },
+        regular: { ...look('ring.webp'), rotation: 45 },
         topDown: { ...look('top.webp'), facing: 'front' },
       },
     ),

@@ -112,6 +112,8 @@ export function buildLookUpdate(documentLike, id) {
   const update = {};
   for (const [key, path] of Object.entries(ART_FIELDS))
     if (Object.hasOwn(target, key)) update[path] = target[key];
+  // The regular look is never turned: top-down looks turn to face their movement, it does not.
+  if (id === 'regular') update.rotation = 0;
   update[ART_VIEWS_FLAG_PATH] = storedViews({
     ...views,
     [shown]: { ...views[shown], ...readTokenArt(documentLike) },
