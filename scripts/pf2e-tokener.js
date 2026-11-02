@@ -5,7 +5,7 @@ import { registerFavoriteSettings } from './favorites.js';
 import { installApi, warmIndexInBackground } from './foundry-index.js';
 import { registerPickerGridSizeSetting } from './grid-size.js';
 import { renderTokenHud, updateOpenPanelsCanvasZoom } from './hud.js';
-import { registerTopDownMovement } from './top-down.js';
+import { registerLookRedraw, registerTopDownMovement } from './top-down.js';
 import { registerImageTagSettings } from './image-tags.js';
 import { canUseTokener, registerPermissionSettings } from './permissions.js';
 import { registerRingVideoPlayback } from './ring-video.js';
@@ -191,6 +191,7 @@ function registerFoundryIntegration() {
     installApi();
     hooks.on('renderTokenHUD', renderTokenHud);
     registerTopDownMovement(hooks);
+    registerLookRedraw(hooks);
     registerRingVideoPlayback(hooks);
     for (const hook of ACTOR_SHEET_RENDER_HOOKS) {
       hooks.on(hook, renderActorSheetTokenerEntry);

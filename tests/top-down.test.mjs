@@ -32,6 +32,7 @@ import {
   fitViewToBox,
   getRepaintCells,
   getDefaultTopDownHighDetail,
+  registerLookRedraw,
   registerTopDownMovement,
   formatTopDownChat,
   gaussianNoise,
@@ -482,6 +483,18 @@ test('an animated look never sets a video as the ring subject', () => {
     },
   };
   assert.equal(readTokenArt(prepared).subject, '');
+});
+
+test('a token whose art and ring change together is redrawn', () => {
+  const handlers = {};
+  registerLookRedraw({ on: (name, fn) => (handlers[name] = fn) });
+  const flags = [];
+  const document = { object: { renderFlags: { set: (value) => flags.push(value) } } };
+  handlers.updateToken(document, { texture: { src: 'top.webm' }, ring: { enabled: false } });
+  assert.deepEqual(flags, [{ redraw: true }]);
+  handlers.updateToken(document, { texture: { src: 'other.webm' } }); // ring unchanged
+  handlers.updateToken({}, { texture: { src: 'a.webm' }, ring: { enabled: true } }); // not drawn
+  assert.equal(flags.length, 1);
 });
 
 test('high detail is on by default for Large and bigger creatures', () => {

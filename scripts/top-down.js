@@ -119,6 +119,18 @@ export function registerTopDownMovement(hooks = globalThis.Hooks) {
 }
 
 /**
+ * Redraws a token whose art and dynamic ring change together, as switching between a ringed look
+ * and a frameless top-down one does: a refresh keeps the ring's sizing on the new art, drawing a
+ * top-down look far too large until the scene is reloaded. Runs on every client.
+ */
+export function registerLookRedraw(hooks = globalThis.Hooks) {
+  hooks?.on?.('updateToken', (document, changes) => {
+    if (changes?.ring?.enabled === undefined || changes?.texture?.src === undefined) return;
+    document?.object?.renderFlags?.set?.({ redraw: true });
+  });
+}
+
+/**
  * Where the shown top-down look faces: as recorded when it was made, else what suits the creature
  * (looks saved before facing was recorded). Null for the regular look.
  */
