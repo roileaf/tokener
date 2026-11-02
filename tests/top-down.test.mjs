@@ -8,7 +8,12 @@ import {
   isShowingTopDown,
   readArtViews,
 } from '../scripts/art-views.js';
-import { buildTopDownPrompt, getCreatureProfile } from '../scripts/top-down-prompt.js';
+import {
+  buildTopDownPrompt,
+  getCreatureProfile,
+  pickAppearance,
+} from '../scripts/top-down-prompt.js';
+import { cleanCaption } from '../scripts/creature-caption.js';
 import {
   checkTopDownSupport,
   formatTopDownChat,
@@ -181,4 +186,47 @@ test('support check rules out GPUs that cannot run the model', async () => {
     ok: true,
     reason: null,
   });
+});
+
+test('actor text gives an appearance only from sentences that describe looks', () => {
+  assert.equal(
+    pickAppearance(
+      '<p>The drakauthix prefers to ambush prey. The drakauthix is a massive fungus shaped like a bloated bladder with long tendrils.</p>',
+    ),
+    'a massive fungus shaped like a bloated bladder with long tendrils',
+  );
+  // Lore that mentions bodies and wings is not a description.
+  assert.equal(
+    pickAppearance('Imperial dragons leave serpentine skeletons and wings behind upon death.'),
+    '',
+  );
+  assert.equal(pickAppearance('@Embed[Compendium.dnd5e.content24.JournalEntry.x]'), '');
+  const daggerheart = getCreatureProfile({
+    name: 'Chaos Skull',
+    system: 'daggerheart',
+    data: { description: 'A floating humanoid skull animated by scintillating magic.' },
+  });
+  assert.equal(daggerheart.appearance, 'A floating humanoid skull animated by scintillating magic');
+});
+
+test('the appearance goes into the prompt as what the image shows', () => {
+  const phrase = buildTopDownPrompt({
+    name: 'Skitterling',
+    appearance: 'A giant spider-like creature.',
+  });
+  assert.match(phrase, /The reference image shows a giant spider-like creature\. /);
+  const sentence = buildTopDownPrompt({
+    name: 'Emriss',
+    appearance: 'Girtablilus are scorpion folk',
+  });
+  assert.match(sentence, /What it looks like: Girtablilus are scorpion folk\. /);
+  assert.doesNotMatch(buildTopDownPrompt({ name: 'Eagle' }), /The reference image shows|What it looks like/);
+});
+
+test('captions are cleaned to one short line', () => {
+  assert.equal(
+    cleanCaption('  "A giant spider\n with eight legs."  '),
+    'A giant spider with eight legs',
+  );
+  assert.equal(cleanCaption(Array(40).fill('word').join(' ')).split(' ').length, 25);
 });

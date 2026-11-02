@@ -399,5 +399,11 @@
   "PF2ETokener.HUD.ShowRegular": "Show the regular token",
   "PF2ETokener.HUD.ShowTopDown": "Show the top-down token",
   "PF2ETokener.Notifications.ViewToggleFailed": "Tokener: failed to switch the token look.",
-  "PF2ETokener.Creator.TopDownStream": "Downloading the top-down model (~5.7 GB). This browser has no room to keep it, so it downloads each session..."
+  "PF2ETokener.Creator.TopDownStream": "Downloading the top-down model (~5.7 GB). This browser has no room to keep it, so it downloads each session...",
+  "PF2ETokener.Creator.TopDownLooks": "Looks like",
+  "PF2ETokener.Creator.TopDownLooksPlaceholder": "e.g. a giant spider with a goblin on its back (left empty: described from the image)",
+  "PF2ETokener.Creator.TopDownDescribeTooltip": "Describe the creature from the image (AI, ~1.4 GB download on first use).",
+  "PF2ETokener.Creator.TopDownDescribeFailed": "Could not describe the creature from the image: {error}",
+  "PF2ETokener.Creator.TopDownCaptionDownload": "Downloading the image describer (~1.4 GB): {percent}%",
+  "PF2ETokener.Creator.TopDownCaption": "Looking at the creature..."
 }

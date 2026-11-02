@@ -89,10 +89,12 @@ import {
   updateKeyframeAt,
 } from './token-animation.js';
 import { fillLasso } from './region-motion.js';
+import { describeCreature } from './creature-caption.js';
 import {
   checkTopDownSupport,
   describeTopDownSupport,
   generateTopDown,
+  getActorAppearance,
   getTopDownPrompt,
   isTopDownEnabled,
   registerTopDownSetting,
@@ -616,6 +618,9 @@ function prepareCreatorContext(app) {
     })),
     aiTools: areAiToolsEnabled(),
     topDown: isTopDownEnabled(),
+    topDownLooks: isTopDownEnabled()
+      ? (app._topDownLooks ??= getActorAppearance(app.tokenDocument))
+      : '',
     backgroundModes: BACKGROUND_MODES.filter(
       (mode) => !AI_BACKGROUND_MODES.includes(mode) || areAiToolsEnabled(),
     ).map((mode) => ({
@@ -936,6 +941,15 @@ function prepareCreatorContext(app) {
         'Frame the art and choose what pops out automatically, then pick from a few alternatives.',
       ),
       topDown: localize('Creator.TopDown', 'Top-down'),
+      topDownLooks: localize('Creator.TopDownLooks', 'Looks like'),
+      topDownLooksPlaceholder: localize(
+        'Creator.TopDownLooksPlaceholder',
+        'e.g. a giant spider with a goblin on its back (left empty: described from the image)',
+      ),
+      topDownDescribeTooltip: localize(
+        'Creator.TopDownDescribeTooltip',
+        'Describe the creature from the image (AI, ~1.4 GB download on first use).',
+      ),
       topDownTooltip: localize(
         'Creator.TopDownTooltip',
         'Redraw the token image as seen from directly above (AI, runs on your graphics card), then pick one of three versions. The portrait keeps the regular image.',
@@ -1286,6 +1300,10 @@ export function handleCreatorInput(app, event) {
     setCreatorZoom(app, Number(target.value));
     return;
   }
+  if (name === 'topDownLooks') {
+    app._topDownLooks = target.value;
+    return;
+  }
   if (name === 'brushSize') {
     setBrushSize(app, Number(target.value));
     return;
@@ -1485,6 +1503,9 @@ async function handleCreatorClick(app, event) {
       return;
     case 'top-down':
       await runTopDown(app);
+      return;
+    case 'top-down-describe':
+      await describeTopDownCreature(app);
       return;
     case 'top-down-pick':
       await applyTopDownOption(app, Number(button.dataset.topDownIndex));
@@ -4948,12 +4969,17 @@ async function runTopDown(app) {
   }
   setCreatorBusy(app, true);
   try {
+    // What the creature looks like: the field (filled from the actor's text when it has one), or
+    // else a description of the image, which turns odd creatures into the right kind of thing.
+    let appearance = String(app._topDownLooks ?? '').trim();
+    if (!appearance) appearance = await describeTopDownImage(app, regular.canvas);
     // New seeds on every press, so trying again gives new versions.
     app._topDownRuns = (app._topDownRuns ?? 0) + 1;
     const seeds = TOP_DOWN_SEEDS.map(
       (seed) => seed + (app._topDownRuns - 1) * TOP_DOWN_SEEDS.length,
     );
-    const images = await generateTopDown(regular.canvas, getTopDownPrompt(app.tokenDocument), {
+    const prompt = getTopDownPrompt(app.tokenDocument, { appearance });
+    const images = await generateTopDown(regular.canvas, prompt, {
       seeds,
       createCanvas,
       onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
@@ -4985,7 +5011,62 @@ async function runTopDown(app) {
   }
 }
 
+/** Fills the Looks like field from the image, on request. */
+async function describeTopDownCreature(app) {
+  if (app.editTarget === 'portrait') setEditTarget(app, 'token');
+  const source = app._topDown?.regular ?? app.workspaces.token.source;
+  if (!source?.canvas) {
+    setCreatorStatus(app, localize('Creator.NoImage', 'Choose an image first.'), true);
+    return;
+  }
+  const support = await checkTopDownSupport();
+  if (!support.ok) {
+    setCreatorStatus(app, describeTopDownSupport(support.reason), true);
+    return;
+  }
+  setCreatorBusy(app, true);
+  try {
+    if (await describeTopDownImage(app, source.canvas)) setCreatorStatus(app, '');
+  } finally {
+    setCreatorBusy(app, false);
+  }
+}
+
+/**
+ * Describes the creature in `canvas` into the Looks like field and returns the description, or
+ * '' when the describer fails (top-down then works from the name alone).
+ */
+async function describeTopDownImage(app, canvas) {
+  try {
+    const looks = await describeCreature(canvas, {
+      createCanvas,
+      onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
+    });
+    app._topDownLooks = looks;
+    const input = getCreatorRoot(app)?.querySelector('input[name="topDownLooks"]');
+    if (input) input.value = looks;
+    return looks;
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Could not describe the creature`, error);
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.TopDownDescribeFailed',
+        'Could not describe the creature from the image: {error}',
+      ).replace('{error}', describeError(error)),
+      true,
+    );
+    return '';
+  }
+}
+
 function describeTopDownStatus({ phase, percent, done, total }) {
+  if (phase === 'caption-download')
+    return localize(
+      'Creator.TopDownCaptionDownload',
+      'Downloading the image describer (~1.4 GB): {percent}%',
+    ).replace('{percent}', String(percent));
+  if (phase === 'caption') return localize('Creator.TopDownCaption', 'Looking at the creature...');
   if (phase === 'download')
     return localize(
       'Creator.TopDownDownload',

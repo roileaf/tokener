@@ -2960,6 +2960,22 @@
   margin-top: 6px;
 }
 
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-looks {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-looks label {
+  white-space: nowrap;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-looks input {
+  width: 100%;
+  min-width: 0;
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-compose-options,
 .pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-options {
   display: none;

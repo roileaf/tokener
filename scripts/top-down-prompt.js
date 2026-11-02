@@ -77,37 +77,73 @@ const plain = (html) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-/** The first sentence of `text`, if it is short enough to describe the creature. */
-function firstSentence(text) {
-  const sentence = plain(text).split(/(?<=[.!?])\s/)[0] ?? '';
-  return sentence.length >= 8 && sentence.length <= 160 ? sentence : '';
+const sentencesOf = (text) =>
+  plain(text)
+    .replace(/@\w+\[[^\]]*\](\{[^}]*\})?/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 12 && sentence.length <= 200);
+
+// Words that say how a creature looks, as opposed to lore, habits or rules.
+const LOOK_WORDS =
+  /\b(body|bodies|bodied|wings?|winged|scales?|scaled|scaly|fur|furred|feathers?|tentacles?|tendrils?|legs?|legged|limbs?|eyes?|skin|shell|carapace|horns?|horned|claws?|tails?|heads?|headed|tall|massive|enormous|giant|tiny|bulbous|floating|float|made of|covered|shaped|resembl\w*|looks? like|humanoid|serpentine|insect\w*|fungus|fungal|plant|skeleton\w*|skulls?|stone|metal\w*|armou?r\w*|robes?|cloak\w*|mouth|teeth|fangs|maw)\b/gi;
+
+// Only sentences that say what the creature looks like count: lore mentions bodies and wings too.
+const DESCRIBES =
+  /\b(resembl\w*|looks? like|shaped like|appear\w* (?:as|like)|bodies of|body of|the size of|covered in|sport|in the form of)\b/i;
+
+/**
+ * The sentence of an actor's text that best says what the creature looks like, as a phrase, or
+ * '' when none does (most bestiary text is lore).
+ */
+export function pickAppearance(text) {
+  let best = '';
+  let bestScore = 1;
+  for (const sentence of sentencesOf(text)) {
+    if (!DESCRIBES.test(sentence)) continue;
+    const score = new Set(sentence.toLowerCase().match(LOOK_WORDS) ?? []).size;
+    if (score > bestScore) {
+      best = sentence;
+      bestScore = score;
+    }
+  }
+  return toPhrase(best);
+}
+
+/** "The drakauthix is a massive fungus that floats." -> "a massive fungus that floats". */
+function toPhrase(sentence) {
+  const text = sentence.replace(/[.!?]+$/, '').trim();
+  const match = text.match(/^(?:the |an? )?(?:[\w'’-]+ ){0,4}?(?:is|are) ((?:an?|one|some) .+)$/i);
+  return match ? match[1] : text;
 }
 
 /**
  * What the prompt needs to know about an actor, from its system's data:
- * `{ name, size, kinds, description }`. Unknown fields stay null or empty.
+ * `{ name, size, kinds, appearance }`. Unknown fields stay null or empty.
  */
 export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
   const d = data ?? {};
   let size = null;
   let kinds = [];
-  let description = '';
+  let appearance = '';
   switch (system) {
     case 'pf2e':
     case 'sf2e':
       size = sizeWord(d.traits?.size?.value);
       kinds = d.traits?.value ?? [];
-      description = firstSentence(d.details?.blurb);
+      appearance = pickAppearance(d.details?.publicNotes);
       break;
     case 'dnd5e':
       size = sizeWord(d.traits?.size);
       kinds = [d.details?.type?.value, d.details?.type?.subtype, d.details?.type?.custom].filter(
         Boolean,
       );
+      appearance = pickAppearance(d.details?.biography?.value);
       break;
     case 'daggerheart':
       size = sizeWord(d.size);
-      description = firstSentence(d.description);
+      // Short descriptions of how the adversary looks: taken whole.
+      appearance = toPhrase(sentencesOf(d.description)[0] ?? '');
       break;
     case 'draw-steel': {
       const squares = Number(d.combat?.size?.value) || 1;
@@ -126,7 +162,7 @@ export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
       kinds = [d.details?.taxonomy?.category]
         .filter(Boolean)
         .map((kind) => kind.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase());
-      description = firstSentence(d.details?.taxonomy?.description);
+      appearance = pickAppearance(d.details?.taxonomy?.description);
       break;
     }
     default:
@@ -143,7 +179,7 @@ export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
     kinds: [...new Set(kinds.map((kind) => String(kind).toLowerCase()))].filter(
       (kind) => /^[a-z][a-z -]*$/.test(kind) && !NOT_LOOKS.has(kind),
     ),
-    description,
+    appearance,
   };
 }
 
@@ -154,12 +190,27 @@ const LOOK =
   'Keep the same colours, markings, clothing, equipment and design. Flat, even lighting with no shadows at all: ' +
   'no cast shadow, no drop shadow, nothing on the ground. Isolated on a pure solid white background.';
 
-/** The top-down editing prompt for a creature profile. */
-export function buildTopDownPrompt({ name, size, kinds = [], description = '' }) {
+/** A phrase ("a giant spider") as what the image shows; a sentence from a bestiary as it is. */
+function describeLooks(looks) {
+  if (!looks) return '';
+  if (/^(an?|the|one|some|two|three|four|several|many) /i.test(looks))
+    return `The reference image shows ${looks[0].toLowerCase()}${looks.slice(1)}.`;
+  return `What it looks like: ${looks}.`;
+}
+
+/**
+ * The top-down editing prompt for a creature profile. `appearance` is a short phrase saying what
+ * the creature is ("a large spider-like creature"), from the actor's text, the image or the user:
+ * it fixed most creatures the model otherwise turned into a generic figure.
+ */
+export function buildTopDownPrompt({ name, size, kinds = [], appearance = '' }) {
   const kindText = kinds.length ? ` (${kinds.slice(0, 4).join(', ')})` : '';
-  const what = `${name || 'creature'}${kindText}${description ? `: ${description.replace(/\.$/, '')}` : ''}`;
+  const looks = String(appearance ?? '')
+    .trim()
+    .replace(/[.!?]+$/, '');
   return [
-    `Seen from directly above, looking straight down at the back of this exact creature, ${what}, as a figure on a tabletop battle map.`,
+    `Seen from directly above, looking straight down at the back of this exact creature, ${name || 'creature'}${kindText}, as a figure on a tabletop battle map.`,
+    describeLooks(looks),
     'Show only the one main creature of the reference image, and nothing of its surroundings.',
     'We see the top of its head and its back. Its head points to the top of the image and the rest of its body extends behind it towards the bottom of the image.',
     'Keep its body exactly as the reference image shows it, and keep everything it is holding exactly as in the reference.',

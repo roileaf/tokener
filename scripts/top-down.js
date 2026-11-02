@@ -122,16 +122,31 @@ export function describeTopDownSupport(reason) {
   );
 }
 
-/** The prompt for a token's creature, from its actor's data in whichever system is running. */
-export function getTopDownPrompt(tokenDocument, { systemId = globalThis.game?.system?.id } = {}) {
+/**
+ * The prompt for a token's creature, from its actor's data in whichever system is running.
+ * `appearance` (what the creature looks like) replaces the actor's own description when given.
+ */
+export function getTopDownPrompt(
+  tokenDocument,
+  { appearance, systemId = globalThis.game?.system?.id } = {},
+) {
+  const profile = getTopDownProfile(tokenDocument, { systemId });
+  return buildTopDownPrompt({ ...profile, appearance: appearance ?? profile.appearance });
+}
+
+/** What the actor's own text says the creature looks like ('' for most creatures). */
+export function getActorAppearance(tokenDocument, { systemId = globalThis.game?.system?.id } = {}) {
+  return getTopDownProfile(tokenDocument, { systemId }).appearance;
+}
+
+function getTopDownProfile(tokenDocument, { systemId }) {
   const actor = tokenDocument?.actor ?? null;
-  const profile = getCreatureProfile({
+  return getCreatureProfile({
     name: actor?.name ?? tokenDocument?.name ?? '',
     system: systemId,
     data: actor?.system,
     footprint: [Number(tokenDocument?.width) || 1, Number(tokenDocument?.height) || 1],
   });
-  return buildTopDownPrompt(profile);
 }
 
 /**
