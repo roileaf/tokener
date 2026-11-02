@@ -5,7 +5,8 @@ import {
   revertLastTokenerChange,
   revertTokenerChangeToOriginal,
 } from './actions.js';
-import { buildLookUpdate, getShownLook, listLooks } from './art-views.js';
+import { buildFlipFacingUpdate, buildLookUpdate, getShownLook, listLooks } from './art-views.js';
+import { getDefaultTopDownFacing } from './top-down.js';
 import { canUseTokenHudDocument, isTokenHudButtonEnabled } from './permissions.js';
 import {
   openRevertHistoryDialog,
@@ -94,7 +95,11 @@ function createLookPalette(button, tokenDocument) {
     item.className = 'pf2e-tokener-look';
     item.classList.toggle('is-active', id === shown);
     item.dataset.look = id;
-    item.dataset.tooltip = localize(`HUD.Look.${id}`, id);
+    const name = localize(`HUD.Look.${id}`, id);
+    item.dataset.tooltip =
+      id === 'regular'
+        ? name
+        : `${name} — ${localize('HUD.LookFlipHint', 'right-click if it walks backwards')}`;
     item.setAttribute('aria-label', item.dataset.tooltip);
     const media = /\.(webm|mp4)$/i.test(art.src)
       ? Object.assign(document.createElement('video'), { muted: true, autoplay: true, loop: true })
@@ -109,9 +114,31 @@ function createLookPalette(button, tokenDocument) {
       await switchLook(tokenDocument, id);
       syncLookButton(button, tokenDocument);
     });
+    // A look made facing the other way than recorded walks backwards: turn it around.
+    item.addEventListener('contextmenu', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (id === 'regular') return;
+      palette.remove();
+      await flipLookFacing(tokenDocument, id);
+    });
     palette.append(item);
   }
   return palette;
+}
+
+/** Turns look `id` around on this token and every other controlled token that has it. */
+async function flipLookFacing(tokenDocument, id) {
+  const controlled = (globalThis.canvas?.tokens?.controlled ?? []).map((token) => token.document);
+  const updates = [...new Set([tokenDocument, ...controlled])]
+    .filter((token) => token?.isOwner !== false && canUseTokener(token))
+    .map((token) => [token, buildFlipFacingUpdate(token, id, getDefaultTopDownFacing(token))])
+    .filter(([, update]) => update);
+  try {
+    await Promise.all(updates.map(([token, update]) => token.update(update)));
+  } catch (error) {
+    console.error('pf2e-tokener | Failed to turn the token look around', error);
+  }
 }
 
 /** Switches this token, and every other controlled token that has look `id`, to it. */

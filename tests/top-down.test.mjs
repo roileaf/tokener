@@ -5,6 +5,7 @@ import {
   ART_VIEWS_FLAG_PATH,
   buildArtToggleUpdate,
   buildArtViewsUpdate,
+  buildFlipFacingUpdate,
   buildLookUpdate,
   getMovementRotation,
   getShownLook,
@@ -532,4 +533,24 @@ test('top-down looks turn with Foundry v14 movement, and with plain updates on o
   } finally {
     globalThis.game = previousGame;
   }
+});
+
+test('a look that walks backwards is turned around', () => {
+  const showing = {
+    ...token({ src: 'top.webp' }, { regular: look('ring.webp'), topDown: look('top.webp') }),
+    rotation: 270,
+  };
+  // No facing recorded: the guess (back here) flips to front, and the shown token turns now.
+  const flipped = buildFlipFacingUpdate(showing, 'topDown', 'back');
+  assert.equal(flipped[ART_VIEWS_FLAG_PATH].topDown.facing, 'front');
+  assert.equal(flipped.rotation, 90);
+  const recorded = token(
+    { src: 'ring.webp' },
+    { regular: look('ring.webp'), topDown: { ...look('top.webp'), facing: 'front' } },
+  );
+  const back = buildFlipFacingUpdate(recorded, 'topDown');
+  assert.equal(back[ART_VIEWS_FLAG_PATH].topDown.facing, 'back');
+  assert.equal(back.rotation, undefined); // not shown: nothing to turn now
+  assert.equal(buildFlipFacingUpdate(recorded, 'regular'), null);
+  assert.equal(buildFlipFacingUpdate(recorded, 'casting'), null);
 });

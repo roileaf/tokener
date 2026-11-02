@@ -429,5 +429,6 @@
   "PF2ETokener.Settings.TopDownFaceMovement.Hint": "Tokens showing a top-down look turn to face the direction they move in. Regular looks and tokens with locked rotation are left alone.",
   "PF2ETokener.Creator.TopDownHighDetail": "High detail",
   "PF2ETokener.Creator.TopDownHighDetailTooltip": "Draws at 640 px instead of 512: finer hair, scales and gear, about twice as slow and needing more graphics memory. On by default for Large and bigger creatures.",
-  "PF2ETokener.Creator.TopDownFailedHighDetail": "Top-down failed: {error}. The graphics card may not have enough memory; try again with High detail off."
+  "PF2ETokener.Creator.TopDownFailedHighDetail": "Top-down failed: {error}. The graphics card may not have enough memory; try again with High detail off.",
+  "PF2ETokener.HUD.LookFlipHint": "right-click if it walks backwards"
 }

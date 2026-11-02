@@ -158,6 +158,26 @@ export function getRotationAlong(points, facing) {
   return null;
 }
 
+/**
+ * The update that turns look `id` around (front <-> back) for a token that walks backwards in it:
+ * its recorded facing (or `fallback`, the guess used while none is recorded) flips, and a token
+ * showing that look turns half a turn now. Null for the regular look or a look it does not have.
+ */
+export function buildFlipFacingUpdate(documentLike, id, fallback = 'front') {
+  const views = readArtViews(documentLike);
+  if (!views?.[id] || id === 'regular') return null;
+  const current = FACING_HEADINGS[views[id].facing] ? views[id].facing : fallback;
+  const update = {
+    [ART_VIEWS_FLAG_PATH]: storedViews({
+      ...views,
+      [id]: { ...views[id], facing: current === 'back' ? 'front' : 'back' },
+    }),
+  };
+  if (getShownLook(documentLike, views) === id)
+    update.rotation = (Number(readPath(documentLike, 'rotation') ?? 0) + 180) % 360;
+  return update;
+}
+
 /** The facing recorded for the shown look, or null (a regular look, or none recorded). */
 export function getLookFacing(documentLike) {
   const views = readArtViews(documentLike);
