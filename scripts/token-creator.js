@@ -528,7 +528,8 @@ export function getTokenCreatorApplicationClass() {
 
     /** The workspace being edited: the portrait's own one when separate, else the token's. */
     get workspace() {
-      if (this.editTarget === 'topdown') return this.workspaces.topDown;
+      if (this.editTarget === 'topdown')
+        return (this.workspaces.topDown ??= createTopDownWorkspace());
       return this.editTarget === 'portrait' && this.workspaces.portrait
         ? this.workspaces.portrait
         : this.workspaces.token;
@@ -1884,6 +1885,8 @@ function applyLoadedProject(app, { project, token, portrait, regions }) {
     portrait: portrait
       ? workspace(portrait, portrait.canvas === token.canvas ? tokenWorkspace.source : null)
       : null,
+    // Projects do not keep top-down tokens: they are made again from the portrait.
+    topDown: createTopDownWorkspace(),
   };
   app.editTarget = 'token';
   clearTopDown(app);

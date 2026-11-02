@@ -455,6 +455,9 @@ test('loading a project restores workspaces, views, options, masks, animation an
       },
     });
     assert.equal(loaded, true);
+    // The Top-down tab keeps an (empty) image slot, so switching to it never breaks.
+    assert.equal(app.workspaces.topDown?.topDown, true);
+    assert.equal(app.workspaces.topDown.source, null);
     const token = app.workspaces.token;
     assert.equal(token.source.path, 'worlds/w/tokener/dragon-source.png');
     assert.equal(token.source.canvas.width, 40);
