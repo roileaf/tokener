@@ -218,6 +218,14 @@ export function loadTransformers() {
       transformers.env.allowLocalModels = false;
       // 4.x throws when asked to use Cache Storage where it does not exist (plain http).
       transformers.env.useBrowserCache = canCacheModels();
+      // Cache Storage refuses single files of about a gigabyte (the image describer's), which
+      // then download again every session: keep model files on disk in the private file system.
+      if (canCacheModels() && globalThis.navigator?.storage?.getDirectory) {
+        transformers.env.useCustomCache = true;
+        transformers.env.customCache = new ModelFileCache({
+          legacy: () => globalThis.caches.open(transformers.env.cacheKey ?? 'transformers-cache'),
+        });
+      }
       return transformers;
     })
     .catch((error) => {
@@ -225,6 +233,89 @@ export function loadTransformers() {
       throw error;
     });
   return transformersPromise;
+}
+
+/**
+ * A transformers.js cache (the Web Cache API's `match` and `put`) that keeps each downloaded
+ * file in the Origin Private File System, which holds files of any size. A file counts once it
+ * is complete (a marker is written after it), and files cached before, in Cache Storage
+ * (`legacy`), are still found there. A file the site has no room for is simply not kept.
+ */
+export class ModelFileCache {
+  constructor({
+    legacy = null,
+    storage = globalThis.navigator?.storage,
+    folderName = `${MODULE_ID}-models`,
+  } = {}) {
+    this.legacy = legacy;
+    this.storage = storage;
+    this.folderName = folderName;
+    this.folderPromise = null;
+  }
+
+  async match(key) {
+    try {
+      const folder = await this.#folder();
+      const name = await cacheFileName(key);
+      const marker = await (await folder.getFileHandle(`${name}.json`)).getFile();
+      const { type } = JSON.parse(await marker.text());
+      const file = await (await folder.getFileHandle(name)).getFile();
+      return new Response(file, {
+        headers: {
+          'content-type': type || 'application/octet-stream',
+          'content-length': String(file.size),
+        },
+      });
+    } catch {
+      try {
+        return (await (await this.legacy?.())?.match(key)) ?? undefined;
+      } catch {
+        return undefined;
+      }
+    }
+  }
+
+  async put(key, response) {
+    let folder = null;
+    let name = null;
+    try {
+      const size = Number(response.headers.get('content-length')) || 0;
+      const { quota = 0, usage = 0 } = (await this.storage?.estimate?.()) ?? {};
+      if (size && quota - usage < size * 1.05) return;
+      folder = await this.#folder();
+      name = await cacheFileName(key);
+      const writable = await (await folder.getFileHandle(name, { create: true })).createWritable();
+      await response.body.pipeTo(writable);
+      const marker = await (
+        await folder.getFileHandle(`${name}.json`, { create: true })
+      ).createWritable();
+      await marker.write(
+        JSON.stringify({ key: String(key), type: response.headers.get('content-type') }),
+      );
+      await marker.close();
+    } catch (error) {
+      console.warn(`${MODULE_ID} | Could not keep a model file for next time`, error);
+      if (folder && name) await folder.removeEntry(name).catch(() => {});
+    }
+  }
+
+  #folder() {
+    this.folderPromise ??= this.storage
+      .getDirectory()
+      .then((root) => root.getDirectoryHandle(this.folderName, { create: true }))
+      .catch((error) => {
+        this.folderPromise = null;
+        throw error;
+      });
+    return this.folderPromise;
+  }
+}
+
+/** A file name for a cache key (a URL): its SHA-256, so any length or character works. */
+export async function cacheFileName(key) {
+  const bytes = new TextEncoder().encode(String(key));
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /** Browsers only expose Cache Storage on https:// or localhost, so models re-download elsewhere. */
