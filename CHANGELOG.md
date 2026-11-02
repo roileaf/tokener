@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.1 - 2026-11-02
+
+### Fixed
+
+- Switching an animated token back to its regular look from the Token HUD no longer fails with "ring: subject: texture: does not have a valid file extension".
+- Switching between the regular look (with its dynamic ring) and a top-down look redraws the token, so the top-down look no longer shows far too large until the scene is reloaded.
+
 ## 3.0.0 - 2026-11-02
 
 ### Added
