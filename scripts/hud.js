@@ -20,11 +20,14 @@ export function renderTokenHud(app, html) {
   const root = normalizeHudElement(html);
   const tokenDocument = getHudTokenDocument(app);
   if (!root) return;
-  root.querySelectorAll?.('.pf2e-tokener-button').forEach((element) => element.remove());
+  root
+    .querySelectorAll?.('.pf2e-tokener-button, .pf2e-tokener-look-control')
+    .forEach((element) => element.remove());
   if (!tokenDocument || !isTokenHudButtonEnabled() || !canUseTokener(tokenDocument)) return;
 
   const target = root.querySelector('.col.right') ?? root.querySelector('.right') ?? root;
-  const button = document.createElement('div');
+  // A button like Foundry's own HUD controls, so its styles size and centre the icon.
+  const button = createHudButton();
   setHudButtonRevertState(button, tokenDocument);
   button.dataset.action = 'pf2e-tokener';
   button.innerHTML = '<i class="fas fa-images"></i>';
@@ -50,7 +53,10 @@ export function renderTokenHud(app, html) {
  */
 function createLookPickerButton(tokenDocument) {
   if (listLooks(tokenDocument).length < 2) return null;
-  const button = document.createElement('div');
+  // The strip sits next to the button, not inside it (no buttons inside a button).
+  const control = document.createElement('div');
+  control.className = 'pf2e-tokener-look-control';
+  const button = createHudButton();
   button.className = 'control-icon pf2e-tokener-button pf2e-tokener-look-button';
   button.dataset.action = 'pf2e-tokener-looks';
   button.dataset.tooltip = localize('HUD.Looks', 'Token looks');
@@ -59,11 +65,17 @@ function createLookPickerButton(tokenDocument) {
   button.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (event.target.closest('.pf2e-tokener-look-palette')) return;
-    const open = button.querySelector('.pf2e-tokener-look-palette');
+    const open = control.querySelector('.pf2e-tokener-look-palette');
     if (open) open.remove();
-    else button.append(createLookPalette(button, tokenDocument));
+    else control.append(createLookPalette(button, tokenDocument));
   });
+  control.append(button);
+  return control;
+}
+
+function createHudButton() {
+  const button = document.createElement('button');
+  button.type = 'button';
   return button;
 }
 
