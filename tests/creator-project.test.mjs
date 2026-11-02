@@ -927,3 +927,28 @@ test('flip is unavailable while click-to-select is busy or without an image', as
   app.busy = true;
   assert.equal(canFlip(app), false);
 });
+
+test('the Top-down tab edits its own animation and the token keeps its own', async () => {
+  const { handleCreatorChange, normalizeTokenCreatorOptions } =
+    await import('../scripts/token-creator.js');
+  await withCanvasDocument(async () => {
+    const app = createFakeCreatorApp(normalizeTokenCreatorOptions);
+    const pin = { id: 'p1', x: 10, y: 10, keyframes: [] };
+    app.animation = { ...app.animation, pins: [pin] };
+    app.selectedPinIds = ['p1'];
+    app.effectRegions = { r1: 'region' };
+    const change = (value) => handleCreatorChange(app, { target: { name: 'editTarget', value } });
+    await change('topdown');
+    assert.equal(app.editTarget, 'topdown');
+    assert.deepEqual(app.animation.pins, [], 'a stance starts with no pins');
+    assert.equal(app.animation.duration, 2, 'and the same loop length');
+    assert.deepEqual(app.effectRegions, {});
+    await change('token');
+    assert.deepEqual(app.animation.pins, [pin], 'the token gets its own pins back');
+    assert.deepEqual(app.selectedPinIds, ['p1']);
+    assert.deepEqual(app.effectRegions, { r1: 'region' });
+    // The portrait shares the token's animation: no swap there.
+    await change('portrait');
+    assert.deepEqual(app.animation.pins, [pin]);
+  });
+});

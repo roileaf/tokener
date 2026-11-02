@@ -34,6 +34,14 @@ export async function saveTopDownStances(key, stances, { images = true } = {}) {
       view: entry.view ?? null,
       label: entry.label ?? '',
       pose: entry.pose ?? '',
+      // Its animation: pins and effects, and the regions painted for them (as PNG data URLs).
+      animation: entry.animationState?.animation ?? null,
+      regions: Object.fromEntries(
+        Object.entries(entry.animationState?.effectRegions ?? {}).map(([region, canvas]) => [
+          region,
+          canvas.toDataURL('image/png'),
+        ]),
+      ),
     };
     if (!images) continue;
     for (const [index, canvas] of entry.images.entries()) {
@@ -67,7 +75,15 @@ export async function loadTopDownStances(key, createCanvas) {
         bitmap.close?.();
         images.push(canvas);
       }
-      stances[stance] = { ...entry, images };
+      const regions = {};
+      for (const [region, url] of Object.entries(entry.regions ?? {})) {
+        const bitmap = await createImageBitmap(await (await fetch(url)).blob());
+        const canvas = createCanvas(bitmap.width, bitmap.height);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+        bitmap.close?.();
+        regions[region] = canvas;
+      }
+      stances[stance] = { ...entry, images, regions };
     }
     return Object.keys(stances).length ? stances : null;
   } catch {

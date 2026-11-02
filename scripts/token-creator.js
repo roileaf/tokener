@@ -1611,6 +1611,7 @@ async function handleCreatorClick(app, event) {
       return;
     case 'animation-auto':
       await runAutoAnimate(app);
+      if (app.editTarget === 'topdown') void keepTopDown(app, { images: false });
       return;
     case 'mask-paint':
     case 'mask-select':
@@ -2328,12 +2329,12 @@ function renderCreatorPreview(app) {
   else if (tokenMode) drawPreviewToken(tokenContext, app, size);
   else if (app._topDownPicking) drawTopDownPicker(tokenContext, app, size);
   else {
-    drawTopDownToken(tokenContext, app, size);
+    drawTopDownPreview(tokenContext, app, size);
     drawRepaintOverlay(tokenContext, app, size);
   }
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
   if (tokenMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
-  if (tokenMode) drawEffectRegionOverlay(tokenContext, app, size);
+  if (isAnimatedTarget(app)) drawEffectRegionOverlay(tokenContext, app, size);
 
   const viewport = getViewport(app, size);
   // The picker shows the whole picture, not a framed cut-out.
@@ -2343,7 +2344,7 @@ function renderCreatorPreview(app) {
   if (isFramed) drawViewContext(context, app, viewport, size);
   context.drawImage(token, viewport.x, viewport.y, viewport.size, viewport.size);
   if (isFramed) drawTokenBounds(context, viewport);
-  if (tokenMode) drawPins(context, app, viewport, size);
+  if (isAnimatedTarget(app)) drawPins(context, app, viewport, size);
   drawBrushCursor(context, app, viewport);
   drawLassoOutline(context, app, viewport);
 }
@@ -2473,7 +2474,20 @@ function syncFlipControls(app) {
 }
 
 function setEditTarget(app, target) {
-  app.editTarget = ['portrait', 'topdown'].includes(target) ? target : 'token';
+  const next = ['portrait', 'topdown'].includes(target) ? target : 'token';
+  // The token's animation and each top-down stance's are separate (their pins sit on different
+  // images): the one being left is put away and the other's brought back.
+  if ((app.editTarget === 'topdown') !== (next === 'topdown')) {
+    stopAnimationPlayback(app);
+    if (app.editTarget === 'topdown') {
+      storeTopDownAnimation(app);
+      loadAnimationState(app, app._tokenAnimationState);
+    } else {
+      app._tokenAnimationState = takeAnimationState(app);
+      loadAnimationState(app, getTopDownEntry(app)?.animationState);
+    }
+  }
+  app.editTarget = next;
   syncFlipControls(app);
   if (app.editTarget !== 'token') stopAnimationPlayback(app);
   if (app.editTarget !== 'token' && !isCleanupTool(app.maskTool) && app.maskTool !== 'repaint')
@@ -2650,7 +2664,12 @@ function getPointerMode(app, event) {
 
 /** Pins and playback work on the token art only, and only where the loop can be encoded. */
 function canEditPins(app) {
-  return Boolean(app.cutout && app.editTarget === 'token' && app.animationSupported);
+  return Boolean(app.cutout && isAnimatedTarget(app) && app.animationSupported);
+}
+
+/** The token and each top-down stance animate (each with its own pins and effects). */
+function isAnimatedTarget(app) {
+  return app.editTarget === 'token' || (app.editTarget === 'topdown' && !app._topDownPicking);
 }
 
 /** Asks the browser once whether it can encode the loop; until it answers, animation is off. */
@@ -3671,8 +3690,9 @@ async function runAutoAnimate(app) {
     alpha,
     cutoutWidth: cutout.width,
     cutoutHeight: cutout.height,
-    view: app.view,
-    clipRadius: getComposeClipRadius(app),
+    view: getActiveView(app),
+    // A top-down token has no frame: the whole square is its own.
+    clipRadius: app.editTarget === 'topdown' ? 1 : getComposeClipRadius(app),
     gridSize: DEFAULT_COMPOSE_GRID,
     mode: app.animation.mode,
   });
@@ -3829,7 +3849,7 @@ function stopAnimationPlayback(app) {
  * under Move.
  */
 function shouldAnimatePreview(app) {
-  if (app.editTarget !== 'token' || !app.cutout || !hasMotion(app.animation)) return false;
+  if (!isAnimatedTarget(app) || !app.cutout || !hasMotion(app.animation)) return false;
   return shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode });
 }
 
@@ -5208,6 +5228,9 @@ async function runTopDown(app) {
       view: { zoom: 1, offsetX: 0, offsetY: 0 },
     };
     setTopDownStance(app, stance);
+    // New images: the stance's animation starts over (its pins sat on the old ones).
+    app._topDownStances[stance].animationState = null;
+    if (app.editTarget === 'topdown') loadAnimationState(app, null);
     await applyTopDownOption(app, 0);
     void keepTopDown(app);
     setCreatorStatus(
@@ -5415,6 +5438,7 @@ async function keepTopDown(app, { images = true } = {}) {
   if (!key || !app._topDownStances) return;
   const current = app._topDownStances[getTopDownStance(app)];
   if (current && current.workspace === app.workspaces.topDown) current.view = app.topDownView;
+  storeTopDownAnimation(app);
   try {
     await saveTopDownStances(key, app._topDownStances, { images });
   } catch (error) {
@@ -5446,6 +5470,15 @@ async function restoreTopDown(app) {
       label: entry.label,
       facing: entry.facing ?? undefined,
       pose: entry.pose ?? '',
+      animationState: entry.animation
+        ? {
+            animation: normalizeAnimation(entry.animation),
+            effectRegions: entry.regions ?? {},
+            selectedPinIds: [],
+            selectedEffectId: null,
+            regionTarget: 'effect',
+          }
+        : null,
       images: entry.images,
       applied: entry.applied,
       workspace,
@@ -5460,10 +5493,16 @@ async function restoreTopDown(app) {
   );
   for (const entry of Object.values(stances)) await updateCutout(app, entry.workspace);
   if (app._topDownStances !== stances) return;
+  // Switching stance puts the animation being edited away; the restored ones must win.
+  const restored = Object.fromEntries(
+    Object.entries(stances).map(([stance, entry]) => [stance, entry.animationState]),
+  );
   setTopDownStance(
     app,
     stances[getTopDownStance(app)] ? getTopDownStance(app) : Object.keys(stances)[0],
   );
+  for (const [stance, state] of Object.entries(restored)) stances[stance].animationState = state;
+  if (app.editTarget === 'topdown') loadAnimationState(app, getTopDownEntry(app)?.animationState);
   setCreatorStatus(
     app,
     localize(
@@ -5741,6 +5780,145 @@ function createTopDownWorkspace() {
   return { ...createWorkspace(), topDown: true };
 }
 
+/** The current stance's look, if it has been made. */
+function getTopDownEntry(app) {
+  return app._topDownStances?.[getTopDownStance(app)] ?? null;
+}
+
+const ANIMATION_STATE_KEYS = Object.freeze([
+  'animation',
+  'effectRegions',
+  'selectedPinIds',
+  'selectedEffectId',
+  'regionTarget',
+]);
+
+/** The animation being edited, taken off the creator. */
+function takeAnimationState(app) {
+  return Object.fromEntries(ANIMATION_STATE_KEYS.map((key) => [key, app[key]]));
+}
+
+/** Puts an animation (or, without one, an empty one of the same length) in front for editing. */
+function loadAnimationState(app, state) {
+  const fresh = {
+    animation: resetAnimationForNewSource(app.animation),
+    effectRegions: {},
+    selectedPinIds: [],
+    selectedEffectId: null,
+    regionTarget: 'effect',
+  };
+  for (const key of ANIMATION_STATE_KEYS) app[key] = state ? state[key] : fresh[key];
+  app._regionVersion += 1;
+  app._previewBend = null;
+  clearEffectCaches();
+  syncAnimationControls(app);
+}
+
+/** Keeps the animation being edited with the current stance's look. */
+function storeTopDownAnimation(app) {
+  if (app.editTarget !== 'topdown') return;
+  const entry = getTopDownEntry(app);
+  if (entry) entry.animationState = takeAnimationState(app);
+}
+
+/** The top-down preview: the stance's token, moving when it has an animation, frameless. */
+function drawTopDownPreview(context, app, size) {
+  if (!shouldAnimatePreview(app)) {
+    drawTopDownToken(context, app, size);
+    return;
+  }
+  const regions = app.effectRegions ?? EMPTY_REGIONS;
+  const view = app.topDownView;
+  const key = {
+    animation: app.animation,
+    t: app.animationTime,
+    zoom: view.zoom,
+    offsetX: view.offsetX,
+    offsetY: view.offsetY,
+    cutout: app.cutout,
+    regions,
+    size,
+  };
+  const cached = app._previewBend;
+  const reuse =
+    cached && Object.keys(key).every((name) => cached.key[name] === key[name]) ? cached.bent : null;
+  const bent = renderAnimationFrame({
+    context,
+    size,
+    t: app.animationTime,
+    art: { cutout: app.cutout, regions },
+    view,
+    animation: app.animation,
+    createCanvas,
+    drawFrame: (frameContext, frameBent) =>
+      frameBent
+        ? frameContext.drawImage(frameBent.art, 0, 0, size, size)
+        : drawTopDownToken(frameContext, app, size),
+    bent: reuse,
+    clips: requestClips(app, app.animation.effects),
+  });
+  app._previewBend = { key, bent };
+}
+
+/** A top-down look's animation as an alpha WebM, frameless, or null when it does not move. */
+async function encodeTopDownAnimation(app, look, size) {
+  const state = look.animationState;
+  if (
+    !state ||
+    getAnimatedSavePlan({
+      animation: state.animation,
+      canEncode: app.animationSupported,
+      regions: state.effectRegions,
+    }) !== 'animated'
+  )
+    return null;
+  const animation = structuredClone(state.animation);
+  const cutout = copyCanvas(look.workspace.cutout);
+  const view = { ...look.view };
+  const regions = Object.fromEntries(
+    Object.entries(state.effectRegions ?? {}).map(([key, canvas]) => [key, copyCanvas(canvas)]),
+  );
+  const clips = await loadAllClips(animation.effects);
+  const frameSize = getAnimatedOutputSize(size);
+  const canvas = createCanvas(frameSize, frameSize);
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const still = { cutout, view };
+  const times = getFrameTimes(animation);
+  const frames = [];
+  for (const [index, t] of times.entries()) {
+    setCreatorStatus(app, getEncodingStatus(index, times.length));
+    context.clearRect(0, 0, frameSize, frameSize);
+    renderAnimationFrame({
+      context,
+      size: frameSize,
+      t,
+      art: { cutout, regions },
+      view,
+      animation,
+      createCanvas,
+      drawFrame: (frameContext, bent) =>
+        bent
+          ? frameContext.drawImage(bent.art, 0, 0, frameSize, frameSize)
+          : drawTopDownToken(frameContext, app, frameSize, {
+              workspace: { cutout },
+              view: still.view,
+            }),
+      clips,
+    });
+    frames.push(context.getImageData(0, 0, frameSize, frameSize));
+    if ((index + 1) % ANIMATION_FRAMES_PER_YIELD === 0) await yieldToBrowser();
+  }
+  await yieldToBrowser();
+  return encodeAlphaWebm({
+    frames,
+    width: frameSize,
+    height: frameSize,
+    fps: animation.fps,
+    durationMs: animation.duration * 1000,
+    bitrate: frameSize * frameSize * 8,
+  });
+}
+
 /** The stance being made: the user's pick, As in the picture at first. */
 function getTopDownStance(app) {
   return (app._topDownStance ??= 'asis');
@@ -5753,7 +5931,12 @@ function getTopDownStance(app) {
 function setTopDownStance(app, stance) {
   const leaving = app._topDownStances?.[getTopDownStance(app)];
   if (leaving && leaving.workspace === app.workspaces.topDown) leaving.view = app.topDownView;
+  if (app.editTarget === 'topdown') {
+    stopAnimationPlayback(app);
+    storeTopDownAnimation(app);
+  }
   app._topDownStance = stance;
+  if (app.editTarget === 'topdown') loadAnimationState(app, getTopDownEntry(app)?.animationState);
   const look = app._topDownStances?.[stance];
   app.workspaces.topDown = look?.workspace ?? createTopDownWorkspace();
   app.topDownView = look?.view ?? { zoom: 1, offsetX: 0, offsetY: 0 };
@@ -5789,6 +5972,7 @@ function clearTopDown(app) {
   app._topDownStances = null;
   app.workspaces.topDown = createTopDownWorkspace();
   app.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
+  if (app.editTarget === 'topdown') loadAnimationState(app, null);
   renderTopDownOptions(app);
   syncTopDownStances(app);
   if (app.editTarget === 'topdown') renderCreatorPreview(app);
@@ -5879,6 +6063,26 @@ function syncComposeOptions(app) {
 }
 
 export async function createToken(app, action) {
+  // Saving works on the token's own animation: from the Top-down tab it is put back first (the
+  // stance's animation is kept with its look and saved from there).
+  const savedTarget = app.editTarget;
+  if (savedTarget === 'topdown') {
+    storeTopDownAnimation(app);
+    loadAnimationState(app, app._tokenAnimationState);
+    app.editTarget = 'token';
+  }
+  try {
+    return await createTokenFromTarget(app, action, savedTarget);
+  } finally {
+    if (savedTarget === 'topdown') {
+      app._tokenAnimationState = takeAnimationState(app);
+      app.editTarget = 'topdown';
+      loadAnimationState(app, getTopDownEntry(app)?.animationState);
+    }
+  }
+}
+
+async function createTokenFromTarget(app, action, savedTarget) {
   const tokenWorkspace = app.workspaces.token;
   const portraitWorkspace = app.workspaces.portrait ?? tokenWorkspace;
   if (!tokenWorkspace.cutout) {
@@ -6027,17 +6231,29 @@ export async function createToken(app, action) {
     // Every top-down stance made is saved next to it, frameless; the token gets all the looks,
     // showing the one whose tab (and stance) is open, and the Token HUD switches between them.
     const looks = { regular: candidate };
+    storeTopDownAnimation(app);
     for (const look of getTopDownLooks(app)) {
-      const lookCanvas = createCanvas(size, size);
-      drawTopDownToken(lookCanvas.getContext('2d'), app, size, look);
       const suffix = look.stance === 'asis' ? 'top-down' : `top-down-${look.stance}`;
-      looks[look.look] = buildCreatedTokenCandidate({
-        label,
-        tokenSrc: await uploadCanvas(
+      const moving = await encodeTopDownAnimation(app, look, size);
+      let lookSrc;
+      if (moving) {
+        lookSrc = await uploadBlob(
+          moving,
+          folder,
+          buildCreatedTokenFileName(label, { now, suffix, extension: 'webm' }),
+        );
+      } else {
+        const lookCanvas = createCanvas(size, size);
+        drawTopDownToken(lookCanvas.getContext('2d'), app, size, look);
+        lookSrc = await uploadCanvas(
           lookCanvas,
           folder,
           buildCreatedTokenFileName(label, { now, suffix }),
-        ),
+        );
+      }
+      looks[look.look] = buildCreatedTokenCandidate({
+        label,
+        tokenSrc: lookSrc,
         portraitSrc,
         projectSrc,
         look: look.look,
@@ -6046,7 +6262,7 @@ export async function createToken(app, action) {
     }
     const stance = getTopDownStance(app);
     const shownLook =
-      app.editTarget === 'topdown' ? (stance === 'asis' ? 'topDown' : stance) : 'regular';
+      savedTarget === 'topdown' ? (stance === 'asis' ? 'topDown' : stance) : 'regular';
     const shown = looks[shownLook] ?? candidate;
     if (Object.keys(looks).length > 1)
       shown.otherLooks = Object.fromEntries(

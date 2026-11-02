@@ -97,11 +97,11 @@
               data-tooltip='{{labels.maskSelectTooltip}}'
             ><i class='fas fa-hand-pointer'></i></button>
           {{/if}}
-          <span class='pf2e-tokener-creator-divider' data-token-only></span>
+          <span class='pf2e-tokener-creator-divider' data-hide-portrait></span>
           <button
             type='button'
             class='pf2e-tokener-creator-icon-button'
-            data-token-only
+            data-hide-portrait
             data-animation-control
             data-creator-action='mask-pin'
             aria-pressed='false'
@@ -110,7 +110,7 @@
           <button
             type='button'
             class='pf2e-tokener-creator-icon-button'
-            data-token-only
+            data-hide-portrait
             data-animation-control
             data-creator-action='mask-region'
             aria-pressed='false'
@@ -546,7 +546,7 @@
       </section>
 
       <section
-        data-token-only
+        data-hide-portrait
         class='pf2e-tokener-creator-card pf2e-tokener-creator-animate'
         data-available='{{#if animation.available}}true{{else}}false{{/if}}'
       >
