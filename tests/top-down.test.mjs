@@ -220,7 +220,10 @@ test('the appearance goes into the prompt as what the image shows', () => {
     appearance: 'Girtablilus are scorpion folk',
   });
   assert.match(sentence, /What it looks like: Girtablilus are scorpion folk\. /);
-  assert.doesNotMatch(buildTopDownPrompt({ name: 'Eagle' }), /The reference image shows|What it looks like/);
+  assert.doesNotMatch(
+    buildTopDownPrompt({ name: 'Eagle' }),
+    /The reference image shows|What it looks like/,
+  );
 });
 
 test('captions are cleaned to one short line', () => {
@@ -229,4 +232,22 @@ test('captions are cleaned to one short line', () => {
     'A giant spider with eight legs',
   );
   assert.equal(cleanCaption(Array(40).fill('word').join(' ')).split(' ').length, 25);
+});
+
+test('saving both looks at once stores the other one as given', () => {
+  const document = token({ src: 'old.webp' });
+  const regular = {
+    'texture.src': 'ring.webp',
+    'ring.enabled': true,
+    'ring.subject.texture': 'ring.webp',
+  };
+  const topDown = { 'texture.src': 'top.webp', 'ring.enabled': false };
+  const showingTop = buildArtViewsUpdate(document, topDown, { topDown: true, paired: regular });
+  assert.equal(showingTop[ART_VIEWS_FLAG_PATH].regular.src, 'ring.webp');
+  assert.equal(showingTop[ART_VIEWS_FLAG_PATH].regular.ring, true);
+  assert.equal(showingTop[ART_VIEWS_FLAG_PATH].topDown.src, 'top.webp');
+  assert.equal(showingTop[ART_VIEWS_FLAG_PATH].topDown.ring, false);
+  const showingRegular = buildArtViewsUpdate(document, regular, { paired: topDown });
+  assert.equal(showingRegular[ART_VIEWS_FLAG_PATH].regular.src, 'ring.webp');
+  assert.equal(showingRegular[ART_VIEWS_FLAG_PATH].topDown.src, 'top.webp');
 });

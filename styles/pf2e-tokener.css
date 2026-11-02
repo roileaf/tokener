@@ -2683,8 +2683,15 @@
   line-height: 1;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator[data-edit-target='portrait'] [data-token-only],
-.pf2e-tokener-creator-app .pf2e-tokener-creator[data-edit-target='portrait'] [data-pop-out-tools],
+.pf2e-tokener-creator-app .pf2e-tokener-creator:not([data-edit-target='token']) [data-token-only],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator:not([data-edit-target='token'])
+  [data-pop-out-tools],
+.pf2e-tokener-creator-app .pf2e-tokener-creator[data-edit-target='portrait'] [data-hide-portrait],
+.pf2e-tokener-creator-app .pf2e-tokener-creator[data-edit-target='topdown'] [data-hide-top-down],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator:not([data-edit-target='topdown'])
+  [data-top-down-only],
 .pf2e-tokener-creator-app
   .pf2e-tokener-creator:not([data-edit-target='portrait'])
   [data-portrait-only],

@@ -42,14 +42,27 @@ export function isShowingTopDown(documentLike) {
  * The flag change that goes with applying new art (`update`, Foundry's flat update keys, each
  * prefixed with `prefix`, e.g. `prototypeToken.`): top-down art keeps what was shown before as
  * the regular look; regular art replaces the regular look of a token that has a top-down one.
+ * `paired` (another candidate's token update) sets both looks at once.
  */
-export function buildArtViewsUpdate(documentLike, update, { topDown = false, prefix = '' } = {}) {
+export function buildArtViewsUpdate(
+  documentLike,
+  update,
+  { topDown = false, prefix = '', paired = null } = {},
+) {
   const pending = {};
   for (const [key, value] of Object.entries(update ?? {}))
     if (key.startsWith(prefix)) pending[key.slice(prefix.length)] = value;
   const after = readTokenArt(documentLike, pending);
   const existing = readArtViews(documentLike);
   const path = `${prefix}${ART_VIEWS_FLAG_PATH}`;
+  // Both looks made together (the Token Creator saves a top-down token with the regular one):
+  // `paired` is the other look's update, unprefixed.
+  if (paired) {
+    const other = readTokenArt(documentLike, paired);
+    return {
+      [path]: topDown ? { regular: other, topDown: after } : { regular: after, topDown: other },
+    };
+  }
   if (topDown) {
     // Replacing one top-down look with another keeps the regular look it was paired with.
     const regular =

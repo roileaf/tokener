@@ -45,22 +45,28 @@ export function renderTokenHud(app, html) {
 
 /** Switches between a token's regular and top-down looks; shown only on tokens that have both. */
 function createArtToggleButton(tokenDocument) {
-  const showingTopDown = isShowingTopDown(tokenDocument);
-  if (showingTopDown === null) return null;
+  if (isShowingTopDown(tokenDocument) === null) return null;
   const button = document.createElement('div');
   button.className = 'control-icon pf2e-tokener-button pf2e-tokener-view-toggle';
-  button.classList.toggle('active', showingTopDown);
   button.dataset.action = 'pf2e-tokener-view';
+  syncArtToggleButton(button, tokenDocument);
+  button.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await toggleArtViews(tokenDocument, !isShowingTopDown(tokenDocument));
+    syncArtToggleButton(button, tokenDocument);
+  });
+  return button;
+}
+
+/** The button shows the look a click switches to; it is lit while the top-down look shows. */
+function syncArtToggleButton(button, tokenDocument) {
+  const showingTopDown = Boolean(isShowingTopDown(tokenDocument));
+  button.classList.toggle('active', showingTopDown);
   button.dataset.tooltip = showingTopDown
     ? localize('HUD.ShowRegular', 'Show the regular token')
     : localize('HUD.ShowTopDown', 'Show the top-down token');
   button.innerHTML = `<i class="fas ${showingTopDown ? 'fa-person' : 'fa-circle-down'}"></i>`;
-  button.addEventListener('click', async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    await toggleArtViews(tokenDocument, !showingTopDown);
-  });
-  return button;
 }
 
 /** Switches this token, and every other controlled token with both looks, to one look. */

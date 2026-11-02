@@ -171,6 +171,8 @@ const FRAME_STYLES = ['painted', 'ring'];
 const EDIT_TARGETS = [
   { value: 'token', icon: 'fas fa-circle-user' },
   { value: 'portrait', icon: 'fas fa-image-portrait' },
+  // Shown only while AI top-down tokens are on.
+  { value: 'topdown', icon: 'fas fa-circle-down' },
 ];
 const DEFAULT_BRUSH_SIZE = 24;
 const MASK_GHOST_ALPHA = 0.38;
@@ -463,7 +465,9 @@ export function getTokenCreatorApplicationClass() {
       this.editTarget = 'token';
       // The token and portrait can each have their own image. While `portrait` is null both
       // targets share the token workspace ("Same as token").
-      this.workspaces = { token: createWorkspace(), portrait: null };
+      // The Top-down tab's image is the AI top-down version of the token image.
+      this.workspaces = { token: createWorkspace(), portrait: null, topDown: createWorkspace() };
+      this.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
       this.busy = false;
       this._cutoutToken = 0;
       this.popOutMask = null;
@@ -506,6 +510,7 @@ export function getTokenCreatorApplicationClass() {
 
     /** The workspace being edited: the portrait's own one when separate, else the token's. */
     get workspace() {
+      if (this.editTarget === 'topdown') return this.workspaces.topDown;
       return this.editTarget === 'portrait' && this.workspaces.portrait
         ? this.workspaces.portrait
         : this.workspaces.token;
@@ -595,7 +600,9 @@ function prepareCreatorContext(app) {
     },
     editTarget: app.editTarget,
     canFlip: canFlip(app),
-    editTargets: EDIT_TARGETS.map((target) => ({
+    editTargets: EDIT_TARGETS.filter(
+      (target) => target.value !== 'topdown' || isTopDownEnabled(),
+    ).map((target) => ({
       ...target,
       label: localize(`Creator.EditTarget.${target.value}`, target.value),
       selected: app.editTarget === target.value,
@@ -940,7 +947,12 @@ function prepareCreatorContext(app) {
         'Creator.AutoComposeTooltip',
         'Frame the art and choose what pops out automatically, then pick from a few alternatives.',
       ),
-      topDown: localize('Creator.TopDown', 'Top-down'),
+      topDown: localize('Creator.TopDownGenerate', 'Generate top-down token'),
+      topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
+      topDownHint: localize(
+        'Creator.TopDownHint',
+        'Made from the image on the Token tab, as seen from directly above, with no frame or ring. Saving makes both tokens; the Token HUD switches between them.',
+      ),
       topDownLooks: localize('Creator.TopDownLooks', 'Looks like'),
       topDownLooksPlaceholder: localize(
         'Creator.TopDownLooksPlaceholder',
@@ -1188,7 +1200,7 @@ function bindPreviewInteractions(app, canvas) {
         setBrushSize(app, stepBrushSize(app.brushSize, event.deltaY < 0 ? 1 : -1));
         return;
       }
-      setCreatorZoom(app, app.view.zoom * (event.deltaY < 0 ? 1.05 : 1 / 1.05));
+      setCreatorZoom(app, getActiveView(app).zoom * (event.deltaY < 0 ? 1.05 : 1 / 1.05));
     },
     { passive: false },
   );
@@ -1539,6 +1551,7 @@ async function handleCreatorClick(app, event) {
       return;
     case 'reset-view':
       if (app.editTarget === 'portrait') app.portraitView = { zoom: 1, offsetX: 0, offsetY: 0 };
+      else if (app.editTarget === 'topdown') app.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
       else app.view = { zoom: 1, offsetX: 0, offsetY: 0 };
       syncZoomInput(app);
       renderCreatorPreview(app);
@@ -1632,6 +1645,8 @@ function openProjectFilePicker(app) {
 async function loadCreatorSource(app, { path, file }) {
   // An image picked while a project is still opening wins over that project.
   app._projectLoadToken = (app._projectLoadToken ?? 0) + 1;
+  // The Top-down tab's image is made from the token image, never loaded.
+  if (app.editTarget === 'topdown') setEditTarget(app, 'token');
   if (app.workspace === app.workspaces.token) clearTopDown(app);
   setCreatorStatus(app, localize('Creator.Loading', 'Loading image...'));
   try {
@@ -1814,6 +1829,7 @@ function applyLoadedProject(app, { project, token, portrait, regions }) {
       : null,
   };
   app.editTarget = 'token';
+  clearTopDown(app);
   app.view = { ...project.token.view };
   // The top-level portraitView is the single source of truth for portrait framing.
   app.portraitView = { ...project.portraitView };
@@ -1879,7 +1895,12 @@ async function updateCutout(app, workspace = app.workspace) {
     return null;
   }
   const token = ++workspace.cutoutToken;
-  const { backgroundMode, tolerance, feather } = app.creatorOptions;
+  const { tolerance, feather } = app.creatorOptions;
+  // Top-down versions come on plain white: Keep would leave a white square.
+  const backgroundMode =
+    workspace === app.workspaces.topDown && app.creatorOptions.backgroundMode === 'none'
+      ? 'auto'
+      : app.creatorOptions.backgroundMode;
   const source = workspace.source.canvas;
   const cutout = createCanvas(source.width, source.height);
   const context = cutout.getContext('2d');
@@ -1937,7 +1958,7 @@ async function updateCutout(app, workspace = app.workspace) {
 
 /** Rebuilds every workspace's cut-out; resolves the failure messages (null where it worked). */
 export async function updateAllCutouts(app) {
-  const workspaces = [app.workspaces.token, app.workspaces.portrait].filter(
+  const workspaces = [app.workspaces.token, app.workspaces.portrait, app.workspaces.topDown].filter(
     (workspace) => workspace?.source,
   );
   return Promise.all(workspaces.map((workspace) => updateCutout(app, workspace)));
@@ -2003,9 +2024,13 @@ export function flipWorkspace(app, axis) {
 
   const { token, portrait } = app.workspaces;
   const portraitOnly = app.editTarget === 'portrait' && Boolean(portrait);
-  const flipped = (portraitOnly ? [portrait] : [token, portrait]).filter(
-    (workspace) => workspace?.source === previous,
-  );
+  const flipped = (
+    app.editTarget === 'topdown'
+      ? [app.workspaces.topDown]
+      : portraitOnly
+        ? [portrait]
+        : [token, portrait]
+  ).filter((workspace) => workspace?.source === previous);
   for (const workspace of flipped) {
     workspace.source = source;
     workspace.autoCutout = flip(workspace.autoCutout);
@@ -2145,11 +2170,13 @@ function renderCreatorPreview(app) {
   const token = (app._previewTokenCanvas ??= createCanvas(size, size));
   const tokenContext = token.getContext('2d');
   const portraitMode = app.editTarget === 'portrait';
+  const tokenMode = app.editTarget === 'token';
   if (portraitMode) drawPortraitPreview(tokenContext, app, size);
-  else drawPreviewToken(tokenContext, app, size);
+  else if (tokenMode) drawPreviewToken(tokenContext, app, size);
+  else drawTopDownToken(tokenContext, app, size);
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
-  if (!portraitMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
-  if (!portraitMode) drawEffectRegionOverlay(tokenContext, app, size);
+  if (tokenMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
+  if (tokenMode) drawEffectRegionOverlay(tokenContext, app, size);
 
   const viewport = getViewport(app, size);
   const isFramed = !portraitMode && (viewport.scale !== 1 || viewport.x !== 0 || viewport.y !== 0);
@@ -2157,7 +2184,7 @@ function renderCreatorPreview(app) {
   if (isFramed) drawViewContext(context, app, viewport, size);
   context.drawImage(token, viewport.x, viewport.y, viewport.size, viewport.size);
   if (isFramed) drawTokenBounds(context, viewport);
-  drawPins(context, app, viewport, size);
+  if (tokenMode) drawPins(context, app, viewport, size);
   drawBrushCursor(context, app, viewport);
   drawLassoOutline(context, app, viewport);
 }
@@ -2188,6 +2215,7 @@ function drawLassoOutline(context, app, viewport) {
 }
 
 function getActiveView(app) {
+  if (app.editTarget === 'topdown') return app.topDownView;
   return app.editTarget === 'portrait' ? app.portraitView : app.view;
 }
 
@@ -2286,10 +2314,10 @@ function syncFlipControls(app) {
 }
 
 function setEditTarget(app, target) {
-  app.editTarget = target === 'portrait' ? 'portrait' : 'token';
+  app.editTarget = ['portrait', 'topdown'].includes(target) ? target : 'token';
   syncFlipControls(app);
-  if (app.editTarget === 'portrait') stopAnimationPlayback(app);
-  if (app.editTarget === 'portrait' && !isCleanupTool(app.maskTool)) setMaskTool(app, null);
+  if (app.editTarget !== 'token') stopAnimationPlayback(app);
+  if (app.editTarget !== 'token' && !isCleanupTool(app.maskTool)) setMaskTool(app, null);
   getCreatorSection(app)?.setAttribute('data-edit-target', app.editTarget);
   syncZoomInput(app);
   renderCreatorPreview(app);
@@ -2461,7 +2489,7 @@ function getPointerMode(app, event) {
 
 /** Pins and playback work on the token art only, and only where the loop can be encoded. */
 function canEditPins(app) {
-  return Boolean(app.cutout && app.editTarget !== 'portrait' && app.animationSupported);
+  return Boolean(app.cutout && app.editTarget === 'token' && app.animationSupported);
 }
 
 /** Asks the browser once whether it can encode the loop; until it answers, animation is off. */
@@ -3640,7 +3668,7 @@ function stopAnimationPlayback(app) {
  * under Move.
  */
 function shouldAnimatePreview(app) {
-  if (app.editTarget === 'portrait' || !app.cutout || !hasMotion(app.animation)) return false;
+  if (app.editTarget !== 'token' || !app.cutout || !hasMotion(app.animation)) return false;
   return shouldBendPreview({ maskTool: app.maskTool, pointerMode: app._pointer?.mode });
 }
 
@@ -3904,12 +3932,12 @@ function getActiveRingScale(app) {
 /** The pop-out brushes work on the token's cut-out; Keep background leaves nothing to pop out. */
 export function canUsePopOutTools(app) {
   return Boolean(
-    app.cutout && app.creatorOptions.backgroundMode !== 'none' && app.editTarget !== 'portrait',
+    app.cutout && app.creatorOptions.backgroundMode !== 'none' && app.editTarget === 'token',
   );
 }
 
 function canMask(app) {
-  return Boolean(app.cutout && app.editTarget !== 'portrait' && isPopOutEnabled(app));
+  return Boolean(app.cutout && app.editTarget === 'token' && isPopOutEnabled(app));
 }
 
 function shouldShowMaskOverlay(app) {
@@ -4423,13 +4451,14 @@ function getEffectClip(app, size) {
 }
 
 function getPreviewLayout(app, size = PREVIEW_SIZE) {
+  const view = app.editTarget === 'topdown' ? app.topDownView : app.view;
   return getTokenFrameLayout({
     imageWidth: app.cutout.width,
     imageHeight: app.cutout.height,
     size,
-    zoom: app.view.zoom,
-    offsetX: app.view.offsetX * size,
-    offsetY: app.view.offsetY * size,
+    zoom: view.zoom,
+    offsetX: view.offsetX * size,
+    offsetY: view.offsetY * size,
   });
 }
 
@@ -4951,15 +4980,18 @@ function describeComposeCandidate(candidate) {
 }
 
 /**
- * Top-down: the AI redraws the token's regular image as seen from directly above, three times
- * (different seeds), and the token switches to the first. The regular image stays one click
- * away next to them, and the portrait keeps it.
+ * Top-down: the AI redraws the token's image as seen from directly above, three times (different
+ * seeds), into the Top-down tab's own image. It is a separate token with no frame or ring;
+ * saving makes both, and the Token HUD switches between them.
  */
 async function runTopDown(app) {
-  if (app.editTarget === 'portrait') setEditTarget(app, 'token');
-  const regular = app._topDown?.regular ?? app.workspaces.token.source;
+  const regular = app.workspaces.token.source;
   if (!regular?.canvas) {
-    setCreatorStatus(app, localize('Creator.NoImage', 'Choose an image first.'), true);
+    setCreatorStatus(
+      app,
+      localize('Creator.TopDownNoImage', 'Choose the token image on the Token tab first.'),
+      true,
+    );
     return;
   }
   const support = await checkTopDownSupport();
@@ -4984,8 +5016,8 @@ async function runTopDown(app) {
       createCanvas,
       onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
     });
-    // An image loaded meanwhile wins.
-    if ((app._topDown?.regular ?? app.workspaces.token.source) !== regular) return;
+    // A token image loaded meanwhile wins.
+    if (app.workspaces.token.source !== regular) return;
     app._topDown = { regular, images, applied: -1 };
     renderTopDownOptions(app);
     await applyTopDownOption(app, 0);
@@ -4993,7 +5025,7 @@ async function runTopDown(app) {
       app,
       localize(
         'Creator.TopDownDone',
-        'Top-down token ready. Pick another version below, or the regular image to go back.',
+        'Top-down token ready. Pick another version below; saving makes both tokens.',
       ),
     );
   } catch (error) {
@@ -5013,8 +5045,7 @@ async function runTopDown(app) {
 
 /** Fills the Looks like field from the image, on request. */
 async function describeTopDownCreature(app) {
-  if (app.editTarget === 'portrait') setEditTarget(app, 'token');
-  const source = app._topDown?.regular ?? app.workspaces.token.source;
+  const source = app.workspaces.token.source;
   if (!source?.canvas) {
     setCreatorStatus(app, localize('Creator.NoImage', 'Choose an image first.'), true);
     return;
@@ -5084,57 +5115,57 @@ function describeTopDownStatus({ phase, percent, done, total }) {
     .replace('{total}', String(total));
 }
 
-/** Shows top-down version `index` as the token image, or the regular image for -1. */
+/** Shows top-down version `index` in the Top-down tab. */
 async function applyTopDownOption(app, index) {
   const topDown = app._topDown;
-  if (!topDown || (index >= 0 && !topDown.images[index])) return;
-  if (app.editTarget === 'portrait') setEditTarget(app, 'token');
-  // The portrait keeps the regular image.
-  if (!app.workspaces.portrait) {
-    app.workspaces.portrait = cloneWorkspace(app.workspaces.token);
-    const separate = getCreatorRoot(app)?.querySelector(
-      'input[name="portraitImage"][value="separate"]',
-    );
-    if (separate) separate.checked = true;
-    syncPortraitControls(app);
-  }
-  const token = app.workspaces.token;
-  token.source =
-    index < 0
-      ? topDown.regular
-      : { canvas: topDown.images[index], path: null, file: null, label: topDown.regular.label };
-  token.cleanup = { keep: null, remove: null };
-  app.popOutMask = null;
-  app._maskVersion += 1;
-  app._maskHistory = { undo: [], redo: [] };
-  app._compose = null;
-  app.view = { zoom: 1, offsetX: 0, offsetY: 0 };
-  clearAnimationPins(app);
-  app.topDown = index >= 0;
-  // Top-down versions come on white, so they need a background removal.
-  if (app.topDown && app.creatorOptions.backgroundMode === 'none') {
-    app.creatorOptions = normalizeTokenCreatorOptions({
-      ...app.creatorOptions,
-      backgroundMode: 'auto',
-    });
-    const radio = getCreatorRoot(app)?.querySelector('input[name="backgroundMode"][value="auto"]');
-    if (radio) radio.checked = true;
-    syncBackgroundControls(app);
-  }
+  if (!topDown?.images[index]) return;
+  const workspace = app.workspaces.topDown;
+  workspace.source = {
+    canvas: topDown.images[index],
+    path: null,
+    file: null,
+    label: topDown.regular.label,
+  };
+  workspace.cleanup = { keep: null, remove: null };
+  app.topDownView = { zoom: 1, offsetX: 0, offsetY: 0 };
+  if (app.editTarget === 'topdown') app._maskHistory = { undo: [], redo: [] };
   topDown.applied = index;
   syncTopDownOptions(app);
   syncZoomInput(app);
-  await updateCutout(app, token);
+  await updateCutout(app, workspace);
 }
 
-/** Forgets the top-down versions (a new token image replaces them). */
+/** Forgets the top-down token (a new token image makes it stale). */
 function clearTopDown(app) {
-  if (!app._topDown && !app.topDown) return;
+  if (!app._topDown && !app.workspaces.topDown?.source) return;
   app._topDown = null;
-  app.topDown = false;
+  app.workspaces.topDown = createWorkspace();
   const container = getCreatorRoot(app)?.querySelector('.pf2e-tokener-creator-topdown-options');
   container?.replaceChildren();
   container?.closest('.pf2e-tokener-creator-topdown')?.classList.remove('has-options');
+  if (app.editTarget === 'topdown') renderCreatorPreview(app);
+}
+
+/** Whether saving makes a top-down token too. */
+function hasTopDownToken(app) {
+  return Boolean(app.workspaces.topDown?.cutout);
+}
+
+/** The top-down token: its cut-out at the tab's framing, with no frame or ring. */
+function drawTopDownToken(context, app, size) {
+  context.clearRect(0, 0, size, size);
+  const cutout = app.workspaces.topDown.cutout;
+  if (!cutout) return;
+  const view = app.topDownView;
+  const layout = getTokenFrameLayout({
+    imageWidth: cutout.width,
+    imageHeight: cutout.height,
+    size,
+    zoom: view.zoom,
+    offsetX: view.offsetX * size,
+    offsetY: view.offsetY * size,
+  });
+  context.drawImage(cutout, layout.x, layout.y, layout.width, layout.height);
 }
 
 function renderTopDownOptions(app) {
@@ -5142,20 +5173,16 @@ function renderTopDownOptions(app) {
   const topDown = app._topDown;
   if (!container || !topDown) return;
   container.replaceChildren();
-  [topDown.regular.canvas, ...topDown.images].forEach((image, position) => {
-    const index = position - 1;
+  topDown.images.forEach((image, index) => {
     const button = globalThis.document.createElement('button');
     button.type = 'button';
     button.className = 'pf2e-tokener-creator-topdown-option';
     button.dataset.creatorAction = 'top-down-pick';
     button.dataset.topDownIndex = String(index);
-    button.dataset.tooltip =
-      index < 0
-        ? localize('Creator.TopDownRegular', 'Regular image')
-        : localize('Creator.TopDownVersion', 'Top-down version {number}').replace(
-            '{number}',
-            String(position),
-          );
+    button.dataset.tooltip = localize('Creator.TopDownVersion', 'Version {number}').replace(
+      '{number}',
+      String(index + 1),
+    );
     const size = COMPOSE_THUMBNAIL_SIZE;
     const canvas = createCanvas(size, size);
     const scale = Math.min(size / image.width, size / image.height);
@@ -5225,23 +5252,18 @@ export async function createToken(app, action) {
         canEncode: app.animationSupported,
         regions: app.effectRegions,
       }) === 'animated';
-    const tokenSuffix = app.topDown ? 'top-down' : '';
     let tokenSrc;
     if (animated) {
       tokenSrc = await uploadBlob(
         await encodeTokenAnimation(app, getAnimatedOutputSize(size)),
         folder,
-        buildCreatedTokenFileName(label, { now, extension: 'webm', suffix: tokenSuffix }),
+        buildCreatedTokenFileName(label, { now, extension: 'webm' }),
       );
       setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
     } else {
       const tokenCanvas = createCanvas(size, size);
       withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
-      tokenSrc = await uploadCanvas(
-        tokenCanvas,
-        folder,
-        buildCreatedTokenFileName(label, { now, suffix: tokenSuffix }),
-      );
+      tokenSrc = await uploadCanvas(tokenCanvas, folder, buildCreatedTokenFileName(label, { now }));
     }
 
     const ringMode = app.creatorOptions.frameStyle === 'ring';
@@ -5338,11 +5360,30 @@ export async function createToken(app, action) {
       breakoutScale: 1 / getActiveRingScale(app),
       animated,
       projectSrc,
-      topDown: Boolean(app.topDown),
     });
+    // The top-down token is saved next to it, frameless; the token gets both looks, showing the
+    // one whose tab is open, and the Token HUD switches between them.
+    let shown = candidate;
+    if (hasTopDownToken(app)) {
+      const topDownCanvas = createCanvas(size, size);
+      drawTopDownToken(topDownCanvas.getContext('2d'), app, size);
+      const topDown = buildCreatedTokenCandidate({
+        label,
+        tokenSrc: await uploadCanvas(
+          topDownCanvas,
+          folder,
+          buildCreatedTokenFileName(label, { now, suffix: 'top-down' }),
+        ),
+        portraitSrc,
+        projectSrc,
+        topDown: true,
+      });
+      shown = app.editTarget === 'topdown' ? topDown : candidate;
+      shown.pairedCandidate = shown === topDown ? candidate : topDown;
+    }
     if (action) {
-      await applyCreatedTokenCandidate(action, candidate, app.tokenDocument);
-      app.onApplied?.(candidate);
+      await applyCreatedTokenCandidate(action, shown, app.tokenDocument);
+      app.onApplied?.(shown);
     } else {
       globalThis.ui?.notifications?.info?.(
         portraitEdited

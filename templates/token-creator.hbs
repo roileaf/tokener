@@ -187,7 +187,39 @@
     </div>
 
     <div class='pf2e-tokener-creator-controls'>
-      <section class='pf2e-tokener-creator-card'>
+      {{#if topDown}}
+        <section class='pf2e-tokener-creator-card' data-top-down-only>
+          <h4>{{labels.topDownHeading}}</h4>
+          <p class='pf2e-tokener-creator-hint'>{{labels.topDownHint}}</p>
+            <div class='pf2e-tokener-creator-topdown'>
+              <div class='pf2e-tokener-creator-topdown-looks'>
+                <label for='{{id}}-top-down-looks'>{{labels.topDownLooks}}</label>
+                <input
+                  type='text'
+                  id='{{id}}-top-down-looks'
+                  name='topDownLooks'
+                  value='{{topDownLooks}}'
+                  placeholder='{{labels.topDownLooksPlaceholder}}'
+                />
+                <button
+                  type='button'
+                  class='pf2e-tokener-creator-icon-button'
+                  data-creator-action='top-down-describe'
+                  data-tooltip='{{labels.topDownDescribeTooltip}}'
+                  aria-label='{{labels.topDownDescribeTooltip}}'
+                ><i class='fas fa-eye'></i></button>
+              </div>
+              <button
+                type='button'
+                class='pf2e-tokener-creator-button is-primary'
+                data-creator-action='top-down'
+                data-tooltip='{{labels.topDownTooltip}}'
+              ><i class='fas fa-circle-down'></i> {{labels.topDown}}</button>
+              <div class='pf2e-tokener-creator-topdown-options'></div>
+            </div>
+        </section>
+      {{/if}}
+      <section class='pf2e-tokener-creator-card' data-hide-top-down>
         <h4>{{labels.source}}</h4>
         <div class='pf2e-tokener-creator-row'>
           <button type='button' class='pf2e-tokener-creator-button' data-creator-action='browse'>
@@ -216,34 +248,6 @@
             data-tooltip='{{labels.fromPortraitTooltip}}'
           ><i class='fas fa-image-portrait'></i> {{labels.fromPortrait}}</button>
         </div>
-        {{#if topDown}}
-          <div class='pf2e-tokener-creator-topdown' data-token-only>
-            <div class='pf2e-tokener-creator-topdown-looks'>
-              <label for='{{id}}-top-down-looks'>{{labels.topDownLooks}}</label>
-              <input
-                type='text'
-                id='{{id}}-top-down-looks'
-                name='topDownLooks'
-                value='{{topDownLooks}}'
-                placeholder='{{labels.topDownLooksPlaceholder}}'
-              />
-              <button
-                type='button'
-                class='pf2e-tokener-creator-icon-button'
-                data-creator-action='top-down-describe'
-                data-tooltip='{{labels.topDownDescribeTooltip}}'
-                aria-label='{{labels.topDownDescribeTooltip}}'
-              ><i class='fas fa-eye'></i></button>
-            </div>
-            <button
-              type='button'
-              class='pf2e-tokener-creator-button'
-              data-creator-action='top-down'
-              data-tooltip='{{labels.topDownTooltip}}'
-            ><i class='fas fa-circle-down'></i> {{labels.topDown}}</button>
-            <div class='pf2e-tokener-creator-topdown-options'></div>
-          </div>
-        {{/if}}
         <div class='pf2e-tokener-creator-row pf2e-tokener-creator-flip'>
           <button
             type='button'
@@ -639,7 +643,7 @@
         <p class='pf2e-tokener-creator-hint' data-animation-unavailable>{{labels.animateUnavailable}}</p>
       </section>
 
-      <section class='pf2e-tokener-creator-card' data-token-only>
+      <section class='pf2e-tokener-creator-card' data-hide-portrait>
         <h4>{{labels.output}}</h4>
         <div class='pf2e-tokener-creator-segmented'>
           {{#each outputSizes}}
