@@ -3,7 +3,7 @@ import {
   MODULE_ID,
   TOP_DOWN_FACE_MOVEMENT_SETTING_KEY,
 } from './constants.js';
-import { getLookFacing, getMovementRotation, getShownLook } from './art-views.js';
+import { getLookFacing, getMovementRotation, getRotationAlong, getShownLook } from './art-views.js';
 import { buildTopDownPrompt, getCreatureProfile, getDefaultFacing } from './top-down-prompt.js';
 import { loadTransformers } from './ai-tools.js';
 import { localize } from './utils.js';
@@ -96,20 +96,19 @@ export function registerTopDownMovement(hooks = globalThis.Hooks) {
     readSetting(TOP_DOWN_FACE_MOVEMENT_SETTING_KEY, true) && !document?.lockRotation
       ? getTopDownLookFacing(document)
       : null;
-  // Foundry v14+ moves tokens along waypoints and can turn them along their last step itself,
-  // for art facing the bottom of the image (a front look): ask it to for top-down looks.
-  hooks?.on?.('preMoveToken', (document, movement) => {
-    if (facingOf(document)) movement.autoRotate = true;
-  });
   hooks?.on?.('preUpdateToken', (document, changes, options, userId) => {
     if (userId !== globalThis.game?.user?.id) return;
     const facing = facingOf(document);
     if (!facing) return;
+    // Foundry v14+ moves tokens along waypoints, in updates that can repeat a rotation already
+    // set: the turn is worked out from the move's own path every time, never added to.
     const move = options?._movement?.[document.id];
     if (move) {
-      // Foundry turned it already; a back look faces the top of its image, so half a turn more.
-      if (move.autoRotate && facing === 'back' && Number.isFinite(changes.rotation))
-        changes.rotation = (changes.rotation + 180) % 360;
+      const rotation = getRotationAlong(
+        [move.origin, ...(move.passed?.waypoints ?? []).filter((point) => !point.intermediate)],
+        facing,
+      );
+      if (rotation !== null) changes.rotation = rotation;
       return;
     }
     // Older Foundry: a plain position update.

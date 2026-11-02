@@ -483,37 +483,49 @@ test('top-down looks turn with Foundry v14 movement, and with plain updates on o
       ),
       ...extra,
     });
-    // v14: Foundry is asked to turn top-down looks, and back looks get half a turn more.
-    const movement = { autoRotate: false };
-    handlers.preMoveToken(tokenWith('front'), movement);
-    assert.equal(movement.autoRotate, true);
-    const back = { rotation: 270 };
-    handlers.preUpdateToken(
-      tokenWith('back'),
-      back,
-      { _movement: { t1: { autoRotate: true } } },
-      'u1',
-    );
-    assert.equal(back.rotation, 90);
-    const front = { rotation: 270 };
+    // v14: the turn comes from the move's own path, the same however often an update repeats it.
+    const move = {
+      origin: { x: 100, y: 100 },
+      passed: {
+        waypoints: [
+          { x: 200, y: 100 },
+          { x: 200, y: 100, intermediate: true },
+          { x: 200, y: 300 },
+        ],
+      },
+    };
+    const back = { rotation: 90 };
+    handlers.preUpdateToken(tokenWith('back'), back, { _movement: { t1: move } }, 'u1');
+    assert.equal(back.rotation, 180); // last step goes down; a back look faces the top
+    handlers.preUpdateToken(tokenWith('back'), back, { _movement: { t1: move } }, 'u1');
+    assert.equal(back.rotation, 180);
+    const front = {};
+    handlers.preUpdateToken(tokenWith('front'), front, { _movement: { t1: move } }, 'u1');
+    assert.equal(front.rotation, 0);
+    const still = { rotation: 33 };
     handlers.preUpdateToken(
       tokenWith('front'),
-      front,
-      { _movement: { t1: { autoRotate: true } } },
+      still,
+      { _movement: { t1: { origin: { x: 1, y: 1 }, passed: { waypoints: [{ x: 1, y: 1 }] } } } },
       'u1',
     );
-    assert.equal(front.rotation, 270);
+    assert.equal(still.rotation, 33);
     // Older Foundry: a plain x/y update is turned here.
     const plain = { x: 200 };
     handlers.preUpdateToken(tokenWith('front'), plain, {}, 'u1');
     assert.equal(plain.rotation, 270);
     // Left alone: locked rotation, regular look, another user's update.
-    const locked = { autoRotate: false };
-    handlers.preMoveToken(tokenWith('front', { lockRotation: true }), locked);
-    assert.equal(locked.autoRotate, false);
-    const regular = { autoRotate: false };
-    handlers.preMoveToken({ ...tokenWith('front'), texture: { src: 'ring.webp' } }, regular);
-    assert.equal(regular.autoRotate, false);
+    const locked = { x: 200 };
+    handlers.preUpdateToken(tokenWith('front', { lockRotation: true }), locked, {}, 'u1');
+    assert.equal(locked.rotation, undefined);
+    const regular = { x: 200 };
+    handlers.preUpdateToken(
+      { ...tokenWith('front'), texture: { src: 'ring.webp' } },
+      regular,
+      {},
+      'u1',
+    );
+    assert.equal(regular.rotation, undefined);
     const other = { x: 200 };
     handlers.preUpdateToken(tokenWith('front'), other, {}, 'u2');
     assert.equal(other.rotation, undefined);

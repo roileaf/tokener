@@ -139,6 +139,25 @@ export function getMovementRotation(documentLike, changes, facing = getLookFacin
   return Math.round(((rotation % 360) + 360) % 360);
 }
 
+/**
+ * The rotation that makes a look facing `facing` point along the last step of `points` (positions
+ * `{ x, y }` in order, the token's size unchanged), or null when it never moves. Always the same
+ * for the same path, so updates that repeat it never turn the token further.
+ */
+export function getRotationAlong(points, facing) {
+  const heading = FACING_HEADINGS[facing];
+  if (!heading) return null;
+  const path = points.filter(Boolean);
+  for (let index = path.length - 1; index > 0; index -= 1) {
+    const dx = Number(path[index].x) - Number(path[index - 1].x);
+    const dy = Number(path[index].y) - Number(path[index - 1].y);
+    if (!dx && !dy) continue;
+    const rotation = (Math.atan2(dy, dx) * 180) / Math.PI - heading;
+    return Math.round(((rotation % 360) + 360) % 360);
+  }
+  return null;
+}
+
 /** The facing recorded for the shown look, or null (a regular look, or none recorded). */
 export function getLookFacing(documentLike) {
   const views = readArtViews(documentLike);
