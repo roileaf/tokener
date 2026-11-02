@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 
 import { buildTokenUpdate, STILL_FLAG_PATH } from '../scripts/actions.js';
 import { buildLookUpdate } from '../scripts/art-views.js';
-import { getCreatureBox, getTokenStill, showChatStill } from '../scripts/chat-still.js';
+import {
+  getCreatureBox,
+  getTokenStill,
+  registerChatStill,
+  showChatStill,
+} from '../scripts/chat-still.js';
 import { buildCreatedTokenCandidate } from '../scripts/token-composer.js';
 
 const still = (src, image) => ({ 'pf2e-tokener': { still: { src, image } } });
@@ -69,6 +74,25 @@ test('chat cards show the speaker token still, fitted, instead of the portrait',
   const other = chatCard();
   assert.equal(showChatStill({ token: { texture: { src: 'x.webm' } } }, other.html), false);
   assert.equal(other.img.src, 'actor.webp');
+});
+
+test('the still replaces the portrait PF2e adds after the chat hook has run', async () => {
+  const handlers = {};
+  const deferred = [];
+  registerChatStill({ on: (name, fn) => (handlers[name] = fn) }, (fn) => deferred.push(fn));
+  const card = chatCard();
+  let added = false;
+  const html = { querySelector: (selector) => (added ? card.html.querySelector(selector) : null) };
+  const token = {
+    texture: { src: 'dragon.webm' },
+    flags: still('dragon.webm', 'dragon-still.webp'),
+  };
+  handlers.renderChatMessageHTML({ token }, html);
+  added = true; // PF2e prepends its portrait once Foundry's renderer returns
+  assert.equal(deferred.length, 1);
+  await deferred[0]();
+  assert.ok(card.classes.has('token'));
+  assert.notEqual(card.img.src, 'actor.webp');
 });
 
 test('a still is trimmed to its creature, inside the image', () => {

@@ -111,9 +111,11 @@ export function showChatStill(message, html, { fit = fitStill } = {}) {
   });
 }
 
-export function registerChatStill(hooks = globalThis.Hooks) {
+export function registerChatStill(hooks = globalThis.Hooks, defer = (fn) => setTimeout(fn, 0)) {
+  // PF2e adds its portrait after Foundry's renderer (which fires this hook) returns the card, so
+  // the swap waits until that has run.
   hooks?.on?.('renderChatMessageHTML', (message, html) => {
-    showChatStill(message, html);
+    defer(() => showChatStill(message, html));
   });
 }
 
