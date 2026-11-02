@@ -125,16 +125,24 @@ export function buildLookUpdate(documentLike, id) {
  * locked). Foundry rotates clockwise from the image as drawn; a front look faces the bottom of
  * its image, a back look the top.
  */
-export function getMovementRotation(documentLike, changes) {
+export function getMovementRotation(documentLike, changes, facing = getLookFacing(documentLike)) {
   const views = readArtViews(documentLike);
   const shown = getShownLook(documentLike, views);
-  const heading = FACING_HEADINGS[views?.[shown]?.facing];
+  const heading = FACING_HEADINGS[facing];
   if (!heading || shown === 'regular' || documentLike?.lockRotation) return null;
   const dx = Number(changes?.x ?? documentLike.x) - Number(documentLike.x);
   const dy = Number(changes?.y ?? documentLike.y) - Number(documentLike.y);
   if (!dx && !dy) return null;
   const rotation = (Math.atan2(dy, dx) * 180) / Math.PI - heading;
   return Math.round(((rotation % 360) + 360) % 360);
+}
+
+/** The facing recorded for the shown look, or null (a regular look, or none recorded). */
+export function getLookFacing(documentLike) {
+  const views = readArtViews(documentLike);
+  const shown = getShownLook(documentLike, views);
+  if (!views || shown === 'regular') return null;
+  return FACING_HEADINGS[views[shown].facing] ? views[shown].facing : null;
 }
 
 /** `views` with each look's facing (`facings`: look id -> 'front' | 'back') recorded on it. */

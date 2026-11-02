@@ -3,7 +3,7 @@ import {
   MODULE_ID,
   TOP_DOWN_FACE_MOVEMENT_SETTING_KEY,
 } from './constants.js';
-import { getMovementRotation } from './art-views.js';
+import { getLookFacing, getMovementRotation, getShownLook } from './art-views.js';
 import { buildTopDownPrompt, getCreatureProfile, getDefaultFacing } from './top-down-prompt.js';
 import { loadTransformers } from './ai-tools.js';
 import { localize } from './utils.js';
@@ -92,12 +92,40 @@ export function registerTopDownSetting(settings = globalThis.game?.settings) {
 
 /** Turns tokens showing a top-down look towards where they move (world setting, on by default). */
 export function registerTopDownMovement(hooks = globalThis.Hooks) {
-  hooks?.on?.('preUpdateToken', (document, changes, _options, userId) => {
-    if (userId !== globalThis.game?.user?.id || changes.rotation !== undefined) return;
-    if (!readSetting(TOP_DOWN_FACE_MOVEMENT_SETTING_KEY, true)) return;
-    const rotation = getMovementRotation(document, changes);
+  const facingOf = (document) =>
+    readSetting(TOP_DOWN_FACE_MOVEMENT_SETTING_KEY, true) && !document?.lockRotation
+      ? getTopDownLookFacing(document)
+      : null;
+  // Foundry v14+ moves tokens along waypoints and can turn them along their last step itself,
+  // for art facing the bottom of the image (a front look): ask it to for top-down looks.
+  hooks?.on?.('preMoveToken', (document, movement) => {
+    if (facingOf(document)) movement.autoRotate = true;
+  });
+  hooks?.on?.('preUpdateToken', (document, changes, options, userId) => {
+    if (userId !== globalThis.game?.user?.id) return;
+    const facing = facingOf(document);
+    if (!facing) return;
+    const move = options?._movement?.[document.id];
+    if (move) {
+      // Foundry turned it already; a back look faces the top of its image, so half a turn more.
+      if (move.autoRotate && facing === 'back' && Number.isFinite(changes.rotation))
+        changes.rotation = (changes.rotation + 180) % 360;
+      return;
+    }
+    // Older Foundry: a plain position update.
+    if (changes.rotation !== undefined) return;
+    const rotation = getMovementRotation(document, changes, facing);
     if (rotation !== null && rotation !== document.rotation) changes.rotation = rotation;
   });
+}
+
+/**
+ * Where the shown top-down look faces: as recorded when it was made, else what suits the creature
+ * (looks saved before facing was recorded). Null for the regular look.
+ */
+export function getTopDownLookFacing(document) {
+  if (!getShownLook(document) || getShownLook(document) === 'regular') return null;
+  return getLookFacing(document) ?? getDefaultTopDownFacing(document);
 }
 
 function readSetting(key, fallback) {

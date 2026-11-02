@@ -26,6 +26,7 @@ import {
   findSubjectBox,
   fitViewToBox,
   getDefaultTopDownHighDetail,
+  registerTopDownMovement,
   formatTopDownChat,
   gaussianNoise,
   getGridIds,
@@ -463,4 +464,60 @@ test('high detail is on by default for Large and bigger creatures', () => {
   assert.equal(getDefaultTopDownHighDetail(tokenOf('grg'), { systemId: 'pf2e' }), true);
   // Any system: from the token footprint when the system gives no size.
   assert.equal(getDefaultTopDownHighDetail({ width: 3, height: 3 }, { systemId: 'other' }), true);
+});
+
+test('top-down looks turn with Foundry v14 movement, and with plain updates on older versions', () => {
+  const handlers = {};
+  registerTopDownMovement({ on: (name, fn) => (handlers[name] = fn) });
+  const previousGame = globalThis.game;
+  globalThis.game = { user: { id: 'u1' }, settings: { get: () => true } };
+  try {
+    const tokenWith = (facing, extra = {}) => ({
+      id: 't1',
+      x: 100,
+      y: 100,
+      rotation: 0,
+      ...token(
+        { src: 'top.webp' },
+        { regular: look('ring.webp'), topDown: { ...look('top.webp'), facing } },
+      ),
+      ...extra,
+    });
+    // v14: Foundry is asked to turn top-down looks, and back looks get half a turn more.
+    const movement = { autoRotate: false };
+    handlers.preMoveToken(tokenWith('front'), movement);
+    assert.equal(movement.autoRotate, true);
+    const back = { rotation: 270 };
+    handlers.preUpdateToken(
+      tokenWith('back'),
+      back,
+      { _movement: { t1: { autoRotate: true } } },
+      'u1',
+    );
+    assert.equal(back.rotation, 90);
+    const front = { rotation: 270 };
+    handlers.preUpdateToken(
+      tokenWith('front'),
+      front,
+      { _movement: { t1: { autoRotate: true } } },
+      'u1',
+    );
+    assert.equal(front.rotation, 270);
+    // Older Foundry: a plain x/y update is turned here.
+    const plain = { x: 200 };
+    handlers.preUpdateToken(tokenWith('front'), plain, {}, 'u1');
+    assert.equal(plain.rotation, 270);
+    // Left alone: locked rotation, regular look, another user's update.
+    const locked = { autoRotate: false };
+    handlers.preMoveToken(tokenWith('front', { lockRotation: true }), locked);
+    assert.equal(locked.autoRotate, false);
+    const regular = { autoRotate: false };
+    handlers.preMoveToken({ ...tokenWith('front'), texture: { src: 'ring.webp' } }, regular);
+    assert.equal(regular.autoRotate, false);
+    const other = { x: 200 };
+    handlers.preUpdateToken(tokenWith('front'), other, {}, 'u2');
+    assert.equal(other.rotation, undefined);
+  } finally {
+    globalThis.game = previousGame;
+  }
 });
