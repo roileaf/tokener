@@ -448,5 +448,14 @@
   "PF2ETokener.Creator.TopDownRepaintNoChange": "Write what to change first.",
   "PF2ETokener.Creator.TopDownRepaintNoPaint": "Paint the area to change with the Repaint brush first.",
   "PF2ETokener.Creator.TopDownRepainted": "Repainted. Pick a version below; the first is the one before the change.",
-  "PF2ETokener.Creator.TopDownRepaintFailed": "Repaint failed: {error}"
+  "PF2ETokener.Creator.TopDownRepaintFailed": "Repaint failed: {error}",
+  "PF2ETokener.Creator.TopDownPickCreature": "Pick the creature",
+  "PF2ETokener.Creator.TopDownPickCreatureTooltip": "Show the picture and click the creature to use only it (for scenes and group art). Shift-click adds more of it.",
+  "PF2ETokener.Creator.TopDownPickAutoButton": "Auto",
+  "PF2ETokener.Creator.TopDownPickAutoTooltip": "Find the creature automatically again.",
+  "PF2ETokener.Creator.TopDownPickHint": "Click the creature in the picture (shift-click to add more of it).",
+  "PF2ETokener.Creator.TopDownPickAuto": "The creature is found automatically again.",
+  "PF2ETokener.Creator.TopDownPicking": "Outlining the creature...",
+  "PF2ETokener.Creator.TopDownPickNothing": "Nothing found there; try clicking the middle of the creature.",
+  "PF2ETokener.Creator.TopDownPicked": "Creature picked: only the outlined box goes to the generator. Shift-click to add more, Auto to go back."
 }

@@ -991,6 +991,16 @@ function prepareCreatorContext(app) {
       topDownStance: localize('Creator.TopDownStanceLabel', 'Stance'),
       topDownHighDetail: localize('Creator.TopDownHighDetail', 'High detail'),
       topDownPose: localize('Creator.TopDownPose', 'Pose'),
+      pickCreature: localize('Creator.TopDownPickCreature', 'Pick the creature'),
+      pickCreatureTooltip: localize(
+        'Creator.TopDownPickCreatureTooltip',
+        'Show the picture and click the creature to use only it (for scenes and group art). Shift-click adds more of it.',
+      ),
+      pickAuto: localize('Creator.TopDownPickAutoButton', 'Auto'),
+      pickAutoTooltip: localize(
+        'Creator.TopDownPickAutoTooltip',
+        'Find the creature automatically again.',
+      ),
       repaintTooltip: localize(
         'Creator.RepaintTooltip',
         'Repaint brush: paint the area to change (right-click erases), then write the change below.',
@@ -1138,6 +1148,13 @@ function bindPreviewInteractions(app, canvas) {
         paintEffectRegion(app, key, point, point, mode);
       }
       canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
+    if (app._topDownPicking && app.editTarget === 'topdown') {
+      event.preventDefault();
+      void pickTopDownCreature(app, getTokenPoint(app, canvas, event), {
+        add: event.shiftKey,
+      });
       return;
     }
     if (app.maskTool === 'repaint' && app.editTarget === 'topdown' && app.cutout) {
@@ -1625,6 +1642,12 @@ async function handleCreatorClick(app, event) {
     case 'mask-repaint':
       if (app.editTarget === 'topdown' && app.cutout)
         setMaskTool(app, app.maskTool === 'repaint' ? null : 'repaint');
+      return;
+    case 'top-down-pick-creature':
+      setTopDownPicking(app, !app._topDownPicking);
+      return;
+    case 'top-down-pick-auto':
+      resetTopDownPick(app);
       return;
     case 'top-down-repaint':
       await runTopDownRepaint(app);
@@ -2288,8 +2311,11 @@ function renderCreatorPreview(app) {
   const canvas = root?.querySelector('.pf2e-tokener-creator-preview');
   if (!canvas) return;
   const context = canvas.getContext('2d');
-  root.querySelector('.pf2e-tokener-creator-stage')?.classList.toggle('is-empty', !app.cutout);
-  if (!app.cutout) {
+  const picking = app._topDownPicking && app.editTarget === 'topdown';
+  root
+    .querySelector('.pf2e-tokener-creator-stage')
+    ?.classList.toggle('is-empty', !app.cutout && !picking);
+  if (!app.cutout && !picking) {
     context.clearRect(0, 0, canvas.width, canvas.height);
     return;
   }
@@ -2300,6 +2326,7 @@ function renderCreatorPreview(app) {
   const tokenMode = app.editTarget === 'token';
   if (portraitMode) drawPortraitPreview(tokenContext, app, size);
   else if (tokenMode) drawPreviewToken(tokenContext, app, size);
+  else if (app._topDownPicking) drawTopDownPicker(tokenContext, app, size);
   else {
     drawTopDownToken(tokenContext, app, size);
     drawRepaintOverlay(tokenContext, app, size);
@@ -2309,7 +2336,9 @@ function renderCreatorPreview(app) {
   if (tokenMode) drawEffectRegionOverlay(tokenContext, app, size);
 
   const viewport = getViewport(app, size);
-  const isFramed = !portraitMode && (viewport.scale !== 1 || viewport.x !== 0 || viewport.y !== 0);
+  // The picker shows the whole picture, not a framed cut-out.
+  const isFramed =
+    !portraitMode && !picking && (viewport.scale !== 1 || viewport.x !== 0 || viewport.y !== 0);
   context.clearRect(0, 0, size, size);
   if (isFramed) drawViewContext(context, app, viewport, size);
   context.drawImage(token, viewport.x, viewport.y, viewport.size, viewport.size);
@@ -5141,6 +5170,7 @@ async function runTopDown(app) {
   try {
     // What the creature looks like: the field (filled from the actor's text when it has one), or
     // else a description of the image, which turns odd creatures into the right kind of thing.
+    if (app._topDownPicking) setTopDownPicking(app, false);
     const reference = await getTopDownReference(app, regular);
     let appearance = String(app._topDownLooks ?? '').trim();
     if (!appearance) appearance = await describeTopDownImage(app, reference);
@@ -5221,6 +5251,11 @@ function getTopDownFacing(app) {
  */
 async function getTopDownReference(app, source) {
   if (source.topDownReference) return source.topDownReference;
+  // A creature picked by hand wins over the automatic crop.
+  if (source.topDownPicked && source.topDownBox) {
+    source.topDownReference = cropCanvas(source.canvas, source.topDownBox, createCanvas);
+    return source.topDownReference;
+  }
   setCreatorStatus(app, localize('Creator.TopDownFinding', 'Finding the creature in the image...'));
   let reference = source.canvas;
   try {
@@ -5235,16 +5270,13 @@ async function getTopDownReference(app, source) {
       minShare: isTopDownGroup(app.tokenDocument) ? 0.02 : 0.15,
     });
     const scale = source.canvas.width / width;
-    reference = cropCanvas(
-      source.canvas,
-      box && {
-        x: Math.round(box.x * scale),
-        y: Math.round(box.y * scale),
-        width: Math.round(box.width * scale),
-        height: Math.round(box.height * scale),
-      },
-      createCanvas,
-    );
+    source.topDownBox = box && {
+      x: Math.round(box.x * scale),
+      y: Math.round(box.y * scale),
+      width: Math.round(box.width * scale),
+      height: Math.round(box.height * scale),
+    };
+    reference = cropCanvas(source.canvas, source.topDownBox, createCanvas);
   } catch (error) {
     console.warn(`${MODULE_ID} | Could not find the creature; using the whole image`, error);
   }
@@ -5439,6 +5471,152 @@ async function restoreTopDown(app) {
       'Top-down tokens made before are back on the Top-down tab.',
     ),
   );
+}
+
+/**
+ * Pick the creature: the preview shows the portrait image, and a click outlines the creature
+ * there (Segment Anything); only that box goes to the model. Shift-click adds to it.
+ */
+function setTopDownPicking(app, picking) {
+  const source = getPortraitWorkspace(app)?.source;
+  app._topDownPicking = Boolean(picking && source?.canvas);
+  if (app._topDownPicking && app.maskTool) setMaskTool(app, null);
+  getCreatorRoot(app)
+    ?.querySelector('[data-creator-action="top-down-pick-creature"]')
+    ?.classList.toggle('is-active', app._topDownPicking);
+  if (app._topDownPicking) {
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.TopDownPickHint',
+        'Click the creature in the picture (shift-click to add more of it).',
+      ),
+    );
+    // Show the automatic crop until a creature is picked.
+    if (!source.topDownBox)
+      void getTopDownReference(app, source).then(() => renderCreatorPreview(app));
+  }
+  renderCreatorPreview(app);
+}
+
+/** Back to the automatic crop. */
+function resetTopDownPick(app) {
+  const source = getPortraitWorkspace(app)?.source;
+  if (!source) return;
+  source.topDownPicked = false;
+  source.topDownBox = null;
+  source.topDownReference = null;
+  setCreatorStatus(
+    app,
+    localize('Creator.TopDownPickAuto', 'The creature is found automatically again.'),
+  );
+  if (app._topDownPicking)
+    void getTopDownReference(app, source).then(() => renderCreatorPreview(app));
+  renderCreatorPreview(app);
+}
+
+/** Where the portrait sits in the picker preview: fitted whole inside the square. */
+function getTopDownPickerLayout(canvas, size) {
+  const scale = Math.min(size / canvas.width, size / canvas.height);
+  const width = canvas.width * scale;
+  const height = canvas.height * scale;
+  return { x: (size - width) / 2, y: (size - height) / 2, width, height, scale };
+}
+
+function drawTopDownPicker(context, app, size) {
+  context.clearRect(0, 0, size, size);
+  const source = getPortraitWorkspace(app)?.source;
+  if (!source?.canvas) return;
+  const layout = getTopDownPickerLayout(source.canvas, size);
+  context.drawImage(source.canvas, layout.x, layout.y, layout.width, layout.height);
+  const box = source.topDownBox;
+  if (!box) return;
+  const x = layout.x + box.x * layout.scale;
+  const y = layout.y + box.y * layout.scale;
+  const width = box.width * layout.scale;
+  const height = box.height * layout.scale;
+  // Everything outside the box dimmed, the box outlined.
+  context.save();
+  context.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  context.beginPath();
+  context.rect(layout.x, layout.y, layout.width, layout.height);
+  context.rect(x, y, width, height);
+  context.fill('evenodd');
+  context.setLineDash([6, 4]);
+  context.lineWidth = 2;
+  context.strokeStyle = '#d6b56d';
+  context.strokeRect(x, y, width, height);
+  context.restore();
+}
+
+async function pickTopDownCreature(app, point, { add = false } = {}) {
+  const source = getPortraitWorkspace(app)?.source;
+  if (!source?.canvas || app.busy) return;
+  const layout = getTopDownPickerLayout(source.canvas, PREVIEW_SIZE);
+  const imagePoint = {
+    x: (point.x - layout.x) / layout.scale,
+    y: (point.y - layout.y) / layout.scale,
+  };
+  if (
+    imagePoint.x < 0 ||
+    imagePoint.y < 0 ||
+    imagePoint.x >= source.canvas.width ||
+    imagePoint.y >= source.canvas.height
+  )
+    return;
+  setCreatorBusy(app, true);
+  try {
+    setCreatorStatus(app, localize('Creator.TopDownPicking', 'Outlining the creature...'));
+    source.topDownSelect ??= createSamSelector(source.canvas, {
+      onStatus: ({ phase, percent }) =>
+        phase === 'download' &&
+        setCreatorStatus(app, formatDownloadStatus('SelectDownloading', percent)),
+    });
+    const select = await source.topDownSelect;
+    const mask = await select(imagePoint);
+    const alpha = new Uint8ClampedArray(mask.width * mask.height);
+    for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = mask.data[pixel * 4 + 3];
+    const box = findSubjectBox(alpha, mask.width, mask.height, { minShare: 0, margin: 0.06 });
+    if (!box) {
+      setCreatorStatus(
+        app,
+        localize(
+          'Creator.TopDownPickNothing',
+          'Nothing found there; try clicking the middle of the creature.',
+        ),
+        true,
+      );
+      return;
+    }
+    const previous = add && source.topDownPicked ? source.topDownBox : null;
+    source.topDownBox = previous
+      ? {
+          x: Math.min(previous.x, box.x),
+          y: Math.min(previous.y, box.y),
+          width:
+            Math.max(previous.x + previous.width, box.x + box.width) - Math.min(previous.x, box.x),
+          height:
+            Math.max(previous.y + previous.height, box.y + box.height) -
+            Math.min(previous.y, box.y),
+        }
+      : box;
+    source.topDownPicked = true;
+    source.topDownReference = null;
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.TopDownPicked',
+        'Creature picked: only the outlined box goes to the generator. Shift-click to add more, Auto to go back.',
+      ),
+    );
+  } catch (error) {
+    source.topDownSelect = null;
+    console.warn(`${MODULE_ID} | Could not outline the creature`, error);
+    setCreatorStatus(app, describeError(error), true);
+  } finally {
+    setCreatorBusy(app, false);
+    renderCreatorPreview(app);
+  }
 }
 
 /** Paints (or, with `mode` 'erase', clears) the area the next repaint redraws. */
