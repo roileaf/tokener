@@ -1,4 +1,4 @@
-import { buildAutoRig } from './auto-animate.js';
+import { buildAutoRig, buildTopDownRig } from './auto-animate.js';
 import {
   composeCandidates,
   DEFAULT_COMPOSE_GRID,
@@ -288,6 +288,8 @@ const loadingClips = new Set();
 const MAX_WARP_STRENGTH = 40;
 const WARP_STRENGTH_RATIO = 0.18;
 // The Repaint brush's overlay on the Top-down tab.
+// Locked pins (they hold their part still).
+const PIN_LOCKED_COLOR = '#9aa3ad';
 const REPAINT_COLOR = '#a26bff';
 const REGION_COLOR = '#d38fff';
 /** Preview px the pointer moves before a lasso outline gains another point. */
@@ -778,6 +780,11 @@ function prepareCreatorContext(app) {
       pinRegionTooltip: localize(
         'Creator.Animate.PinRegionTooltip',
         'Paint the part this pin moves (F): the whole painted area shifts and turns with the pin as one piece, blending into the art around it',
+      ),
+      pinLock: localize('Creator.Animate.PinLock', 'Lock'),
+      pinLockTooltip: localize(
+        'Creator.Animate.PinLockTooltip',
+        'Lock the selected pin so it never moves; with a painted region, that whole part stays still (a body while the wings flap).',
       ),
       pinRegionClear: localize('Creator.Animate.PinRegionClear', 'Plain pin'),
       pinRegionClearTooltip: localize(
@@ -1576,6 +1583,9 @@ async function handleCreatorClick(app, event) {
       return;
     case 'pin-region-lasso':
       selectPinRegionTool(app, { lasso: true });
+      return;
+    case 'pin-lock':
+      togglePinLock(app);
       return;
     case 'pin-region-clear':
       clearPinRegion(app);
@@ -2995,6 +3005,34 @@ function selectPinRegionTool(app, { lasso = false } = {}) {
 }
 
 /** The selected pin bends the art again; its painted region is dropped (undoable). */
+/**
+ * Locks the selected pins (or unlocks them, when they all are): a locked pin never moves, and with
+ * a painted region holds that whole part still while the rest of the token moves.
+ */
+function togglePinLock(app) {
+  const ids = new Set(app.selectedPinIds ?? []);
+  const selected = app.animation.pins.filter((pin) => ids.has(pin.id));
+  if (!selected.length) return;
+  const lock = !selected.every((pin) => pin.lock);
+  setAnimationPins(
+    app,
+    app.animation.pins.map((pin) => {
+      if (!ids.has(pin.id)) return pin;
+      const { lock: _lock, ...rest } = pin;
+      return lock ? { ...rest, lock: true } : rest;
+    }),
+  );
+  setCreatorStatus(
+    app,
+    lock
+      ? localize(
+          'Creator.Animate.Locked',
+          'Locked: the pin stays still. Paint its region to keep that whole part still.',
+        )
+      : localize('Creator.Animate.Unlocked', 'Unlocked: the pin moves with its keyframes again.'),
+  );
+}
+
 function clearPinRegion(app) {
   const pin = canEditPins(app) ? getSelectedPin(app) : null;
   if (!pin?.region) return;
@@ -3675,6 +3713,15 @@ function applyAnimationPreset(app, preset) {
   renderCreatorPreview(app);
 }
 
+/** Auto animate for the Top-down tab's stance, which faces as it was made. */
+function buildTopDownRigFor(app, cutout) {
+  return buildTopDownRig({
+    data: cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
+    facing: getTopDownEntry(app)?.facing ?? getTopDownFacing(app),
+    mode: app.animation.mode,
+  });
+}
+
 /** Auto animate: pins and an idle loop from the cut-out's silhouette, after a confirm if pins exist. */
 async function runAutoAnimate(app) {
   if (!canEditPins(app) || app.busy) return;
@@ -3683,19 +3730,20 @@ async function runAutoAnimate(app) {
     const confirmed = await confirmAutoAnimate();
     if (!confirmed || app.cutout !== cutout) return;
   }
-  const alpha = getAlphaGrid(
-    cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
-  );
-  const { pins, selectedPinIds, parts } = buildAutoRig({
-    alpha,
-    cutoutWidth: cutout.width,
-    cutoutHeight: cutout.height,
-    view: getActiveView(app),
-    // A top-down token has no frame: the whole square is its own.
-    clipRadius: app.editTarget === 'topdown' ? 1 : getComposeClipRadius(app),
-    gridSize: DEFAULT_COMPOSE_GRID,
-    mode: app.animation.mode,
-  });
+  const { pins, selectedPinIds, parts } =
+    app.editTarget === 'topdown'
+      ? buildTopDownRigFor(app, cutout)
+      : buildAutoRig({
+          alpha: getAlphaGrid(
+            cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
+          ),
+          cutoutWidth: cutout.width,
+          cutoutHeight: cutout.height,
+          view: getActiveView(app),
+          clipRadius: getComposeClipRadius(app),
+          gridSize: DEFAULT_COMPOSE_GRID,
+          mode: app.animation.mode,
+        });
   if (!pins.length) {
     setCreatorStatus(app, localize('Creator.Animate.AutoEmpty', 'Nothing to animate yet.'), true);
     return;
@@ -3924,20 +3972,29 @@ function drawPins(context, app, viewport, size) {
       .filter((pin) => pin.region && Object.hasOwn(app.effectRegions, pin.region))
       .map((pin) => pin.id),
   );
+  const lockedPins = new Set(app.animation.pins.filter((pin) => pin.lock).map((pin) => pin.id));
   for (const point of points) {
     const x = viewport.x + point.x * viewport.scale;
     const y = viewport.y + point.y * viewport.scale;
     context.save();
     context.beginPath();
-    // A pin that moves a painted region is a square; one that bends the art is a dot.
-    if (regionPins.has(point.id))
+    // A locked pin is a diamond (it holds its part still); one that moves a painted region is a
+    // square; one that bends the art is a dot.
+    if (lockedPins.has(point.id)) {
+      context.moveTo(x, y - PIN_RADIUS - 1);
+      context.lineTo(x + PIN_RADIUS + 1, y);
+      context.lineTo(x, y + PIN_RADIUS + 1);
+      context.lineTo(x - PIN_RADIUS - 1, y);
+      context.closePath();
+    } else if (regionPins.has(point.id))
+      // A pin that moves a painted region is a square; one that bends the art is a dot.
       context.rect(x - PIN_RADIUS, y - PIN_RADIUS, PIN_RADIUS * 2, PIN_RADIUS * 2);
     else context.arc(x, y, PIN_RADIUS, 0, Math.PI * 2);
     context.lineWidth = 3.5;
     context.strokeStyle = 'rgba(0, 0, 0, 0.75)';
     context.stroke();
-    if (!point.anchor) {
-      context.fillStyle = PIN_COLOR;
+    if (!point.anchor || lockedPins.has(point.id)) {
+      context.fillStyle = lockedPins.has(point.id) ? PIN_LOCKED_COLOR : PIN_COLOR;
       context.fill();
     }
     context.lineWidth = 1.5;
@@ -4004,6 +4061,12 @@ function syncAnimationControls(app) {
       disabled ||= !pin;
     if (action === 'keyframe-remove') disabled ||= !atKeyframe;
     if (action === 'pin-region-clear') disabled ||= !pin?.region;
+    if (action === 'pin-lock') {
+      disabled ||= !pin;
+      const locked = Boolean(pin?.lock);
+      control.classList.toggle('is-active', locked);
+      control.setAttribute('aria-pressed', String(locked));
+    }
     if (action === 'animation-preset') {
       disabled ||= !isPresetAvailable(
         app.animation.pins,

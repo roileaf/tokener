@@ -612,6 +612,14 @@
             type='button'
             class='pf2e-tokener-creator-button is-secondary'
             data-animation-control
+            data-creator-action='pin-lock'
+            aria-pressed='false'
+            data-tooltip='{{labels.pinLockTooltip}}'
+          ><i class='fas fa-lock'></i> {{labels.pinLock}}</button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-animation-control
             data-creator-action='pin-region-clear'
             data-tooltip='{{labels.pinRegionClearTooltip}}'
           ><i class='fas fa-thumbtack'></i> {{labels.pinRegionClear}}</button>

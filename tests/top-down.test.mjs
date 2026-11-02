@@ -631,3 +631,54 @@ test('the repaint prompt asks for the change and to keep the rest', () => {
   assert.match(prompt, /keep the rest of the creature/);
   assert.match(prompt, /white background/);
 });
+
+test('the top-down rig locks the body and moves the head, tail and wings', async () => {
+  const { buildTopDownRig } = await import('../scripts/auto-animate.js');
+  // A cross seen from above: body down the middle, wings left and right, head at the bottom.
+  const width = 200;
+  const height = 200;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const fill = (x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y += 1)
+      for (let x = x0; x < x1; x += 1) data[(y * width + x) * 4 + 3] = 255;
+  };
+  fill(90, 10, 110, 190); // body, tail at the top, head at the bottom
+  fill(10, 60, 190, 80); // wings
+  const rig = buildTopDownRig({ data: { data, width, height }, facing: 'front' });
+  const byPreset = Object.fromEntries(
+    rig.pins.map((pin) => [pin.preset ?? (pin.lock ? 'lock' : ''), pin]),
+  );
+  assert.ok(byPreset.lock, 'the middle is locked');
+  assert.equal(byPreset.lock.keyframes.length, 0);
+  assert.ok(byPreset.bob.y > 150, 'the head pin is at the bottom, where a front look faces');
+  assert.ok(byPreset.sway.y < 40, 'the tail pin is at the top');
+  const wings = rig.pins.filter((pin) => pin.preset === 'flap');
+  assert.equal(wings.length, 2);
+  assert.ok(wings.some((pin) => pin.x < 30) && wings.some((pin) => pin.x > 170));
+  // Facing the top: head and tail swap ends.
+  const back = buildTopDownRig({ data: { data, width, height }, facing: 'back' });
+  assert.ok(back.pins.find((pin) => pin.preset === 'bob').y < 50);
+});
+
+test('a locked pin holds still and keeps its lock through saving', async () => {
+  const { normalizeAnimation } = await import('../scripts/animation.js');
+  const { holdGrid } = await import('../scripts/token-animation.js');
+  const animation = normalizeAnimation({
+    pins: [
+      { id: 'a', x: 1, y: 2, keyframes: [], lock: true },
+      { id: 'b', x: 3, y: 4, keyframes: [], lock: 'yes' },
+    ],
+  });
+  assert.equal(animation.pins[0].lock, true);
+  assert.equal(animation.pins[1].lock, undefined);
+  // Nodes under a full-weight hold go back to rest; half weight halfway; none untouched.
+  const grid = {
+    gx: new Float32Array([10, 10, 10]),
+    gy: new Float32Array([0, 0, 0]),
+    cols: 3,
+    rows: 1,
+    step: 4,
+  };
+  const held = holdGrid(grid, [{ w: new Float32Array([1, 0.5, 0]) }]);
+  assert.deepEqual([...held.gx], [0, 7, 10]);
+});

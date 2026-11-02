@@ -1,4 +1,10 @@
-import { analyseSubject, findProtrusions } from './auto-compose.js';
+import {
+  analyseSubject,
+  DEFAULT_COMPOSE_GRID,
+  findProtrusions,
+  getAlphaGrid,
+} from './auto-compose.js';
+import { flipPins } from './image-flip.js';
 import {
   applyPreset,
   createPin,
@@ -114,6 +120,134 @@ export function buildAutoRig({
       anchorIds: anchors.map((pin) => pin.id),
       tipIds: tips.map((pin) => pin.id),
     },
+  };
+}
+
+// Top-down: how far (share of the figure's longest side) a part must reach from the body's middle
+// to get a pin, and how wide the band along the body's axis is where the head and tail are looked
+// for (share of the width).
+const TOP_DOWN_MIN_REACH = 0.3;
+const TOP_DOWN_AXIS_BAND = 0.18;
+// Wing tips move this share of their reach towards the body and back (a beat seen from above).
+const TOP_DOWN_FLAP = 0.12;
+// The head comes this far back from its tip, the tail this far back from its own.
+const TOP_DOWN_HEAD_INSET = 0.25;
+const TOP_DOWN_TAIL_INSET = 0.15;
+
+/**
+ * Auto animate for a top-down token (`data`: its cut-out's ImageData), facing the bottom of the
+ * image (`facing` 'front') or the top ('back'). The portrait rig reads a figure head up, feet
+ * down, which a creature seen from above is not, so this rig reads the shape itself: the middle of
+ * the body is locked still, the head (the far end it faces) bobs, the tail (the other far end)
+ * sways, and the far left and right (wings, arms) beat in towards the body and out. A part only
+ * gets a pin when it reaches well clear of the body.
+ */
+export function buildTopDownRig({ data, facing = 'front', mode = 'loop' }) {
+  const { width, height } = data;
+  const grid = getAlphaGrid(data);
+  const toSource = grid.scale;
+  let mass = 0;
+  let sumX = 0;
+  let sumY = 0;
+  let minX = grid.width;
+  let maxX = -1;
+  let minY = grid.height;
+  let maxY = -1;
+  for (let y = 0; y < grid.height; y += 1)
+    for (let x = 0; x < grid.width; x += 1) {
+      if (grid.alpha[y * grid.width + x] < 64) continue;
+      mass += 1;
+      sumX += x;
+      sumY += y;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  if (!mass) return { pins: [], selectedPinIds: [], parts: null };
+  const cx = sumX / mass;
+  const cy = sumY / mass;
+  const longest = Math.max(maxX - minX, maxY - minY) || 1;
+  const band = Math.max(1, (maxX - minX) * TOP_DOWN_AXIS_BAND);
+  const opaque = (x, y) => grid.alpha[y * grid.width + x] >= 64;
+  // The farthest opaque point in a direction, within the body's axis band or on one side.
+  const farthest = (score, keep) => {
+    let best = null;
+    for (let y = minY; y <= maxY; y += 1)
+      for (let x = minX; x <= maxX; x += 1) {
+        if (!opaque(x, y) || !keep(x, y)) continue;
+        const value = score(x, y);
+        if (!best || value > best.value) best = { x, y, value };
+      }
+    return best;
+  };
+  const onAxis = (x) => Math.abs(x - cx) <= band;
+  const down = facing !== 'back';
+  const headTip = farthest((x, y) => (down ? y : -y), onAxis);
+  const tailTip = farthest((x, y) => (down ? -y : y), onAxis);
+  const leftTip = farthest(
+    (x) => -x,
+    (x) => x < cx - band,
+  );
+  const rightTip = farthest(
+    (x) => x,
+    (x) => x > cx + band,
+  );
+  const reach = (tip) => (tip ? Math.hypot(tip.x - cx, tip.y - cy) / longest : 0);
+  const size = { width, height };
+  const arm = getRotationArm(size);
+  const amplitude = getPresetAmplitude('bob', size);
+  const point = (tip, inset) => ({
+    x: Math.round((tip.x + (cx - tip.x) * inset) * toSource),
+    y: Math.round((tip.y + (cy - tip.y) * inset) * toSource),
+  });
+
+  const middle = {
+    ...createPin({ x: Math.round(cx * toSource), y: Math.round(cy * toSource), arm: 0 }),
+    lock: true,
+  };
+  const pins = [middle];
+  const tipIds = [];
+  if (headTip && reach(headTip) >= TOP_DOWN_MIN_REACH * 0.6) {
+    const head = createPin({ ...point(headTip, TOP_DOWN_HEAD_INSET), arm });
+    const nod = amplitude * HEAD_BOB_SHARE * (down ? 1 : -1);
+    pins.push({
+      ...head,
+      keyframes: delayedKeyframes({ dx: 0, dy: 0 }, { dx: 0, dy: nod }, HEAD_LAG, mode),
+      preset: 'bob',
+    });
+  }
+  if (tailTip && reach(tailTip) >= TOP_DOWN_MIN_REACH) {
+    const tail = createPin({ ...point(tailTip, TOP_DOWN_TAIL_INSET), arm });
+    const swing = amplitude * Math.min(MAX_REACH, reach(tailTip) / 0.5);
+    pins.push({
+      ...tail,
+      keyframes: delayedKeyframes({ dx: -swing, dy: 0 }, { dx: swing, dy: 0 }, ROLE_LAG.tail, mode),
+      preset: 'sway',
+    });
+    tipIds.push(pins.at(-1).id);
+  }
+  for (const tip of [leftTip, rightTip]) {
+    if (!tip || reach(tip) < TOP_DOWN_MIN_REACH) continue;
+    const wing = createPin({ ...point(tip, 0), arm });
+    const beat = TOP_DOWN_FLAP * reach(tip) * longest * toSource;
+    const towards = Math.sign(cx * toSource - wing.x);
+    pins.push({
+      ...wing,
+      keyframes: delayedKeyframes(
+        { dx: 0, dy: 0 },
+        { dx: towards * beat, dy: 0 },
+        ROLE_LAG.wing,
+        mode,
+      ),
+      preset: 'flap',
+    });
+    tipIds.push(pins.at(-1).id);
+  }
+  return {
+    pins,
+    selectedPinIds: [],
+    parts: { chestId: middle.id, anchorIds: [middle.id], tipIds },
   };
 }
 

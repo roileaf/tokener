@@ -101,6 +101,8 @@ export function normalizeAnimation(value) {
         out.region = pin.region;
       // The preset that wrote the pin's motion, shown on its button; dropped once edited by hand.
       if (ANIMATION_PRESETS.includes(pin.preset)) out.preset = pin.preset;
+      // A locked pin holds still, and with a painted region keeps that whole area still.
+      if (pin.lock === true) out.lock = true;
       return out;
     });
   return {

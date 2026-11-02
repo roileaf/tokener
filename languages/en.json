@@ -457,5 +457,9 @@
   "PF2ETokener.Creator.TopDownPickAuto": "The creature is found automatically again.",
   "PF2ETokener.Creator.TopDownPicking": "Outlining the creature...",
   "PF2ETokener.Creator.TopDownPickNothing": "Nothing found there; try clicking the middle of the creature.",
-  "PF2ETokener.Creator.TopDownPicked": "Creature picked: only the outlined box goes to the generator. Shift-click to add more, Auto to go back."
+  "PF2ETokener.Creator.TopDownPicked": "Creature picked: only the outlined box goes to the generator. Shift-click to add more, Auto to go back.",
+  "PF2ETokener.Creator.Animate.PinLock": "Lock",
+  "PF2ETokener.Creator.Animate.PinLockTooltip": "Lock the selected pin so it never moves; with a painted region, that whole part stays still (a body while the wings flap).",
+  "PF2ETokener.Creator.Animate.Locked": "Locked: the pin stays still. Paint its region to keep that whole part still.",
+  "PF2ETokener.Creator.Animate.Unlocked": "Unlocked: the pin moves with its keyframes again."
 }

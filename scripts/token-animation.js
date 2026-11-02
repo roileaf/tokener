@@ -228,6 +228,30 @@ function displaceGrid(grid, displacements, { margin, size, t }) {
   return { gx: outX, gy: outY, cols, rows, step };
 }
 
+/**
+ * Pulls warp-mesh nodes back to where they rest, by the strongest of `fields` (region weight
+ * fields on the same mesh): a locked region stays exactly where it is, its soft edge blending into
+ * whatever moves around it.
+ */
+export function holdGrid(grid, fields) {
+  const { gx, gy, cols, rows, step } = grid;
+  const outX = Float32Array.from(gx);
+  const outY = Float32Array.from(gy);
+  for (let j = 0; j < rows; j += 1)
+    for (let i = 0; i < cols; i += 1) {
+      const n = j * cols + i;
+      let hold = 0;
+      for (const field of fields) {
+        const weight = field.w[n] ?? 0;
+        if (weight > hold) hold = weight;
+      }
+      if (!hold) continue;
+      outX[n] = gx[n] + (i * step - gx[n]) * hold;
+      outY[n] = gy[n] + (j * step - gy[n]) * hold;
+    }
+  return { gx: outX, gy: outY, cols, rows, step };
+}
+
 /** The canvas an effect's region is painted on, or null for the whole figure / no paint yet. */
 function getRegionCanvas(effect, regions) {
   if (!effect.region || !regions) return null;
@@ -324,8 +348,15 @@ function bendLayers({
   // where a single pin would drag the whole art along.
   const regionPins = [];
   const warpPins = [];
-  for (const pin of animation.pins ?? [])
-    (getPinRegionCanvas(pin, regions) ? regionPins : warpPins).push(pin);
+  const lockedRegions = [];
+  for (const pin of animation.pins ?? []) {
+    const canvas = getPinRegionCanvas(pin, regions);
+    // A locked pin never moves: with a region it holds that whole area still (below), without one
+    // it is a fixed point of the warp.
+    if (pin.lock && canvas) lockedRegions.push(canvas);
+    else if (pin.lock) warpPins.push({ ...pin, keyframes: [] });
+    else (canvas ? regionPins : warpPins).push(pin);
+  }
   const { rest, moved } = samplePins(warpPins, t, animation.mode);
   const toPadded = (point) => ({
     x: layout.x + margin + point.x * scale,
@@ -387,6 +418,13 @@ function bendLayers({
       grid = displaceGrid(grid, displacements, { margin, size, t });
       displaced = true;
     }
+  }
+
+  if (lockedRegions.length && displaced !== null) {
+    const fields = lockedRegions.map((canvas) =>
+      buildRegionField(paddedData(canvas), { step: WARP_STEP, feather: size * REGION_FEATHER }),
+    );
+    grid = holdGrid(grid, fields);
   }
 
   // Nothing moves this frame (e.g. only flicker / glow / particles): skip the warp, which would
