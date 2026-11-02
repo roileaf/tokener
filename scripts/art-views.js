@@ -6,7 +6,14 @@ import { MODULE_ID } from './constants.js';
 export const ART_VIEWS_FLAG_KEY = 'artViews';
 export const ART_VIEWS_FLAG_PATH = `flags.${MODULE_ID}.${ART_VIEWS_FLAG_KEY}`;
 /** Every look a token can have, in the order the Token HUD lists them. */
-export const LOOK_IDS = Object.freeze(['regular', 'topDown', 'attacking', 'casting', 'sneaking']);
+export const LOOK_IDS = Object.freeze([
+  'regular',
+  'topDown',
+  'attacking',
+  'casting',
+  'sneaking',
+  'custom',
+]);
 const ART_FIELDS = Object.freeze({
   src: 'texture.src',
   scaleX: 'texture.scaleX',

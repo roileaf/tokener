@@ -652,6 +652,8 @@ function prepareCreatorContext(app) {
       made: Boolean(app._topDownStances?.[stance]?.workspace?.cutout),
     })),
     topDownHighDetail: isTopDownEnabled() && getTopDownHighDetail(app),
+    topDownPose: app._topDownPose ?? '',
+    topDownStanceValue: getTopDownStance(app),
     topDownFacings: TOP_DOWN_FACINGS.map((facing) => ({
       value: facing,
       label: localize(`Creator.TopDownFacing.${facing}`, facing),
@@ -984,6 +986,11 @@ function prepareCreatorContext(app) {
       topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
       topDownStance: localize('Creator.TopDownStanceLabel', 'Stance'),
       topDownHighDetail: localize('Creator.TopDownHighDetail', 'High detail'),
+      topDownPose: localize('Creator.TopDownPose', 'Pose'),
+      topDownPosePlaceholder: localize(
+        'Creator.TopDownPosePlaceholder',
+        'e.g. rearing up, wings raised, roaring',
+      ),
       topDownHighDetailTooltip: localize(
         'Creator.TopDownHighDetailTooltip',
         'Draws at 640 px instead of 512: finer hair, scales and gear, about twice as slow and needing more graphics memory. On by default for Large and bigger creatures.',
@@ -1366,6 +1373,10 @@ export function handleCreatorInput(app, event) {
   if (name === 'topDownStance') {
     if (TOP_DOWN_STANCES.includes(target.value) && !app.busy) setTopDownStance(app, target.value);
     else syncTopDownStances(app);
+    return;
+  }
+  if (name === 'topDownPose') {
+    app._topDownPose = target.value;
     return;
   }
   if (name === 'topDownHighDetail') {
@@ -5062,6 +5073,14 @@ async function runTopDown(app) {
     setCreatorStatus(app, localize('Creator.TopDownNoImage', 'Choose an image first.'), true);
     return;
   }
+  if (getTopDownStance(app) === 'custom' && !String(app._topDownPose ?? '').trim()) {
+    setCreatorStatus(
+      app,
+      localize('Creator.TopDownPoseMissing', 'Describe the custom pose first.'),
+      true,
+    );
+    return;
+  }
   const support = await checkTopDownSupport();
   if (!support.ok) {
     setCreatorStatus(app, describeTopDownSupport(support.reason), true);
@@ -5080,10 +5099,12 @@ async function runTopDown(app) {
       (seed) => seed + (app._topDownRuns - 1) * TOP_DOWN_SEEDS.length,
     );
     const stance = getTopDownStance(app);
+    const pose = stance === 'custom' ? String(app._topDownPose ?? '').trim() : '';
     const prompt = getTopDownPrompt(app.tokenDocument, {
       appearance,
       facing: getTopDownFacing(app),
       stance,
+      pose,
     });
     const highDetail = getTopDownHighDetail(app);
     const images = await generateTopDown(reference, prompt, {
@@ -5099,6 +5120,7 @@ async function runTopDown(app) {
     app._topDownStances[stance] = {
       label: regular.label,
       facing: getTopDownFacing(app),
+      pose,
       images,
       applied: -1,
       workspace: createTopDownWorkspace(),
@@ -5336,9 +5358,11 @@ async function restoreTopDown(app) {
       file: null,
       label: entry.label,
     };
+    if (stance === 'custom' && entry.pose) app._topDownPose ??= entry.pose;
     stances[stance] = {
       label: entry.label,
       facing: entry.facing ?? undefined,
+      pose: entry.pose ?? '',
       images: entry.images,
       applied: entry.applied,
       workspace,
@@ -5397,6 +5421,9 @@ function setTopDownStance(app, stance) {
 
 /** The stance radios: the picked one checked, the ones already made marked. */
 function syncTopDownStances(app) {
+  getCreatorRoot(app)
+    ?.querySelector('.pf2e-tokener-creator-topdown')
+    ?.setAttribute('data-stance', getTopDownStance(app));
   getCreatorRoot(app)
     ?.querySelectorAll('input[name="topDownStance"]')
     .forEach((input) => {

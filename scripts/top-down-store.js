@@ -33,6 +33,7 @@ export async function saveTopDownStances(key, stances, { images = true } = {}) {
       facing: entry.facing ?? null,
       view: entry.view ?? null,
       label: entry.label ?? '',
+      pose: entry.pose ?? '',
     };
     if (!images) continue;
     for (const [index, canvas] of entry.images.entries()) {

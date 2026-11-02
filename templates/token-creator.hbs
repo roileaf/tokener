@@ -191,7 +191,7 @@
         <section class='pf2e-tokener-creator-card' data-top-down-only>
           <h4>{{labels.topDownHeading}}</h4>
           <p class='pf2e-tokener-creator-hint'>{{labels.topDownHint}}</p>
-            <div class='pf2e-tokener-creator-topdown'>
+            <div class='pf2e-tokener-creator-topdown' data-stance='{{topDownStanceValue}}'>
               <div class='pf2e-tokener-creator-topdown-looks'>
                 <label for='{{id}}-top-down-looks' data-tooltip='{{labels.topDownLooksTooltip}}'>{{labels.topDownLooks}}</label>
                 <input
@@ -221,6 +221,16 @@
                     <span>{{label}}</span>
                   </label>
                 {{/each}}
+              </div>
+              <div class='pf2e-tokener-creator-topdown-looks pf2e-tokener-creator-topdown-pose'>
+                <label for='{{id}}-top-down-pose'>{{labels.topDownPose}}</label>
+                <input
+                  type='text'
+                  id='{{id}}-top-down-pose'
+                  name='topDownPose'
+                  value='{{topDownPose}}'
+                  placeholder='{{labels.topDownPosePlaceholder}}'
+                />
               </div>
               <div class='pf2e-tokener-creator-segmented'>
                 {{#each topDownFacings}}

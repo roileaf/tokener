@@ -193,7 +193,7 @@ export function describeTopDownSupport(reason) {
  */
 export function getTopDownPrompt(
   tokenDocument,
-  { appearance, facing, stance, systemId = globalThis.game?.system?.id } = {},
+  { appearance, facing, stance, pose, systemId = globalThis.game?.system?.id } = {},
 ) {
   const profile = getTopDownProfile(tokenDocument, { systemId });
   return buildTopDownPrompt({
@@ -201,6 +201,7 @@ export function getTopDownPrompt(
     appearance: appearance ?? profile.appearance,
     facing,
     stance,
+    pose,
   });
 }
 

@@ -197,7 +197,10 @@ const LOOK =
   'no cast shadow, no drop shadow, nothing on the ground. Isolated on a pure solid white background.';
 
 /** How closely the body follows the picture: exactly, or with a new pose. */
-function keepBody({ group, pose }) {
+function keepBody({ group, pose, custom }) {
+  // The user's own words are used as written; the built-in poses read "it is ...".
+  if (pose && custom)
+    return `Keep ${group ? 'their' : 'its'} look, clothing and equipment exactly as in the reference image, but change ${group ? 'their' : 'its'} pose: ${pose}.`;
   if (pose)
     return group
       ? `Keep their look, clothing and equipment exactly as in the reference image, but change their pose: they are ${pose.replace(/\bit carries\b/, 'they carry')}.`
@@ -260,7 +263,14 @@ export function getDefaultFacing({ name = '', kinds = [] } = {}) {
 // pose changes, the creature does not. Posture only: naming a body part or item the creature
 // might not have makes the model draw it. A slight crouch or a lean ("ready", "moving") looked
 // the same as the picture's own pose from above, so they are not offered.
-export const TOP_DOWN_STANCES = Object.freeze(['asis', 'attacking', 'casting', 'sneaking']);
+export const TOP_DOWN_STANCES = Object.freeze([
+  'asis',
+  'attacking',
+  'casting',
+  'sneaking',
+  // The user describes the pose (`pose`).
+  'custom',
+]);
 const STANCE_POSES = Object.freeze({
   attacking:
     'in the middle of an attack, lunging towards the bottom of the image, whatever it carries swung forward',
@@ -282,8 +292,14 @@ export function buildTopDownPrompt({
   facing = 'front',
   group = false,
   stance = 'asis',
+  pose: customPose = '',
 }) {
-  const pose = STANCE_POSES[stance] ?? null;
+  const custom = stance === 'custom';
+  const pose = custom
+    ? String(customPose ?? '')
+        .trim()
+        .replace(/[.!?]+$/, '') || null
+    : (STANCE_POSES[stance] ?? null);
   const views = group ? GROUP_VIEWS : VIEWS;
   const view = views[facing] ?? views.front;
   const kindText = kinds.length ? ` (${kinds.slice(0, 4).join(', ')})` : '';
@@ -297,10 +313,13 @@ export function buildTopDownPrompt({
       ? 'Show the whole group of the reference image packed together, and nothing of its surroundings.'
       : 'Show only the one main creature of the reference image, and nothing of its surroundings.',
     view.sees,
-    keepBody({ group, pose }),
-    pose
-      ? 'Add no creatures, body parts or items that are not in the reference image.'
-      : 'Add nothing that is not in the reference image.',
+    keepBody({ group, pose, custom }),
+    // A custom pose may ask for things the picture lacks ("holding a torch"); no other creatures.
+    custom && pose
+      ? 'Add no other creatures.'
+      : pose
+        ? 'Add no creatures, body parts or items that are not in the reference image.'
+        : 'Add nothing that is not in the reference image.',
     size
       ? `${group ? 'The group' : 'It'} is ${SIZE_PHRASES[size]}; give it the build and bulk of that size.`
       : '',

@@ -63,6 +63,7 @@ test('applying top-down art keeps the shown art as the regular look', () => {
     attacking: null,
     casting: null,
     sneaking: null,
+    custom: null,
   });
 });
 
@@ -591,4 +592,20 @@ test('top-down tokens are kept per actor and portrait image, flips included', ()
   // An upload or paste has no path to find it by again.
   assert.equal(getTopDownStoreKey({ ownerUuid: 'Actor.a', source: { path: null } }), null);
   assert.equal(getTopDownStoreKey({ ownerUuid: null, source: { path: 'art/x.webp' } }), null);
+});
+
+test('a custom stance uses the pose as written and allows what it asks for', () => {
+  const prompt = buildTopDownPrompt({
+    name: 'Dragon',
+    stance: 'custom',
+    pose: 'rearing up, wings raised.',
+  });
+  assert.match(prompt, /change its pose: rearing up, wings raised\. /);
+  assert.match(prompt, /Add no other creatures\./);
+  assert.doesNotMatch(prompt, /Add no creatures, body parts or items/);
+  // No pose written: the picture's own pose.
+  assert.equal(
+    buildTopDownPrompt({ name: 'Dragon', stance: 'custom', pose: '  ' }),
+    buildTopDownPrompt({ name: 'Dragon' }),
+  );
 });

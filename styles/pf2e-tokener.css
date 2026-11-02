@@ -3034,6 +3034,17 @@
   border-radius: 999px;
 }
 
+/* The pose text only matters for the Custom stance. */
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-topdown:not([data-stance='custom'])
+  .pf2e-tokener-creator-topdown-pose {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-pose {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
 .pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-looks {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
