@@ -6147,6 +6147,14 @@ export async function createToken(app, action) {
   }
 }
 
+/** The cut-out creature alone, no frame or ring, fitted in a `size` square. */
+function drawStillCreature(cutout, size) {
+  const scale = Math.min(1, size / Math.max(cutout.width, cutout.height));
+  const canvas = createCanvas(Math.round(cutout.width * scale), Math.round(cutout.height * scale));
+  canvas.getContext('2d').drawImage(cutout, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
 async function createTokenFromTarget(app, action, savedTarget) {
   const tokenWorkspace = app.workspaces.token;
   const portraitWorkspace = app.workspaces.portrait ?? tokenWorkspace;
@@ -6186,23 +6194,23 @@ async function createTokenFromTarget(app, action, savedTarget) {
       }) === 'animated';
     let tokenSrc;
     let stillSrc;
-    const tokenCanvas = createCanvas(size, size);
-    withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
     if (animated) {
       tokenSrc = await uploadBlob(
         await encodeTokenAnimation(app, getAnimatedOutputSize(size)),
         folder,
         buildCreatedTokenFileName(label, { now, extension: 'webm' }),
       );
-      // Places that only show images (PF2e chat cards) get the still token instead of the
-      // portrait.
+      // Places that only show images (PF2e chat cards) get the creature itself, frameless,
+      // instead of the portrait.
       stillSrc = await uploadCanvas(
-        tokenCanvas,
+        drawStillCreature(tokenWorkspace.cutout, size),
         folder,
         buildCreatedTokenFileName(label, { now, suffix: 'still' }),
       );
       setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
     } else {
+      const tokenCanvas = createCanvas(size, size);
+      withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
       tokenSrc = await uploadCanvas(tokenCanvas, folder, buildCreatedTokenFileName(label, { now }));
     }
 

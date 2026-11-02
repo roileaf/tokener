@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- The still token in PF2e chat cards shows the whole creature inside the round portrait, without the ring enlargement and faded edges that clipped breakout art.
+- The still in PF2e chat cards is the creature itself, without its ring, frame or ring cut, trimmed to fill the chat portrait, and without the ring enlargement and faded edges PF2e gives ring tokens. Re-save animated tokens saved with 3.0.2 to get the frameless still.
 
 ## 3.0.2 - 2026-11-02
 

@@ -1,10 +1,10 @@
 import { STILL_FLAG_PATH } from './actions.js';
 
 // PF2e shows the speaker's token in chat cards, but only when the token is an image: an animated
-// (WebM) token falls back to the actor portrait. Tokener saves a still frame next to each animated
-// token, which is shown instead: trimmed to the creature and fitted whole in the circle, without
-// the ring enlargement PF2e gives ring tokens (breakout art would spill out and fade).
-const FIT_MARGIN = 0.06;
+// (WebM) token falls back to the actor portrait. Tokener saves a still of the creature next to
+// each animated token, which is shown instead: trimmed to the creature so it fills PF2e's square,
+// without the ring enlargement and faded edge PF2e gives ring tokens.
+const FIT_MARGIN = 0.04;
 const fittedStills = new Map();
 
 /** The still image saved for the token `document` shows now, or null. */
@@ -15,16 +15,11 @@ export function getTokenStill(document) {
 }
 
 /**
- * The square whose inscribed circle holds every opaque pixel of `alpha` (width x height), centred
- * on their box, with `margin` (share of its side) to spare: `{ x, y, size }`, or null when nothing
- * is opaque. Chat portraits are round, so a square that only boxes the art would clip its corners.
+ * The box around the opaque pixels of `alpha` (width x height), widened by `margin` (share of its
+ * longer side) and kept inside the image: `{ x, y, width, height }`, or null when nothing is
+ * opaque.
  */
-export function getFittedSquare(
-  alpha,
-  width,
-  height,
-  { threshold = 16, margin = FIT_MARGIN } = {},
-) {
+export function getCreatureBox(alpha, width, height, { threshold = 16, margin = FIT_MARGIN } = {}) {
   let minX = width;
   let minY = height;
   let maxX = -1;
@@ -38,19 +33,15 @@ export function getFittedSquare(
       if (y > maxY) maxY = y;
     }
   if (maxX < 0) return null;
-  const cx = (minX + maxX + 1) / 2;
-  const cy = (minY + maxY + 1) / 2;
-  let reach = 0;
-  for (let y = minY; y <= maxY; y += 1)
-    for (let x = minX; x <= maxX; x += 1) {
-      if (alpha[y * width + x] < threshold) continue;
-      // The pixel's far corner from the centre.
-      const dx = Math.max(Math.abs(x - cx), Math.abs(x + 1 - cx));
-      const dy = Math.max(Math.abs(y - cy), Math.abs(y + 1 - cy));
-      reach = Math.max(reach, dx * dx + dy * dy);
-    }
-  const size = Math.ceil(2 * Math.sqrt(reach) * (1 + margin * 2));
-  return { x: Math.round(cx - size / 2), y: Math.round(cy - size / 2), size };
+  const pad = Math.round(Math.max(maxX - minX + 1, maxY - minY + 1) * margin);
+  const x = Math.max(0, minX - pad);
+  const y = Math.max(0, minY - pad);
+  return {
+    x,
+    y,
+    width: Math.min(width, maxX + 1 + pad) - x,
+    height: Math.min(height, maxY + 1 + pad) - y,
+  };
 }
 
 /** `src` trimmed to its creature as a data URL (cached per image), or `src` when it cannot be. */
@@ -71,18 +62,20 @@ function fitStill(src) {
           const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height);
           const alpha = new Uint8ClampedArray(width * height);
           for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = data[pixel * 4 + 3];
-          const square = getFittedSquare(alpha, width, height);
-          if (!square) return src;
+          const box = getCreatureBox(alpha, width, height);
+          if (!box) return src;
+          const scale = Math.min(1, 256 / Math.max(box.width, box.height));
           const fitted = document.createElement('canvas');
-          fitted.width = fitted.height = Math.min(square.size, 256);
+          fitted.width = Math.max(1, Math.round(box.width * scale));
+          fitted.height = Math.max(1, Math.round(box.height * scale));
           fitted
             .getContext('2d')
             .drawImage(
               image,
-              square.x,
-              square.y,
-              square.size,
-              square.size,
+              box.x,
+              box.y,
+              box.width,
+              box.height,
               0,
               0,
               fitted.width,
@@ -98,8 +91,8 @@ function fitStill(src) {
 }
 
 /**
- * Swaps the actor portrait PF2e put in a chat card's header for the speaker token's still, fitted
- * whole in the circle. `fit` (src -> Promise of the image to show) is replaceable for tests.
+ * Swaps the actor portrait PF2e put in a chat card's header for the speaker token's still,
+ * trimmed to the creature. `fit` (src -> Promise of the image to show) is replaceable for tests.
  */
 export function showChatStill(message, html, { fit = fitStill } = {}) {
   const portrait = html?.querySelector?.('header.message-header .portrait.actor-image');
@@ -110,6 +103,7 @@ export function showChatStill(message, html, { fit = fitStill } = {}) {
   if (!still) return false;
   img.style.transform = '';
   img.style.maskImage = '';
+  // PF2e's token class fits the image whole (its portrait class crops it).
   portrait.classList.replace('actor-image', 'token');
   return Promise.resolve(fit(still)).then((src) => {
     img.src = src;

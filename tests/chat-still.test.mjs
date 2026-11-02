@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { buildTokenUpdate, STILL_FLAG_PATH } from '../scripts/actions.js';
 import { buildLookUpdate } from '../scripts/art-views.js';
-import { getFittedSquare, getTokenStill, showChatStill } from '../scripts/chat-still.js';
+import { getCreatureBox, getTokenStill, showChatStill } from '../scripts/chat-still.js';
 import { buildCreatedTokenCandidate } from '../scripts/token-composer.js';
 
 const still = (src, image) => ({ 'pf2e-tokener': { still: { src, image } } });
@@ -71,13 +71,30 @@ test('chat cards show the speaker token still, fitted, instead of the portrait',
   assert.equal(other.img.src, 'actor.webp');
 });
 
-test('a still is trimmed to a square whose circle holds its creature', () => {
+test('a still is trimmed to its creature, inside the image', () => {
   // A 10 x 10 image with an opaque 4 x 2 block at (2, 6).
   const alpha = new Uint8ClampedArray(100);
   for (let y = 6; y < 8; y += 1) for (let x = 2; x < 6; x += 1) alpha[y * 10 + x] = 255;
-  assert.deepEqual(getFittedSquare(alpha, 10, 10, { margin: 0 }), { x: 2, y: 5, size: 5 });
-  assert.deepEqual(getFittedSquare(alpha, 10, 10, { margin: 0.25 }), { x: 1, y: 4, size: 7 });
-  assert.equal(getFittedSquare(new Uint8ClampedArray(100), 10, 10), null);
+  assert.deepEqual(getCreatureBox(alpha, 10, 10, { margin: 0 }), {
+    x: 2,
+    y: 6,
+    width: 4,
+    height: 2,
+  });
+  assert.deepEqual(getCreatureBox(alpha, 10, 10, { margin: 0.25 }), {
+    x: 1,
+    y: 5,
+    width: 6,
+    height: 4,
+  });
+  // The margin stops at the image edge.
+  assert.deepEqual(getCreatureBox(alpha, 10, 10, { margin: 0.5 }), {
+    x: 0,
+    y: 4,
+    width: 8,
+    height: 6,
+  });
+  assert.equal(getCreatureBox(new Uint8ClampedArray(100), 10, 10), null);
 });
 
 test('switching looks brings the shown look still along', () => {
