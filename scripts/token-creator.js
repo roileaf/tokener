@@ -9,6 +9,7 @@ import {
 } from './auto-compose.js';
 import {
   areAiToolsEnabled,
+  BACKGROUND_MODELS,
   canCacheModels,
   createDownloadTracker,
   createSamSelector,
@@ -16,6 +17,7 @@ import {
   loadBackgroundRemover,
   loadTransformers,
   registerAiToolsSetting,
+  tidyAlphaMask,
 } from './ai-tools.js';
 import { dropNestedParts, findPartClick, pickPartMask, toHingeKeyframes } from './auto-parts.js';
 import { getSequencerEntryName, guessClipOrigin, loadSequencerClip } from './sequencer-clips.js';
@@ -315,7 +317,10 @@ const COMPOSE_BREAKOUT_ROOM = 50;
 
 let activeCreator = null;
 let TokenCreatorApplicationClass = null;
-let aiRemover = null;
+// Loaded background-removal models by id, kept for later images.
+const aiRemovers = new Map();
+// Top-down tokens: RMBG-1.4 with a tidied mask, which cut the test images cleanest.
+const TOP_DOWN_BACKGROUND_MODEL = Object.freeze({ key: 'best', ...BACKGROUND_MODELS.best });
 let worldRingAssets = null;
 
 export function registerTokenCreatorSettings(settings = globalThis.game?.settings) {
@@ -951,7 +956,7 @@ function prepareCreatorContext(app) {
       topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
       topDownHint: localize(
         'Creator.TopDownHint',
-        "The Portrait tab's image is redrawn as seen from directly above, with no frame or ring; the picture decides how it looks. Saving makes both tokens; the Token HUD switches between them.",
+        "The Portrait tab's image is redrawn as seen from directly above, with no frame or ring; the picture decides how it looks. Its background is removed with AI (RMBG-1.4, ~44 MB, non-commercial license). Saving makes both tokens; the Token HUD switches between them.",
       ),
       topDownLooks: localize('Creator.TopDownLooks', 'Image shows'),
       topDownLooksTooltip: localize(
@@ -1899,11 +1904,9 @@ async function updateCutout(app, workspace = app.workspace) {
   }
   const token = ++workspace.cutoutToken;
   const { tolerance, feather } = app.creatorOptions;
-  // Top-down versions come on plain white: Keep would leave a white square.
-  const backgroundMode =
-    workspace === app.workspaces.topDown && app.creatorOptions.backgroundMode === 'none'
-      ? 'auto'
-      : app.creatorOptions.backgroundMode;
+  // Top-down versions always go through RMBG-1.4, whatever the token's background mode.
+  const topDown = workspace === app.workspaces.topDown;
+  const backgroundMode = topDown ? 'ai' : app.creatorOptions.backgroundMode;
   const source = workspace.source.canvas;
   const cutout = createCanvas(source.width, source.height);
   const context = cutout.getContext('2d');
@@ -1928,6 +1931,8 @@ async function updateCutout(app, workspace = app.workspace) {
       // Cached in the original orientation, so flipping never runs the model again.
       workspace.source.aiCutout ??= await removeBackgroundWithModel(
         applyFlip(source, flip, createCanvas),
+        topDown ? TOP_DOWN_BACKGROUND_MODEL : getBackgroundModel(),
+        { tidy: topDown },
       );
       context.drawImage(
         applyFlip(workspace.source.aiCutout, flip, createCanvas),
@@ -2128,27 +2133,35 @@ export async function useEditedPortraitAsToken(app) {
   await updateCutout(app, token);
 }
 
-async function removeBackgroundWithModel(sourceCanvas) {
-  // Reloaded when the model setting changes; the last loaded model is kept for later images.
-  const model = getBackgroundModel();
+async function removeBackgroundWithModel(
+  sourceCanvas,
+  model = getBackgroundModel(),
+  { tidy = false } = {},
+) {
   const key = `${model.id}:${model.dtype ?? ''}`;
-  if (aiRemover?.key !== key) {
+  if (!aiRemovers.has(key)) {
     const promise = loadBackgroundRemover(model, {
       progress_callback: createDownloadTracker((percent) => {
         if (activeCreator)
           setCreatorStatus(activeCreator, formatDownloadStatus('AiDownloading', percent));
       }),
     }).catch((error) => {
-      if (aiRemover?.promise === promise) aiRemover = null;
+      if (aiRemovers.get(key) === promise) aiRemovers.delete(key);
       throw error;
     });
-    aiRemover = { key, promise };
+    aiRemovers.set(key, promise);
   }
-  const remove = await aiRemover.promise;
+  const remove = await aiRemovers.get(key);
   const blob = await canvasToBlob(sourceCanvas, 'image/png');
   const url = URL.createObjectURL(blob);
   try {
     const rgba = await remove(url);
+    if (tidy) {
+      const alpha = new Uint8ClampedArray(rgba.width * rgba.height);
+      for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = rgba.data[pixel * 4 + 3];
+      tidyAlphaMask(alpha, rgba.width);
+      for (let pixel = 0; pixel < alpha.length; pixel += 1) rgba.data[pixel * 4 + 3] = alpha[pixel];
+    }
     const canvas = createCanvas(rgba.width, rgba.height);
     canvas
       .getContext('2d')

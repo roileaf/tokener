@@ -141,6 +141,59 @@ export async function loadBackgroundRemover(model, { progress_callback } = {}) {
   };
 }
 
+/**
+ * Cleans a background-removal mask in place (`alpha`, one byte per pixel, `width` per row): faint
+ * pixels go, solid specks much smaller than the main shape go, and what is left keeps a 2 px
+ * margin of its soft edge. Top-down tokens come on plain white, where the model leaves both.
+ */
+export function tidyAlphaMask(alpha, width) {
+  for (let index = 0; index < alpha.length; index += 1) if (alpha[index] < 96) alpha[index] = 0;
+  const labels = new Int32Array(alpha.length);
+  const sizes = [0];
+  const queue = new Int32Array(alpha.length);
+  for (let start = 0; start < alpha.length; start += 1) {
+    if (alpha[start] < 128 || labels[start]) continue;
+    const label = sizes.length;
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    labels[start] = label;
+    while (head < tail) {
+      const index = queue[head++];
+      const x = index % width;
+      for (const next of [
+        index - width,
+        index + width,
+        x > 0 ? index - 1 : -1,
+        x < width - 1 ? index + 1 : -1,
+      ]) {
+        if (next < 0 || next >= alpha.length || labels[next] || alpha[next] < 128) continue;
+        labels[next] = label;
+        queue[tail++] = next;
+      }
+    }
+    sizes.push(tail);
+  }
+  const biggest = Math.max(0, ...sizes.slice(1));
+  let near = new Uint8Array(alpha.length);
+  for (let index = 0; index < alpha.length; index += 1)
+    near[index] = labels[index] && sizes[labels[index]] >= biggest * 0.05 ? 1 : 0;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const grown = near.slice();
+    for (let index = 0; index < alpha.length; index += 1) {
+      if (!near[index]) continue;
+      const x = index % width;
+      if (index >= width) grown[index - width] = 1;
+      if (index + width < alpha.length) grown[index + width] = 1;
+      if (x > 0) grown[index - 1] = 1;
+      if (x < width - 1) grown[index + 1] = 1;
+    }
+    near = grown;
+  }
+  for (let index = 0; index < alpha.length; index += 1) if (!near[index]) alpha[index] = 0;
+  return alpha;
+}
+
 /** A copy of RGBA pixels whose alpha is a separate mask's first channel. */
 export function applyAlphaMask(rgba, mask, channels = 1) {
   const out = new Uint8ClampedArray(rgba);

@@ -14,6 +14,7 @@ import {
   pickAppearance,
 } from '../scripts/top-down-prompt.js';
 import { cleanCaption } from '../scripts/creature-caption.js';
+import { tidyAlphaMask } from '../scripts/ai-tools.js';
 import {
   checkTopDownSupport,
   formatTopDownChat,
@@ -250,4 +251,18 @@ test('saving both looks at once stores the other one as given', () => {
   const showingRegular = buildArtViewsUpdate(document, regular, { paired: topDown });
   assert.equal(showingRegular[ART_VIEWS_FLAG_PATH].regular.src, 'ring.webp');
   assert.equal(showingRegular[ART_VIEWS_FLAG_PATH].topDown.src, 'top.webp');
+});
+
+test('the top-down mask clean-up drops faint pixels and specks and keeps a soft margin', () => {
+  const width = 20;
+  const alpha = new Uint8ClampedArray(width * 20);
+  for (let y = 5; y < 15; y += 1) for (let x = 5; x < 15; x += 1) alpha[y * width + x] = 255;
+  alpha[6 * width + 4] = 110; // soft edge next to the shape: kept
+  alpha[1 * width + 18] = 255; // a lone speck: dropped
+  alpha[18 * width + 2] = 60; // faint haze: dropped
+  tidyAlphaMask(alpha, width);
+  assert.equal(alpha[10 * width + 10], 255);
+  assert.equal(alpha[6 * width + 4], 110);
+  assert.equal(alpha[1 * width + 18], 0);
+  assert.equal(alpha[18 * width + 2], 0);
 });

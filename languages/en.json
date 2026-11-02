@@ -407,7 +407,7 @@
   "PF2ETokener.Creator.EditTarget.topdown": "Top-down",
   "PF2ETokener.Creator.TopDownGenerate": "Generate top-down token",
   "PF2ETokener.Creator.TopDownHeading": "Top-down token",
-  "PF2ETokener.Creator.TopDownHint": "The Portrait tab's image is redrawn as seen from directly above, with no frame or ring; the picture decides how it looks. Saving makes both tokens; the Token HUD switches between them.",
+  "PF2ETokener.Creator.TopDownHint": "The Portrait tab's image is redrawn as seen from directly above, with no frame or ring; the picture decides how it looks. Its background is removed with AI (RMBG-1.4, ~44 MB, non-commercial license). Saving makes both tokens; the Token HUD switches between them.",
   "PF2ETokener.Creator.TopDownNoImage": "Choose an image first.",
   "PF2ETokener.Creator.TopDownLooksTooltip": "A few words saying what the picture shows, to help the AI recognise unusual creatures. It never replaces the picture. Left empty, the picture is described for you."
 }
