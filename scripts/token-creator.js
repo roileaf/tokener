@@ -5913,10 +5913,12 @@ function drawTopDownPreview(context, app, size) {
     view,
     animation: app.animation,
     createCanvas,
-    drawFrame: (frameContext, frameBent) =>
-      frameBent
-        ? frameContext.drawImage(frameBent.art, 0, 0, size, size)
-        : drawTopDownToken(frameContext, app, size),
+    // Frameless, so nothing else clears the canvas: without this, panning smears every frame.
+    drawFrame: (frameContext, frameBent) => {
+      if (!frameBent) return drawTopDownToken(frameContext, app, size);
+      frameContext.clearRect(0, 0, size, size);
+      frameContext.drawImage(frameBent.art, 0, 0, size, size);
+    },
     bent: reuse,
     clips: requestClips(app, app.animation.effects),
   });
