@@ -48,6 +48,10 @@ const FILE_BYTES = Object.freeze({
 });
 
 export const TOP_DOWN_SIZE = 512;
+// High detail: finer hair, scales and gear at about 1.8x the time. 768 cannot run in a browser:
+// one attention step needs a 2.5 GB buffer and WebGPU allows 2 GB.
+export const TOP_DOWN_HIGH_DETAIL_SIZE = 640;
+const BIG_SIZES = new Set(['large', 'huge', 'gargantuan']);
 export const TOP_DOWN_SEEDS = Object.freeze([1, 2, 3]);
 const STEPS = 4;
 const TEXT_LENGTH = 512;
@@ -200,6 +204,14 @@ export function fitViewToBox({ imageWidth, imageHeight, box, fill = 0.95 }) {
 }
 
 /** Front or back, from the creature's kind (and its name, for systems without kinds). */
+/** High detail by default for Large and bigger, whose token is stretched over several squares. */
+export function getDefaultTopDownHighDetail(
+  tokenDocument,
+  { systemId = globalThis.game?.system?.id } = {},
+) {
+  return BIG_SIZES.has(getTopDownProfile(tokenDocument, { systemId }).size);
+}
+
 export function getDefaultTopDownFacing(
   tokenDocument,
   { systemId = globalThis.game?.system?.id } = {},
@@ -294,35 +306,30 @@ function getTopDownProfile(tokenDocument, { systemId }) {
  * The reference the model edits: the whole source image (its background included, which the
  * model ignores better than a rough cut-out) fitted inside a white square.
  */
-export function drawTopDownReference(source, createCanvas) {
-  const canvas = createCanvas(TOP_DOWN_SIZE, TOP_DOWN_SIZE);
+export function drawTopDownReference(source, createCanvas, size = TOP_DOWN_SIZE) {
+  const canvas = createCanvas(size, size);
   const context = canvas.getContext('2d');
   context.fillStyle = '#fff';
-  context.fillRect(0, 0, TOP_DOWN_SIZE, TOP_DOWN_SIZE);
-  const room = TOP_DOWN_SIZE - REFERENCE_MARGIN;
+  context.fillRect(0, 0, size, size);
+  const room = size - REFERENCE_MARGIN;
   const scale = Math.min(room / source.width, room / source.height);
   const width = source.width * scale;
   const height = source.height * scale;
-  context.drawImage(
-    source,
-    (TOP_DOWN_SIZE - width) / 2,
-    (TOP_DOWN_SIZE - height) / 2,
-    width,
-    height,
-  );
+  context.drawImage(source, (size - width) / 2, (size - height) / 2, width, height);
   return canvas;
 }
 
 /**
  * Generates one top-down image per seed from `source` (a canvas) and `prompt`. `onStatus`
  * receives `{ phase: 'download', percent }`, `{ phase: 'loading' }` and
- * `{ phase: 'generating', done, total }`. Resolves to canvases on a white background; the models
+ * `{ phase: 'generating', done, total }`. `size` is the square it works at (512 by default; larger
+ * is sharper, slower and needs more graphics memory). Resolves to canvases on a white background; the models
  * stay loaded for the next call until `releaseTopDownModels()`.
  */
 export async function generateTopDown(
   source,
   prompt,
-  { seeds = TOP_DOWN_SEEDS, createCanvas, onStatus } = {},
+  { seeds = TOP_DOWN_SEEDS, size = TOP_DOWN_SIZE, createCanvas, onStatus } = {},
 ) {
   const ort = await loadOrt();
   const models = await loadSessions(ort, onStatus);
@@ -332,7 +339,7 @@ export async function generateTopDown(
   const reference = await encodeReference(
     ort,
     models.vaeEncoder,
-    drawTopDownReference(source, createCanvas),
+    drawTopDownReference(source, createCanvas, size),
   );
   const results = [];
   for (const seed of seeds) {
@@ -518,19 +525,15 @@ async function encodePrompt(ort, session, prompt) {
 
 /** The reference image as latent tokens, `[h * w, 128]`. */
 async function encodeReference(ort, session, canvas) {
-  const { data } = canvas.getContext('2d').getImageData(0, 0, TOP_DOWN_SIZE, TOP_DOWN_SIZE);
-  const area = TOP_DOWN_SIZE * TOP_DOWN_SIZE;
+  const size = canvas.width;
+  const { data } = canvas.getContext('2d').getImageData(0, 0, size, size);
+  const area = size * size;
   const pixels = new Float32Array(3 * area);
   for (let pixel = 0; pixel < area; pixel += 1)
     for (let channel = 0; channel < 3; channel += 1)
       pixels[channel * area + pixel] = data[pixel * 4 + channel] / 127.5 - 1;
   const out = await session.run({
-    [session.inputNames[0]]: new ort.Tensor('float32', pixels, [
-      1,
-      3,
-      TOP_DOWN_SIZE,
-      TOP_DOWN_SIZE,
-    ]),
+    [session.inputNames[0]]: new ort.Tensor('float32', pixels, [1, 3, size, size]),
   });
   const latents = out[session.outputNames[0]];
   const [, channels, height, width] = latents.dims;

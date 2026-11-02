@@ -25,6 +25,7 @@ import {
   checkTopDownSupport,
   findSubjectBox,
   fitViewToBox,
+  getDefaultTopDownHighDetail,
   formatTopDownChat,
   gaussianNoise,
   getGridIds,
@@ -450,4 +451,16 @@ test('switching looks keeps the rotation and facing of each look', () => {
   assert.equal(update.rotation, 0);
   assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.rotation, 270);
   assert.equal(update[ART_VIEWS_FLAG_PATH].topDown.facing, 'front');
+});
+
+test('high detail is on by default for Large and bigger creatures', () => {
+  const tokenOf = (size) => ({
+    actor: { name: 'X', system: { traits: { size: { value: size }, value: [] } } },
+  });
+  assert.equal(getDefaultTopDownHighDetail(tokenOf('med'), { systemId: 'pf2e' }), false);
+  assert.equal(getDefaultTopDownHighDetail(tokenOf('sm'), { systemId: 'pf2e' }), false);
+  assert.equal(getDefaultTopDownHighDetail(tokenOf('lg'), { systemId: 'pf2e' }), true);
+  assert.equal(getDefaultTopDownHighDetail(tokenOf('grg'), { systemId: 'pf2e' }), true);
+  // Any system: from the token footprint when the system gives no size.
+  assert.equal(getDefaultTopDownHighDetail({ width: 3, height: 3 }, { systemId: 'other' }), true);
 });

@@ -230,6 +230,11 @@
                   </label>
                 {{/each}}
               </div>
+              <label class='pf2e-tokener-creator-check' data-tooltip='{{labels.topDownHighDetailTooltip}}'>
+                <input type='checkbox' name='topDownHighDetail' {{#if topDownHighDetail}}checked{{/if}} />
+                <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>
+                <span>{{labels.topDownHighDetail}}</span>
+              </label>
               <button
                 type='button'
                 class='pf2e-tokener-creator-button is-primary'

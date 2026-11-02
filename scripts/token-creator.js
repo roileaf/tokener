@@ -101,6 +101,9 @@ import {
   generateTopDown,
   getActorAppearance,
   getDefaultTopDownFacing,
+  getDefaultTopDownHighDetail,
+  TOP_DOWN_HIGH_DETAIL_SIZE,
+  TOP_DOWN_SIZE,
   fitViewToBox,
   isTopDownGroup,
   getTopDownPrompt,
@@ -646,6 +649,7 @@ function prepareCreatorContext(app) {
       selected: getTopDownStance(app) === stance,
       made: Boolean(app._topDownStances?.[stance]?.workspace?.cutout),
     })),
+    topDownHighDetail: isTopDownEnabled() && getTopDownHighDetail(app),
     topDownFacings: TOP_DOWN_FACINGS.map((facing) => ({
       value: facing,
       label: localize(`Creator.TopDownFacing.${facing}`, facing),
@@ -977,6 +981,11 @@ function prepareCreatorContext(app) {
       topDown: localize('Creator.TopDownGenerate', 'Generate top-down token'),
       topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
       topDownStance: localize('Creator.TopDownStanceLabel', 'Stance'),
+      topDownHighDetail: localize('Creator.TopDownHighDetail', 'High detail'),
+      topDownHighDetailTooltip: localize(
+        'Creator.TopDownHighDetailTooltip',
+        'Draws at 640 px instead of 512: finer hair, scales and gear, about twice as slow and needing more graphics memory. On by default for Large and bigger creatures.',
+      ),
       topDownStanceTooltip: localize(
         'Creator.TopDownStanceTooltip',
         'Make the token in more stances: each keeps its own versions, and saving keeps every stance made, so the Token HUD can switch between them.',
@@ -1355,6 +1364,10 @@ export function handleCreatorInput(app, event) {
   if (name === 'topDownStance') {
     if (TOP_DOWN_STANCES.includes(target.value) && !app.busy) setTopDownStance(app, target.value);
     else syncTopDownStances(app);
+    return;
+  }
+  if (name === 'topDownHighDetail') {
+    app._topDownHighDetail = Boolean(target.checked);
     return;
   }
   if (name === 'topDownFacing') {
@@ -5065,8 +5078,10 @@ async function runTopDown(app) {
       facing: getTopDownFacing(app),
       stance,
     });
+    const highDetail = getTopDownHighDetail(app);
     const images = await generateTopDown(reference, prompt, {
       seeds,
+      size: highDetail ? TOP_DOWN_HIGH_DETAIL_SIZE : TOP_DOWN_SIZE,
       createCanvas,
       onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
     });
@@ -5096,14 +5111,21 @@ async function runTopDown(app) {
     setCreatorStatus(
       app,
       localize(
-        'Creator.TopDownFailed',
-        'Top-down failed: {error}. The graphics card may not have enough memory.',
+        getTopDownHighDetail(app) ? 'Creator.TopDownFailedHighDetail' : 'Creator.TopDownFailed',
+        getTopDownHighDetail(app)
+          ? 'Top-down failed: {error}. The graphics card may not have enough memory; try again with High detail off.'
+          : 'Top-down failed: {error}. The graphics card may not have enough memory.',
       ).replace('{error}', describeError(error)),
       true,
     );
   } finally {
     setCreatorBusy(app, false);
   }
+}
+
+/** High detail: the user's pick, else on for Large and bigger creatures. */
+function getTopDownHighDetail(app) {
+  return (app._topDownHighDetail ??= getDefaultTopDownHighDetail(app.tokenDocument));
 }
 
 /** Front or back: the user's pick, else what suits the creature's kind. */
