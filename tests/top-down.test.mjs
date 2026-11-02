@@ -292,6 +292,27 @@ test('the top-down mask clean-up drops faint pixels and specks and keeps a soft 
   assert.equal(alpha[18 * width + 2], 0);
 });
 
+test('the top-down cut-out keeps coloured parts the model dropped, like fire breath', async () => {
+  const { keepColouredSurroundings } = await import('../scripts/ai-tools.js');
+  const width = 20;
+  const rgba = new Uint8ClampedArray(width * 20 * 4).fill(255);
+  const alpha = new Uint8ClampedArray(width * 20);
+  const paint = (x, y, colour, a = 0) => {
+    rgba.set(colour, (y * width + x) * 4);
+    alpha[y * width + x] = a;
+  };
+  for (let y = 5; y < 15; y += 1) for (let x = 5; x < 15; x += 1) paint(x, y, [40, 90, 200], 255);
+  for (let x = 15; x < 19; x += 1) paint(x, 10, [255, 150, 30]); // fire from the mouth: kept
+  paint(10, 15, [150, 150, 150]); // a grey shadow under it: still dropped
+  paint(2, 18, [255, 150, 30]); // fire-coloured speck away from it: still dropped
+  keepColouredSurroundings(rgba, alpha, width);
+  assert.equal(alpha[10 * width + 15], 255);
+  assert.equal(alpha[10 * width + 18], 255);
+  assert.equal(alpha[15 * width + 10], 0);
+  assert.equal(alpha[18 * width + 2], 0);
+  assert.equal(alpha[0], 0);
+});
+
 test('top-down prompts face front by default and can show the back', () => {
   const front = buildTopDownPrompt({ name: 'Ezren' });
   assert.match(front, /looking straight down onto this exact creature/);
@@ -739,4 +760,17 @@ test('a locked pin holds still and keeps its lock through saving', async () => {
   };
   const held = holdGrid(grid, [{ w: new Float32Array([1, 0.5, 0]) }]);
   assert.deepEqual([...held.gx], [0, 7, 10]);
+});
+
+test('picking the creature: a click starts over, Shift adds, right-click or Alt removes', async () => {
+  const { getPickMode } = await import('../scripts/top-down-pick.js');
+  assert.equal(getPickMode({ tool: 'click' }), 'replace');
+  assert.equal(getPickMode({ tool: 'click', shiftKey: true }), 'add');
+  assert.equal(getPickMode({ tool: 'click', button: 2 }), 'remove');
+  assert.equal(getPickMode({ tool: 'click', altKey: true, shiftKey: true }), 'remove');
+  // The wand and the brush add to the selection; erasing is the right button or Alt.
+  assert.equal(getPickMode({ tool: 'wand' }), 'add');
+  assert.equal(getPickMode({ tool: 'brush' }), 'add');
+  assert.equal(getPickMode({ tool: 'brush', button: 2 }), 'remove');
+  assert.equal(getPickMode({ tool: 'wand', altKey: true }), 'remove');
 });

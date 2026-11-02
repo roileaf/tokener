@@ -262,6 +262,32 @@
                   data-tooltip='{{labels.pickAutoTooltip}}'
                 ><i class='fas fa-wand-magic-sparkles'></i> {{labels.pickAuto}}</button>
               </div>
+              <div class='pf2e-tokener-creator-row'>
+                <button
+                  type='button'
+                  class='pf2e-tokener-creator-button is-secondary'
+                  data-creator-action='top-down-pick-tool'
+                  data-pick-tool='click'
+                  aria-pressed='false'
+                  data-tooltip='{{labels.pickClickTooltip}}'
+                ><i class='fas fa-arrow-pointer'></i> {{labels.pickClick}}</button>
+                <button
+                  type='button'
+                  class='pf2e-tokener-creator-button is-secondary'
+                  data-creator-action='top-down-pick-tool'
+                  data-pick-tool='wand'
+                  aria-pressed='false'
+                  data-tooltip='{{labels.pickWandTooltip}}'
+                ><i class='fas fa-wand-magic'></i> {{labels.pickWand}}</button>
+                <button
+                  type='button'
+                  class='pf2e-tokener-creator-button is-secondary'
+                  data-creator-action='top-down-pick-tool'
+                  data-pick-tool='brush'
+                  aria-pressed='false'
+                  data-tooltip='{{labels.pickBrushTooltip}}'
+                ><i class='fas fa-paintbrush'></i> {{labels.pickBrush}}</button>
+              </div>
               <label class='pf2e-tokener-creator-check' data-tooltip='{{labels.topDownHighDetailTooltip}}'>
                 <input type='checkbox' name='topDownHighDetail' {{#if topDownHighDetail}}checked{{/if}} />
                 <span class='pf2e-tokener-creator-checkbox' aria-hidden='true'></span>

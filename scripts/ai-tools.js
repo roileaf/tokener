@@ -194,6 +194,56 @@ export function tidyAlphaMask(alpha, width) {
   return alpha;
 }
 
+/**
+ * Gives back to a top-down cut-out (`alpha`, over the `rgba` it was made from, `width` per row)
+ * the coloured pixels touching it that the model took for background: fire breath, glowing
+ * magic. Top-down tokens come on plain white, so a strongly coloured pixel is never background;
+ * grey shadows have no colour and stay out. Pale edges fade in with their colour.
+ */
+export function keepColouredSurroundings(
+  rgba,
+  alpha,
+  width,
+  { minChroma = 40, fullChroma = 88 } = {},
+) {
+  const chroma = (index) => {
+    const offset = index * 4;
+    const r = rgba[offset];
+    const g = rgba[offset + 1];
+    const b = rgba[offset + 2];
+    return Math.max(r, g, b) - Math.min(r, g, b);
+  };
+  const queue = new Int32Array(alpha.length);
+  const seen = new Uint8Array(alpha.length);
+  let tail = 0;
+  for (let index = 0; index < alpha.length; index += 1)
+    if (alpha[index] >= 128) {
+      queue[tail++] = index;
+      seen[index] = 1;
+    }
+  for (let head = 0; head < tail; head += 1) {
+    const index = queue[head];
+    const x = index % width;
+    for (const next of [
+      index - width,
+      index + width,
+      x > 0 ? index - 1 : -1,
+      x < width - 1 ? index + 1 : -1,
+    ]) {
+      if (next < 0 || next >= alpha.length || seen[next]) continue;
+      seen[next] = 1;
+      const colour = chroma(next);
+      if (colour < minChroma) continue;
+      const kept = Math.round(
+        Math.min(1, (colour - minChroma / 2) / (fullChroma - minChroma / 2)) * 255,
+      );
+      if (kept > alpha[next]) alpha[next] = kept;
+      queue[tail++] = next;
+    }
+  }
+  return alpha;
+}
+
 /** A copy of RGBA pixels whose alpha is a separate mask's first channel. */
 export function applyAlphaMask(rgba, mask, channels = 1) {
   const out = new Uint8ClampedArray(rgba);
@@ -374,6 +424,28 @@ export function pickBestMaskIndex(scores) {
   return best;
 }
 
+/**
+ * The mask that is the whole thing clicked: SAM proposes a small piece, a part and the whole
+ * object, and scores the piece best as often as not (a dragon's head, not the dragon). Takes the
+ * largest mask scored nearly as well as the best, leaving out one covering nearly the whole
+ * picture (the background). `areas` are each mask's pixel counts, `total` the picture's.
+ */
+export function pickWholeMaskIndex(
+  scores,
+  areas,
+  total,
+  { slack = 0.15, minScore = 0.5, maxShare = 0.95 } = {},
+) {
+  const best = pickBestMaskIndex(scores);
+  const floor = Math.max(minScore, scores[best] - slack);
+  let whole = -1;
+  for (let index = 0; index < (scores?.length ?? 0); index += 1) {
+    if (scores[index] < floor || areas[index] > total * maxShare) continue;
+    if (whole < 0 || areas[index] > areas[whole]) whole = index;
+  }
+  return whole < 0 ? best : whole;
+}
+
 /** Converts one of SAM's stacked boolean masks into white RGBA pixels with alpha set by the mask. */
 export function samMaskToImageData(data, width, height, index = 0) {
   const area = width * height;
@@ -399,9 +471,10 @@ export function scaleSamPoint(point, originalSize, reshapedSize) {
 
 /**
  * Prepares Segment Anything for one image: the expensive image embedding runs once and the
- * returned `select(point, { exclude, all })` only runs the small mask decoder for each click.
- * `exclude` lists points the selection must leave out; `all` returns every mask SAM proposes
- * (from a small piece up to the whole object) instead of only its best-scoring one.
+ * returned `select(point, { exclude, all, whole })` only runs the small mask decoder for each
+ * click. `exclude` lists points the selection must leave out; `all` returns every mask SAM
+ * proposes (from a small piece up to the whole object) instead of only its best-scoring one;
+ * `whole` returns the whole object rather than the part clicked.
  */
 export async function createSamSelector(canvas, { onStatus } = {}) {
   const transformers = await loadTransformers();
@@ -426,7 +499,7 @@ export async function createSamSelector(canvas, { onStatus } = {}) {
   const [originalHeight, originalWidth] = inputs.original_sizes[0];
   const [reshapedHeight, reshapedWidth] = inputs.reshaped_input_sizes[0];
 
-  return async function select(point, { exclude = [], all = false } = {}) {
+  return async function select(point, { exclude = [], all = false, whole = false } = {}) {
     const points = [point, ...exclude];
     const scaled = points.flatMap((each) =>
       scaleSamPoint(
@@ -456,6 +529,15 @@ export async function createSamSelector(canvas, { onStatus } = {}) {
         originalHeight,
       );
     if (all) return Array.from(outputs.iou_scores.data, (_, index) => toImage(index));
-    return toImage(pickBestMaskIndex(outputs.iou_scores.data));
+    const scores = outputs.iou_scores.data;
+    if (!whole) return toImage(pickBestMaskIndex(scores));
+    const area = originalWidth * originalHeight;
+    const areas = Array.from(scores, (_, index) => {
+      let count = 0;
+      for (let pixel = area * index; pixel < area * (index + 1); pixel += 1)
+        if (masks[0].data[pixel]) count += 1;
+      return count;
+    });
+    return toImage(pickWholeMaskIndex(scores, areas, area));
   };
 }

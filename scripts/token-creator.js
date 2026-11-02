@@ -17,6 +17,7 @@ import {
   loadBackgroundRemover,
   loadTransformers,
   registerAiToolsSetting,
+  keepColouredSurroundings,
   tidyAlphaMask,
 } from './ai-tools.js';
 import { dropNestedParts, findPartClick, pickPartMask, toHingeKeyframes } from './auto-parts.js';
@@ -94,6 +95,7 @@ import { fillLasso } from './region-motion.js';
 import { describeCreature } from './creature-caption.js';
 import { getTopDownStoreKey, loadTopDownStances, saveTopDownStances } from './top-down-store.js';
 import { TOP_DOWN_FACINGS, TOP_DOWN_STANCES } from './top-down-prompt.js';
+import { getPickMode, PICK_TOOLS } from './top-down-pick.js';
 import {
   checkTopDownSupport,
   cropCanvas,
@@ -203,6 +205,10 @@ const BRUSH_COLORS = {
   restore: '#7bd88f',
 };
 const MASK_HISTORY_LIMIT = 30;
+// The picture outside the creature picked for a top-down token.
+const PICK_SHADE = 'rgba(0, 0, 0, 0.6)';
+const PICK_TINT = 'rgba(240, 200, 110, 0.4)';
+const PICK_OUTLINE = '#ffd77a';
 const COMPOSE_OPTIONS = 4;
 const COMPOSE_THUMBNAIL_SIZE = 104;
 // Click-to-select results larger than this share of the subject are ignored by auto compose: SAM
@@ -1003,6 +1009,21 @@ function prepareCreatorContext(app) {
         'Creator.TopDownPickCreatureTooltip',
         'Show the picture and click the creature to use only it (for scenes and group art). Shift-click adds more of it.',
       ),
+      pickClick: localize('Creator.TopDownPickClick', 'Click'),
+      pickClickTooltip: localize(
+        'Creator.TopDownPickClickTooltip',
+        'Click the creature to select all of it. Shift-click adds, right-click or Alt-click removes the part clicked.',
+      ),
+      pickWand: localize('Creator.TopDownPickWand', 'Wand'),
+      pickWandTooltip: localize(
+        'Creator.TopDownPickWandTooltip',
+        'Click a part (a wing, a leg, the rock) to add just it; right-click or Alt removes it.',
+      ),
+      pickBrush: localize('Creator.TopDownPickBrush', 'Brush'),
+      pickBrushTooltip: localize(
+        'Creator.TopDownPickBrushTooltip',
+        'Paint the selection on; right-drag or Alt erases it. Ctrl+wheel changes the size.',
+      ),
       pickAuto: localize('Creator.TopDownPickAutoButton', 'Auto'),
       pickAutoTooltip: localize(
         'Creator.TopDownPickAutoTooltip',
@@ -1111,7 +1132,9 @@ function bindPreviewInteractions(app, canvas) {
     if (event.button === 1) event.preventDefault();
   });
   canvas.addEventListener('pointerdown', (event) => {
-    if (!app.source) return;
+    // The picker shows the portrait's image, so it takes clicks before the Top-down tab has one.
+    const picking = app._topDownPicking && app.editTarget === 'topdown';
+    if (!app.source && !picking) return;
     canvas.focus?.({ preventScroll: true });
     if (event.button === 1) {
       event.preventDefault();
@@ -1157,11 +1180,13 @@ function bindPreviewInteractions(app, canvas) {
       canvas.setPointerCapture?.(event.pointerId);
       return;
     }
-    if (app._topDownPicking && app.editTarget === 'topdown') {
+    if (picking) {
       event.preventDefault();
-      void pickTopDownCreature(app, getTokenPoint(app, canvas, event), {
-        add: event.shiftKey,
-      });
+      const pick = startTopDownPick(app, getTokenPoint(app, canvas, event), event);
+      if (pick) {
+        drag = pick;
+        canvas.setPointerCapture?.(event.pointerId);
+      }
       return;
     }
     if (app.maskTool === 'repaint' && app.editTarget === 'topdown' && app.cutout) {
@@ -1259,7 +1284,8 @@ function bindPreviewInteractions(app, canvas) {
     }
     if (drag.mode) {
       const point = getTokenPoint(app, canvas, event);
-      if (drag.repaint) paintRepaintMask(app, drag.last, point, drag.mode);
+      if (drag.pick) paintTopDownPick(app, drag.last, point, drag.mode);
+      else if (drag.repaint) paintRepaintMask(app, drag.last, point, drag.mode);
       else if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
       else if (drag.region) paintEffectRegion(app, drag.region, drag.last, point, drag.mode);
       else paintPopOutMask(app, drag.last, point, drag.mode);
@@ -1282,6 +1308,12 @@ function bindPreviewInteractions(app, canvas) {
     if (drag?.lasso) fillEffectRegionLasso(app, drag.region, drag.lasso, drag.mode);
     app._lasso = null;
     if (drag?.region) finishRegionStroke(app);
+    if (drag?.pick) {
+      app._pickErasing = false;
+      const source = getPortraitWorkspace(app)?.source;
+      if (source) updatePickBox(app, source);
+      renderCreatorPreview(app);
+    }
     drag = null;
     syncMaskControls(app);
     if (wasPin) syncAnimationControls(app);
@@ -1297,8 +1329,15 @@ function bindPreviewInteractions(app, canvas) {
   canvas.addEventListener(
     'wheel',
     (event) => {
-      if (!app.source) return;
+      const picking = app._topDownPicking && app.editTarget === 'topdown';
+      if (!app.source && !picking) return;
       event.preventDefault();
+      if (picking) {
+        if ((event.ctrlKey || event.metaKey) && app._topDownPickTool === 'brush')
+          setBrushSize(app, stepBrushSize(app.brushSize, event.deltaY < 0 ? 1 : -1));
+        renderCreatorPreview(app);
+        return;
+      }
       if (event.altKey) {
         setViewScale(app, stepViewScale(app.viewport.scale, event.deltaY < 0 ? 1 : -1));
         return;
@@ -1656,6 +1695,9 @@ async function handleCreatorClick(app, event) {
       return;
     case 'top-down-pick-creature':
       setTopDownPicking(app, !app._topDownPicking);
+      return;
+    case 'top-down-pick-tool':
+      setTopDownPickTool(app, button.dataset.pickTool);
       return;
     case 'top-down-pick-auto':
       resetTopDownPick(app);
@@ -2305,6 +2347,7 @@ async function removeBackgroundWithModel(
       const alpha = new Uint8ClampedArray(rgba.width * rgba.height);
       for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = rgba.data[pixel * 4 + 3];
       tidyAlphaMask(alpha, rgba.width);
+      keepColouredSurroundings(rgba.data, alpha, rgba.width);
       for (let pixel = 0; pixel < alpha.length; pixel += 1) rgba.data[pixel * 4 + 3] = alpha[pixel];
     }
     const canvas = createCanvas(rgba.width, rgba.height);
@@ -5339,7 +5382,8 @@ async function getTopDownReference(app, source) {
   if (source.topDownReference) return source.topDownReference;
   // A creature picked by hand wins over the automatic crop.
   if (source.topDownPicked && source.topDownBox) {
-    source.topDownReference = cropCanvas(source.canvas, source.topDownBox, createCanvas);
+    const picked = source.topDownMask ? maskPickedImage(source) : source.canvas;
+    source.topDownReference = cropCanvas(picked, source.topDownBox, createCanvas);
     return source.topDownReference;
   }
   setCreatorStatus(app, localize('Creator.TopDownFinding', 'Finding the creature in the image...'));
@@ -5576,22 +5620,24 @@ async function restoreTopDown(app) {
 }
 
 /**
- * Pick the creature: the preview shows the portrait image, and a click outlines the creature
- * there (Segment Anything); only that box goes to the model. Shift-click adds to it.
+ * Pick the creature: the preview shows the portrait image, and a selection is made on it with
+ * Segment Anything clicks, the wand and the brush; only the selection goes to the model.
  */
 function setTopDownPicking(app, picking) {
   const source = getPortraitWorkspace(app)?.source;
+  if (picking && !source?.canvas) {
+    setCreatorStatus(app, localize('Creator.TopDownNoImage', 'Choose an image first.'), true);
+    return;
+  }
   app._topDownPicking = Boolean(picking && source?.canvas);
   if (app._topDownPicking && app.maskTool) setMaskTool(app, null);
-  getCreatorRoot(app)
-    ?.querySelector('[data-creator-action="top-down-pick-creature"]')
-    ?.classList.toggle('is-active', app._topDownPicking);
+  syncTopDownPickTools(app);
   if (app._topDownPicking) {
     setCreatorStatus(
       app,
       localize(
         'Creator.TopDownPickHint',
-        'Click the creature in the picture (shift-click to add more of it).',
+        'Click the creature in the picture. Shift adds, right-click or Alt removes; the wand and brush work the same way.',
       ),
     );
     // Show the automatic crop until a creature is picked.
@@ -5601,12 +5647,38 @@ function setTopDownPicking(app, picking) {
   renderCreatorPreview(app);
 }
 
+/** The pick tool in use: Segment Anything clicks, the wand or the brush. */
+function setTopDownPickTool(app, tool) {
+  if (!PICK_TOOLS.includes(tool)) return;
+  app._topDownPickTool = tool;
+  if (!app._topDownPicking) setTopDownPicking(app, true);
+  else syncTopDownPickTools(app);
+  renderCreatorPreview(app);
+}
+
+function syncTopDownPickTools(app) {
+  const root = getCreatorRoot(app);
+  root
+    ?.querySelector('[data-creator-action="top-down-pick-creature"]')
+    ?.classList.toggle('is-active', Boolean(app._topDownPicking));
+  const tool = app._topDownPickTool ?? 'click';
+  root?.querySelectorAll('[data-creator-action="top-down-pick-tool"]').forEach((button) => {
+    const active = Boolean(app._topDownPicking) && button.dataset.pickTool === tool;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
 /** Back to the automatic crop. */
 function resetTopDownPick(app) {
   const source = getPortraitWorkspace(app)?.source;
-  if (!source) return;
+  if (!source?.canvas) {
+    setCreatorStatus(app, localize('Creator.TopDownNoImage', 'Choose an image first.'), true);
+    return;
+  }
   source.topDownPicked = false;
   source.topDownBox = null;
+  source.topDownMask = null;
   source.topDownReference = null;
   setCreatorStatus(
     app,
@@ -5617,12 +5689,36 @@ function resetTopDownPick(app) {
   renderCreatorPreview(app);
 }
 
+/**
+ * The picture with everything outside the selection cleared (the model sees it as white), its
+ * edge softened a little so the creature does not look cut out with scissors.
+ */
+function maskPickedImage(source) {
+  const canvas = copyCanvas(source.canvas);
+  const context = canvas.getContext('2d');
+  context.save();
+  context.globalCompositeOperation = 'destination-in';
+  context.filter = 'blur(1.5px)';
+  context.drawImage(source.topDownMask, 0, 0);
+  context.restore();
+  return canvas;
+}
+
 /** Where the portrait sits in the picker preview: fitted whole inside the square. */
 function getTopDownPickerLayout(canvas, size) {
   const scale = Math.min(size / canvas.width, size / canvas.height);
   const width = canvas.width * scale;
   const height = canvas.height * scale;
   return { x: (size - width) / 2, y: (size - height) / 2, width, height, scale };
+}
+
+/** A point in the picker preview as a pixel of the portrait image, or null outside it. */
+function getTopDownPickPoint(source, point) {
+  const layout = getTopDownPickerLayout(source.canvas, PREVIEW_SIZE);
+  const x = (point.x - layout.x) / layout.scale;
+  const y = (point.y - layout.y) / layout.scale;
+  if (x < 0 || y < 0 || x >= source.canvas.width || y >= source.canvas.height) return null;
+  return { x, y, scale: layout.scale };
 }
 
 function drawTopDownPicker(context, app, size) {
@@ -5632,40 +5728,235 @@ function drawTopDownPicker(context, app, size) {
   const layout = getTopDownPickerLayout(source.canvas, size);
   context.drawImage(source.canvas, layout.x, layout.y, layout.width, layout.height);
   const box = source.topDownBox;
-  if (!box) return;
-  const x = layout.x + box.x * layout.scale;
-  const y = layout.y + box.y * layout.scale;
-  const width = box.width * layout.scale;
-  const height = box.height * layout.scale;
-  // Everything outside the box dimmed, the box outlined.
-  context.save();
-  context.fillStyle = 'rgba(0, 0, 0, 0.55)';
-  context.beginPath();
-  context.rect(layout.x, layout.y, layout.width, layout.height);
-  context.rect(x, y, width, height);
-  context.fill('evenodd');
-  context.setLineDash([6, 4]);
-  context.lineWidth = 2;
-  context.strokeStyle = '#d6b56d';
-  context.strokeRect(x, y, width, height);
-  context.restore();
+  if (box) {
+    const x = layout.x + box.x * layout.scale;
+    const y = layout.y + box.y * layout.scale;
+    const width = box.width * layout.scale;
+    const height = box.height * layout.scale;
+    context.save();
+    if (source.topDownMask) {
+      // The selection filled and outlined, everything else dimmed; the box it is cropped to faint.
+      context.drawImage(getPickShade(source), layout.x, layout.y, layout.width, layout.height);
+      context.globalAlpha = 0.45;
+    } else {
+      context.fillStyle = PICK_SHADE;
+      context.beginPath();
+      context.rect(layout.x, layout.y, layout.width, layout.height);
+      context.rect(x, y, width, height);
+      context.fill('evenodd');
+    }
+    context.setLineDash([6, 4]);
+    context.lineWidth = 2;
+    context.strokeStyle = '#d6b56d';
+    context.strokeRect(x, y, width, height);
+    context.restore();
+  }
+  const pointer = app._pointer;
+  if (app._topDownPickTool === 'brush' && pointer) {
+    context.save();
+    context.beginPath();
+    context.arc(pointer.x, pointer.y, app.brushSize / 2, 0, Math.PI * 2);
+    context.lineWidth = 3;
+    context.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+    context.stroke();
+    context.lineWidth = 1.5;
+    context.strokeStyle = app._pickErasing ? BRUSH_COLORS.erase : BRUSH_COLORS.paint;
+    if (app._pickErasing) context.setLineDash([4, 3]);
+    context.stroke();
+    context.restore();
+  }
 }
 
-async function pickTopDownCreature(app, point, { add = false } = {}) {
+/**
+ * Laid over the picture: dimmed outside the selection, filled and outlined inside it so its shape
+ * shows even on dark art. Made again only when the selection changes.
+ */
+function getPickShade(source) {
+  const mask = source.topDownMask;
+  if (source._pickShade?.mask === mask && source._pickShade.version === source.topDownMaskVersion)
+    return source._pickShade.canvas;
+  const { width, height } = mask;
+  const canvas = source._pickShade?.canvas ?? createCanvas(width, height);
+  const layer = source._pickShade?.layer ?? createCanvas(width, height);
+  const layerContext = layer.getContext('2d');
+  const context = canvas.getContext('2d');
+  context.save();
+  context.globalCompositeOperation = 'copy';
+  context.fillStyle = PICK_SHADE;
+  context.fillRect(0, 0, width, height);
+  context.globalCompositeOperation = 'destination-out';
+  context.drawImage(mask, 0, 0);
+  context.restore();
+  // The fill: the selection's shape in the tint.
+  const paintShape = (colour) => {
+    layerContext.save();
+    layerContext.globalCompositeOperation = 'source-in';
+    layerContext.fillStyle = colour;
+    layerContext.fillRect(0, 0, width, height);
+    layerContext.restore();
+  };
+  layerContext.clearRect(0, 0, width, height);
+  layerContext.drawImage(mask, 0, 0);
+  paintShape(PICK_TINT);
+  context.drawImage(layer, 0, 0);
+  // The outline: the selection grown a little all round, less the selection itself.
+  const edge = Math.max(2, Math.round(Math.max(width, height) / 250));
+  layerContext.clearRect(0, 0, width, height);
+  for (const [dx, dy] of [
+    [-edge, 0],
+    [edge, 0],
+    [0, -edge],
+    [0, edge],
+    [-edge, -edge],
+    [edge, edge],
+    [-edge, edge],
+    [edge, -edge],
+  ])
+    layerContext.drawImage(mask, dx, dy);
+  paintShape(PICK_OUTLINE);
+  layerContext.save();
+  layerContext.globalCompositeOperation = 'destination-out';
+  layerContext.drawImage(mask, 0, 0);
+  layerContext.restore();
+  context.drawImage(layer, 0, 0);
+  source._pickShade = { mask, version: source.topDownMaskVersion, canvas, layer };
+  return canvas;
+}
+
+/**
+ * The selection: white where the creature is, the size of the picture. Removing from the
+ * automatic crop starts from its box, so taking out a part (a rock) keeps the rest of it; adding
+ * starts from nothing, or the wand and brush would only ever grow that rectangle.
+ */
+function getPickMask(source, mode) {
+  if (source.topDownMask) return source.topDownMask;
+  const mask = createCanvas(source.canvas.width, source.canvas.height);
+  const box = source.topDownBox;
+  if (box && mode === 'remove') {
+    const context = mask.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(box.x, box.y, box.width, box.height);
+  }
+  source.topDownMask = mask;
+  source.topDownMaskVersion = 0;
+  return mask;
+}
+
+/** Adds `region` (a canvas, white where it covers) to the selection, removes it, or starts over. */
+function applyPickRegion(app, source, region, mode) {
+  const mask = getPickMask(source, mode);
+  const context = mask.getContext('2d');
+  context.save();
+  if (mode === 'replace') context.clearRect(0, 0, mask.width, mask.height);
+  context.globalCompositeOperation = mode === 'remove' ? 'destination-out' : 'source-over';
+  context.drawImage(region, 0, 0);
+  context.restore();
+  updatePickBox(app, source);
+}
+
+/** The box around the selection; a selection removed entirely goes back to the automatic crop. */
+function updatePickBox(app, source) {
+  const mask = source.topDownMask;
+  if (!mask) return;
+  source.topDownMaskVersion = (source.topDownMaskVersion ?? 0) + 1;
+  const { data, width, height } = mask.getContext('2d').getImageData(0, 0, mask.width, mask.height);
+  const alpha = new Uint8ClampedArray(width * height);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = data[pixel * 4 + 3];
+  const box = findSubjectBox(alpha, width, height, { minShare: 0, margin: 0.06 });
+  source.topDownReference = null;
+  if (!box) {
+    resetTopDownPick(app);
+    return;
+  }
+  source.topDownBox = box;
+  source.topDownPicked = true;
+  setCreatorStatus(
+    app,
+    localize(
+      'Creator.TopDownPicked',
+      'Creature picked: only the selection goes to the generator. Right-click or Alt removes, Auto goes back.',
+    ),
+  );
+}
+
+/** A region of the picture as a canvas, white where `covers(pixel)` holds. */
+function regionToCanvas(width, height, covers) {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  let count = 0;
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    if (!covers(pixel)) continue;
+    pixels.fill(255, pixel * 4, pixel * 4 + 4);
+    count += 1;
+  }
+  if (!count) return null;
+  const canvas = createCanvas(width, height);
+  canvas.getContext('2d').putImageData(new ImageData(pixels, width, height), 0, 0);
+  return canvas;
+}
+
+/** A press in the picker with the current tool; returns the brush drag to continue, if any. */
+function startTopDownPick(app, point, event) {
   const source = getPortraitWorkspace(app)?.source;
-  if (!source?.canvas || app.busy) return;
+  if (!source?.canvas || app.busy) return null;
+  const tool = app._topDownPickTool ?? 'click';
+  const mode = getPickMode({
+    tool,
+    button: event.button,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+  });
+  if (tool === 'brush') {
+    app._pickErasing = mode === 'remove';
+    paintTopDownPick(app, point, point, mode);
+    return { mode, pick: true, last: point };
+  }
+  const imagePoint = getTopDownPickPoint(source, point);
+  if (!imagePoint) return null;
+  // Click takes the whole creature (or, removing, the part clicked); the wand only ever a part.
+  void pickTopDownCreature(app, source, imagePoint, mode, {
+    whole: tool === 'click' && mode !== 'remove',
+  });
+  return null;
+}
+
+/** The brush: paints the selection on (or, with `mode` 'remove', off) along a stroke. */
+function paintTopDownPick(app, from, to, mode) {
+  const source = getPortraitWorkspace(app)?.source;
+  if (!source?.canvas) return;
   const layout = getTopDownPickerLayout(source.canvas, PREVIEW_SIZE);
-  const imagePoint = {
+  const toImage = (point) => ({
     x: (point.x - layout.x) / layout.scale,
     y: (point.y - layout.y) / layout.scale,
-  };
-  if (
-    imagePoint.x < 0 ||
-    imagePoint.y < 0 ||
-    imagePoint.x >= source.canvas.width ||
-    imagePoint.y >= source.canvas.height
-  )
-    return;
+  });
+  const start = toImage(from);
+  const end = toImage(to);
+  const width = app.brushSize / layout.scale;
+  const context = getPickMask(source, mode).getContext('2d');
+  context.save();
+  context.globalCompositeOperation = mode === 'remove' ? 'destination-out' : 'source-over';
+  context.strokeStyle = '#ffffff';
+  context.fillStyle = '#ffffff';
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.lineWidth = width;
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.lineTo(end.x, end.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(end.x, end.y, width / 2, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+  // The box follows when the stroke ends; reading the whole mask back on every move is too slow.
+  source.topDownMaskVersion = (source.topDownMaskVersion ?? 0) + 1;
+  renderCreatorPreview(app);
+}
+
+/**
+ * A Segment Anything click: the whole thing clicked (`whole`) or just the part under the click (a
+ * wing, the rock). Painted art defeats a colour fill, so the wand works this way too.
+ */
+async function pickTopDownCreature(app, source, imagePoint, mode, { whole = true } = {}) {
   setCreatorBusy(app, true);
   try {
     setCreatorStatus(app, localize('Creator.TopDownPicking', 'Outlining the creature...'));
@@ -5675,11 +5966,9 @@ async function pickTopDownCreature(app, point, { add = false } = {}) {
         setCreatorStatus(app, formatDownloadStatus('SelectDownloading', percent)),
     });
     const select = await source.topDownSelect;
-    const mask = await select(imagePoint);
-    const alpha = new Uint8ClampedArray(mask.width * mask.height);
-    for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = mask.data[pixel * 4 + 3];
-    const box = findSubjectBox(alpha, mask.width, mask.height, { minShare: 0, margin: 0.06 });
-    if (!box) {
+    const mask = await select(imagePoint, { whole });
+    const region = regionToCanvas(mask.width, mask.height, (pixel) => mask.data[pixel * 4 + 3] > 0);
+    if (!region) {
       setCreatorStatus(
         app,
         localize(
@@ -5690,27 +5979,7 @@ async function pickTopDownCreature(app, point, { add = false } = {}) {
       );
       return;
     }
-    const previous = add && source.topDownPicked ? source.topDownBox : null;
-    source.topDownBox = previous
-      ? {
-          x: Math.min(previous.x, box.x),
-          y: Math.min(previous.y, box.y),
-          width:
-            Math.max(previous.x + previous.width, box.x + box.width) - Math.min(previous.x, box.x),
-          height:
-            Math.max(previous.y + previous.height, box.y + box.height) -
-            Math.min(previous.y, box.y),
-        }
-      : box;
-    source.topDownPicked = true;
-    source.topDownReference = null;
-    setCreatorStatus(
-      app,
-      localize(
-        'Creator.TopDownPicked',
-        'Creature picked: only the outlined box goes to the generator. Shift-click to add more, Auto to go back.',
-      ),
-    );
+    applyPickRegion(app, source, region, mode);
   } catch (error) {
     source.topDownSelect = null;
     console.warn(`${MODULE_ID} | Could not outline the creature`, error);

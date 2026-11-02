@@ -467,6 +467,18 @@ test('a separate model mask becomes the alpha of the image', async () => {
   );
 });
 
+test('picking a creature takes the largest confident SAM mask, not a part of it', async () => {
+  const { pickWholeMaskIndex } = await import('../scripts/ai-tools.js');
+  // The head scores best, the whole dragon nearly as well: the whole dragon wins.
+  assert.equal(pickWholeMaskIndex([0.96, 0.9, 0.88], [500, 4000, 9000], 20000), 2);
+  // A big mask SAM is unsure of is not taken over the confident part.
+  assert.equal(pickWholeMaskIndex([0.95, 0.9, 0.4], [500, 4000, 9000], 20000), 1);
+  // Nearly the whole picture is the background, not the creature.
+  assert.equal(pickWholeMaskIndex([0.9, 0.88, 0.9], [500, 4000, 19800], 20000), 1);
+  // Nothing usable: the best score.
+  assert.equal(pickWholeMaskIndex([0.3, 0.7, 0.2], [500, 4000, 19900], 20000), 1);
+});
+
 test('SAM helpers pick the best mask and convert it to an alpha mask', async () => {
   const { pickBestMaskIndex, samMaskToImageData, scaleSamPoint } =
     await import('../scripts/ai-tools.js');

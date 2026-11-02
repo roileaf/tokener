@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Pick the creature has Click, Wand and Brush tools. Click selects the whole creature clicked, the wand just the part clicked (a wing, the rock), and the brush paints the selection. Right-click or Alt removes with any of them, so a rock under a dragon can be taken out. Only the selection goes to the generator; the rest of its box is left white. The selection is filled and outlined so its shape shows.
+
+### Fixed
+
+- Pick the creature on the Top-down tab works before any top-down token is made: clicking the creature in the picture did nothing until the tab had an image of its own. Pick and Auto now say "Choose an image first." instead of doing nothing when there is no image.
+- Top-down tokens keep fire breath and other coloured effects touching the creature, which the background removal took for background. Grey shadows are still removed.
+- Picking a creature outlines the whole creature, not the part clicked: clicking a dragon's head picked only the head.
+
 ## 3.0.3 - 2026-11-02
 
 ### Changed
