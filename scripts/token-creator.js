@@ -951,12 +951,16 @@ function prepareCreatorContext(app) {
       topDownHeading: localize('Creator.TopDownHeading', 'Top-down token'),
       topDownHint: localize(
         'Creator.TopDownHint',
-        'Made from the image on the Portrait tab, as seen from directly above, with no frame or ring. Saving makes both tokens; the Token HUD switches between them.',
+        "The Portrait tab's image is redrawn as seen from directly above, with no frame or ring; the picture decides how it looks. Saving makes both tokens; the Token HUD switches between them.",
       ),
-      topDownLooks: localize('Creator.TopDownLooks', 'Looks like'),
+      topDownLooks: localize('Creator.TopDownLooks', 'Image shows'),
+      topDownLooksTooltip: localize(
+        'Creator.TopDownLooksTooltip',
+        'A few words saying what the picture shows, to help the AI recognise unusual creatures. It never replaces the picture. Left empty, the picture is described for you.',
+      ),
       topDownLooksPlaceholder: localize(
         'Creator.TopDownLooksPlaceholder',
-        'e.g. a giant spider with a goblin on its back (left empty: described from the image)',
+        'optional, e.g. a giant spider with a goblin rider',
       ),
       topDownDescribeTooltip: localize(
         'Creator.TopDownDescribeTooltip',

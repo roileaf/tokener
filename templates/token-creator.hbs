@@ -193,13 +193,14 @@
           <p class='pf2e-tokener-creator-hint'>{{labels.topDownHint}}</p>
             <div class='pf2e-tokener-creator-topdown'>
               <div class='pf2e-tokener-creator-topdown-looks'>
-                <label for='{{id}}-top-down-looks'>{{labels.topDownLooks}}</label>
+                <label for='{{id}}-top-down-looks' data-tooltip='{{labels.topDownLooksTooltip}}'>{{labels.topDownLooks}}</label>
                 <input
                   type='text'
                   id='{{id}}-top-down-looks'
                   name='topDownLooks'
                   value='{{topDownLooks}}'
                   placeholder='{{labels.topDownLooksPlaceholder}}'
+                data-tooltip='{{labels.topDownLooksTooltip}}'
                 />
                 <button
                   type='button'
