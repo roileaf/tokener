@@ -3034,6 +3034,18 @@
   border-radius: 999px;
 }
 
+/* Repainting needs a top-down token to repaint. */
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-topdown:not(.has-options)
+  .pf2e-tokener-creator-topdown-repaint {
+  display: none;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-repaint-actions {
+  display: flex;
+  gap: 4px;
+}
+
 /* The pose text only matters for the Custom stance. */
 .pf2e-tokener-creator-app
   .pf2e-tokener-creator-topdown:not([data-stance='custom'])

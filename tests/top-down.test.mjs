@@ -26,8 +26,10 @@ import { tidyAlphaMask } from '../scripts/ai-tools.js';
 import { getTokenFrameLayout } from '../scripts/token-composer.js';
 import {
   checkTopDownSupport,
+  buildRepaintPrompt,
   findSubjectBox,
   fitViewToBox,
+  getRepaintCells,
   getDefaultTopDownHighDetail,
   registerTopDownMovement,
   formatTopDownChat,
@@ -608,4 +610,24 @@ test('a custom stance uses the pose as written and allows what it asks for', () 
     buildTopDownPrompt({ name: 'Dragon', stance: 'custom', pose: '  ' }),
     buildTopDownPrompt({ name: 'Dragon' }),
   );
+});
+
+test('a painted area maps to the latent cells it covers, grown by one cell', () => {
+  const size = 64;
+  const alpha = new Uint8ClampedArray(size * size);
+  for (let y = 0; y < 16; y += 1) for (let x = 0; x < 16; x += 1) alpha[y * size + x] = 255;
+  const cells = getRepaintCells(alpha, size, size, 4, 4);
+  // The painted top-left cell, and its neighbours.
+  assert.deepEqual([...cells], [1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(
+    [...getRepaintCells(new Uint8ClampedArray(size * size), size, size, 4, 4)],
+    Array(16).fill(0),
+  );
+});
+
+test('the repaint prompt asks for the change and to keep the rest', () => {
+  const prompt = buildRepaintPrompt('a second, smaller pair of wings.');
+  assert.match(prompt, /^A second, smaller pair of wings\. Change only that/);
+  assert.match(prompt, /keep the rest of the creature/);
+  assert.match(prompt, /white background/);
 });

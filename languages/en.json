@@ -437,5 +437,16 @@
   "PF2ETokener.Creator.TopDownPose": "Pose",
   "PF2ETokener.Creator.TopDownPosePlaceholder": "e.g. rearing up, wings raised, roaring",
   "PF2ETokener.Creator.TopDownPoseMissing": "Describe the custom pose first.",
-  "PF2ETokener.HUD.Look.custom": "Custom pose"
+  "PF2ETokener.HUD.Look.custom": "Custom pose",
+  "PF2ETokener.Creator.RepaintTooltip": "Repaint brush: paint the area to change (right-click erases), then write the change below.",
+  "PF2ETokener.Creator.TopDownChange": "Change",
+  "PF2ETokener.Creator.TopDownChangePlaceholder": "e.g. a second, smaller pair of wings",
+  "PF2ETokener.Creator.TopDownRepaint": "Repaint the painted area",
+  "PF2ETokener.Creator.TopDownRepaintClear": "Clear the painted area",
+  "PF2ETokener.Creator.TopDownRepaintHint": "Paint with the Repaint brush where the change goes (for a new part, from the body outwards), describe it, and only that area is redrawn.",
+  "PF2ETokener.Creator.TopDownRepaintNoToken": "Generate a top-down token first.",
+  "PF2ETokener.Creator.TopDownRepaintNoChange": "Write what to change first.",
+  "PF2ETokener.Creator.TopDownRepaintNoPaint": "Paint the area to change with the Repaint brush first.",
+  "PF2ETokener.Creator.TopDownRepainted": "Repainted. Pick a version below; the first is the one before the change.",
+  "PF2ETokener.Creator.TopDownRepaintFailed": "Repaint failed: {error}"
 }

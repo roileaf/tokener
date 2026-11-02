@@ -100,6 +100,8 @@ import {
   describeTopDownSupport,
   findSubjectBox,
   generateTopDown,
+  buildRepaintPrompt,
+  repaintTopDown,
   getActorAppearance,
   getDefaultTopDownFacing,
   getDefaultTopDownHighDetail,
@@ -285,6 +287,8 @@ const loadedClips = new Map();
 const loadingClips = new Set();
 const MAX_WARP_STRENGTH = 40;
 const WARP_STRENGTH_RATIO = 0.18;
+// The Repaint brush's overlay on the Top-down tab.
+const REPAINT_COLOR = '#a26bff';
 const REGION_COLOR = '#d38fff';
 /** Preview px the pointer moves before a lasso outline gains another point. */
 const LASSO_SPACING = 2;
@@ -987,6 +991,21 @@ function prepareCreatorContext(app) {
       topDownStance: localize('Creator.TopDownStanceLabel', 'Stance'),
       topDownHighDetail: localize('Creator.TopDownHighDetail', 'High detail'),
       topDownPose: localize('Creator.TopDownPose', 'Pose'),
+      repaintTooltip: localize(
+        'Creator.RepaintTooltip',
+        'Repaint brush: paint the area to change (right-click erases), then write the change below.',
+      ),
+      repaintChange: localize('Creator.TopDownChange', 'Change'),
+      repaintChangePlaceholder: localize(
+        'Creator.TopDownChangePlaceholder',
+        'e.g. a second, smaller pair of wings',
+      ),
+      repaintButton: localize('Creator.TopDownRepaint', 'Repaint the painted area'),
+      repaintClear: localize('Creator.TopDownRepaintClear', 'Clear the painted area'),
+      repaintHint: localize(
+        'Creator.TopDownRepaintHint',
+        'Paint with the Repaint brush where the change goes (for a new part, from the body outwards), describe it, and only that area is redrawn.',
+      ),
       topDownPosePlaceholder: localize(
         'Creator.TopDownPosePlaceholder',
         'e.g. rearing up, wings raised, roaring',
@@ -1121,6 +1140,15 @@ function bindPreviewInteractions(app, canvas) {
       canvas.setPointerCapture?.(event.pointerId);
       return;
     }
+    if (app.maskTool === 'repaint' && app.editTarget === 'topdown' && app.cutout) {
+      event.preventDefault();
+      const point = getTokenPoint(app, canvas, event);
+      const mode = event.button === 2 || event.altKey ? 'erase' : 'paint';
+      drag = { mode, repaint: true, last: point };
+      paintRepaintMask(app, point, point, mode);
+      canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
     if (isCleanupTool(app.maskTool) && app.cutout) {
       event.preventDefault();
       const point = getTokenPoint(app, canvas, event);
@@ -1207,7 +1235,8 @@ function bindPreviewInteractions(app, canvas) {
     }
     if (drag.mode) {
       const point = getTokenPoint(app, canvas, event);
-      if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
+      if (drag.repaint) paintRepaintMask(app, drag.last, point, drag.mode);
+      else if (drag.cleanup) paintCleanup(app, drag.last, point, drag.mode);
       else if (drag.region) paintEffectRegion(app, drag.region, drag.last, point, drag.mode);
       else paintPopOutMask(app, drag.last, point, drag.mode);
       drag.last = point;
@@ -1373,6 +1402,10 @@ export function handleCreatorInput(app, event) {
   if (name === 'topDownStance') {
     if (TOP_DOWN_STANCES.includes(target.value) && !app.busy) setTopDownStance(app, target.value);
     else syncTopDownStances(app);
+    return;
+  }
+  if (name === 'topDownChange') {
+    app._topDownChange = target.value;
     return;
   }
   if (name === 'topDownPose') {
@@ -1588,6 +1621,17 @@ async function handleCreatorClick(app, event) {
       return;
     case 'top-down-describe':
       await describeTopDownCreature(app);
+      return;
+    case 'mask-repaint':
+      if (app.editTarget === 'topdown' && app.cutout)
+        setMaskTool(app, app.maskTool === 'repaint' ? null : 'repaint');
+      return;
+    case 'top-down-repaint':
+      await runTopDownRepaint(app);
+      return;
+    case 'top-down-repaint-clear':
+      if (app.workspaces.topDown) app.workspaces.topDown.repaintMask = null;
+      renderCreatorPreview(app);
       return;
     case 'top-down-pick':
       await applyTopDownOption(app, Number(button.dataset.topDownIndex));
@@ -2256,7 +2300,10 @@ function renderCreatorPreview(app) {
   const tokenMode = app.editTarget === 'token';
   if (portraitMode) drawPortraitPreview(tokenContext, app, size);
   else if (tokenMode) drawPreviewToken(tokenContext, app, size);
-  else drawTopDownToken(tokenContext, app, size);
+  else {
+    drawTopDownToken(tokenContext, app, size);
+    drawRepaintOverlay(tokenContext, app, size);
+  }
   if (isCleanupTool(app.maskTool)) drawCleanupGhost(tokenContext, app, size);
   if (tokenMode && shouldShowMaskOverlay(app)) drawMaskOverlay(tokenContext, app, size);
   if (tokenMode) drawEffectRegionOverlay(tokenContext, app, size);
@@ -2400,7 +2447,9 @@ function setEditTarget(app, target) {
   app.editTarget = ['portrait', 'topdown'].includes(target) ? target : 'token';
   syncFlipControls(app);
   if (app.editTarget !== 'token') stopAnimationPlayback(app);
-  if (app.editTarget !== 'token' && !isCleanupTool(app.maskTool)) setMaskTool(app, null);
+  if (app.editTarget !== 'token' && !isCleanupTool(app.maskTool) && app.maskTool !== 'repaint')
+    setMaskTool(app, null);
+  if (app.editTarget !== 'topdown' && app.maskTool === 'repaint') setMaskTool(app, null);
   getCreatorSection(app)?.setAttribute('data-edit-target', app.editTarget);
   syncZoomInput(app);
   renderCreatorPreview(app);
@@ -4033,7 +4082,8 @@ function setMaskTool(app, tool) {
   // The mask overlay and brushes map to the still art, so editing tools pause the preview loop.
   if (!canPlayWithTool(tool)) stopAnimationPlayback(app);
   app.maskTool = tool;
-  if (tool && tool !== 'pin' && tool !== 'region' && !isCleanupTool(tool)) ensurePopOutMask(app);
+  if (tool && !['pin', 'region', 'repaint'].includes(tool) && !isCleanupTool(tool))
+    ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
   if (app._pointer) app._pointer.mode = tool === 'pin' ? null : tool === 'region' ? 'paint' : tool;
   syncMaskControls(app);
@@ -4343,7 +4393,7 @@ function syncMaskControls(app) {
   const root = getCreatorRoot(app);
   if (!root) return;
   const tool = getToolButton(app.maskTool);
-  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin', 'region'];
+  const tools = ['move', 'paint', 'select', 'cut', 'wand', 'pin', 'region', 'repaint'];
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
@@ -4489,6 +4539,7 @@ function formatDownloadStatus(key, percent) {
 }
 
 function canShowBrush(app) {
+  if (app.maskTool === 'repaint') return app.editTarget === 'topdown' && Boolean(app.cutout);
   if (app.maskTool === 'region') return !app.regionLasso && canPaintRegion(app);
   return isCleanupTool(app.maskTool) ? Boolean(app.cutout) : canMask(app);
 }
@@ -5388,6 +5439,123 @@ async function restoreTopDown(app) {
       'Top-down tokens made before are back on the Top-down tab.',
     ),
   );
+}
+
+/** Paints (or, with `mode` 'erase', clears) the area the next repaint redraws. */
+function paintRepaintMask(app, from, to, mode) {
+  const workspace = app.workspaces.topDown;
+  const source = workspace?.source?.canvas;
+  if (!source) return;
+  workspace.repaintMask ??= createCanvas(source.width, source.height);
+  const start = getEditImagePoint(app, from);
+  const end = getEditImagePoint(app, to);
+  const width = app.brushSize * end.scale;
+  const context = workspace.repaintMask.getContext('2d');
+  context.save();
+  context.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+  context.strokeStyle = '#ffffff';
+  context.fillStyle = '#ffffff';
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.lineWidth = width;
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.lineTo(end.x, end.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(end.x, end.y, width / 2, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+  renderCreatorPreview(app);
+}
+
+/** The painted area, tinted over the top-down token. */
+function drawRepaintOverlay(context, app, size) {
+  const mask = app.workspaces.topDown?.repaintMask;
+  if (!mask || !app.cutout) return;
+  const tint = createCanvas(mask.width, mask.height);
+  const tintContext = tint.getContext('2d');
+  tintContext.fillStyle = REPAINT_COLOR;
+  tintContext.fillRect(0, 0, mask.width, mask.height);
+  tintContext.globalCompositeOperation = 'destination-in';
+  tintContext.drawImage(mask, 0, 0);
+  const layout = getPreviewLayout(app, size);
+  context.save();
+  context.globalAlpha = 0.5;
+  context.drawImage(tint, layout.x, layout.y, layout.width, layout.height);
+  context.restore();
+}
+
+function hasPaint(canvas) {
+  if (!canvas) return false;
+  const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 3; index < data.length; index += 4) if (data[index] > 32) return true;
+  return false;
+}
+
+/**
+ * Repaint: the model redraws only the area painted with the Repaint brush, following the
+ * Change text, into three new versions next to the one they came from.
+ */
+async function runTopDownRepaint(app) {
+  const stance = getTopDownStance(app);
+  const entry = app._topDownStances?.[stance];
+  const workspace = app.workspaces.topDown;
+  const image = entry?.images?.[entry.applied];
+  const fail = (key, text) => setCreatorStatus(app, localize(key, text), true);
+  if (!image || entry.workspace !== workspace)
+    return fail('Creator.TopDownRepaintNoToken', 'Generate a top-down token first.');
+  const change = String(app._topDownChange ?? '').trim();
+  if (!change) return fail('Creator.TopDownRepaintNoChange', 'Write what to change first.');
+  if (!hasPaint(workspace.repaintMask))
+    return fail(
+      'Creator.TopDownRepaintNoPaint',
+      'Paint the area to change with the Repaint brush first.',
+    );
+  const support = await checkTopDownSupport();
+  if (!support.ok) {
+    setCreatorStatus(app, describeTopDownSupport(support.reason), true);
+    return;
+  }
+  setCreatorBusy(app, true);
+  try {
+    app._topDownRuns = (app._topDownRuns ?? 0) + 1;
+    const seeds = TOP_DOWN_SEEDS.map(
+      (seed) => seed + (app._topDownRuns - 1) * TOP_DOWN_SEEDS.length,
+    );
+    const results = await repaintTopDown(image, workspace.repaintMask, buildRepaintPrompt(change), {
+      seeds,
+      createCanvas,
+      onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
+    });
+    if (app._topDownStances?.[stance] !== entry) return;
+    // The version it came from stays first, so a repaint can always be undone by picking it.
+    entry.images = [image, ...results];
+    entry.applied = 0;
+    workspace.repaintMask = null;
+    renderTopDownOptions(app);
+    await applyTopDownOption(app, 1);
+    void keepTopDown(app);
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.TopDownRepainted',
+        'Repainted. Pick a version below; the first is the one before the change.',
+      ),
+    );
+  } catch (error) {
+    console.error(`${MODULE_ID} | Top-down repaint failed`, error);
+    setCreatorStatus(
+      app,
+      localize('Creator.TopDownRepaintFailed', 'Repaint failed: {error}').replace(
+        '{error}',
+        describeError(error),
+      ),
+      true,
+    );
+  } finally {
+    setCreatorBusy(app, false);
+  }
 }
 
 /** A Top-down tab image: always cut out with RMBG-1.4, whatever the token's background mode. */

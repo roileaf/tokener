@@ -70,6 +70,14 @@
             aria-pressed='false'
             data-tooltip='{{labels.cleanupWandTooltip}}'
           ><i class='fas fa-fill-drip'></i></button>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-icon-button'
+            data-top-down-only
+            data-creator-action='mask-repaint'
+            aria-pressed='false'
+            data-tooltip='{{labels.repaintTooltip}}'
+          ><i class='fas fa-paintbrush'></i></button>
           <span class='pf2e-tokener-creator-divider' data-pop-out-tools></span>
           <button
             type='button'
@@ -252,6 +260,32 @@
                 data-tooltip='{{labels.topDownTooltip}}'
               ><i class='fas fa-circle-down'></i> {{labels.topDown}}</button>
               <div class='pf2e-tokener-creator-topdown-options'></div>
+              <div class='pf2e-tokener-creator-topdown-looks pf2e-tokener-creator-topdown-repaint'>
+                <label for='{{id}}-top-down-change'>{{labels.repaintChange}}</label>
+                <input
+                  type='text'
+                  id='{{id}}-top-down-change'
+                  name='topDownChange'
+                  placeholder='{{labels.repaintChangePlaceholder}}'
+                />
+                <span class='pf2e-tokener-creator-topdown-repaint-actions'>
+                  <button
+                    type='button'
+                    class='pf2e-tokener-creator-icon-button'
+                    data-creator-action='top-down-repaint'
+                    data-tooltip='{{labels.repaintButton}}'
+                    aria-label='{{labels.repaintButton}}'
+                  ><i class='fas fa-paintbrush'></i></button>
+                  <button
+                    type='button'
+                    class='pf2e-tokener-creator-icon-button'
+                    data-creator-action='top-down-repaint-clear'
+                    data-tooltip='{{labels.repaintClear}}'
+                    aria-label='{{labels.repaintClear}}'
+                  ><i class='fas fa-eraser'></i></button>
+                </span>
+              </div>
+              <p class='pf2e-tokener-creator-hint pf2e-tokener-creator-topdown-repaint'>{{labels.repaintHint}}</p>
             </div>
         </section>
       {{/if}}

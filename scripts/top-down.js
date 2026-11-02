@@ -576,7 +576,7 @@ function toTokens(nchw, channels, count) {
   return tokens;
 }
 
-async function denoise(ort, session, { embeds, reference, seed }) {
+async function denoise(ort, session, { embeds, reference, seed, repaint = null }) {
   const { tokens, height, width } = reference;
   const count = height * width;
   const imageIds = new BigInt64Array(count * 8);
@@ -586,7 +586,8 @@ async function denoise(ort, session, { embeds, reference, seed }) {
   const textIds = new BigInt64Array(TEXT_LENGTH * 4);
   for (let index = 0; index < TEXT_LENGTH; index += 1) textIds[index * 4 + 3] = BigInt(index);
   const sigmas = getTopDownSigmas(count, STEPS);
-  let latents = gaussianNoise(count * 128, seed);
+  const noise = gaussianNoise(count * 128, seed);
+  let latents = noise;
   for (let step = 0; step < STEPS; step += 1) {
     const input = new Float32Array(count * 256);
     input.set(latents, 0);
@@ -604,9 +605,147 @@ async function denoise(ort, session, { embeds, reference, seed }) {
     const next = new Float32Array(count * 128);
     for (let index = 0; index < next.length; index += 1)
       next[index] = latents[index] + delta * prediction[index];
+    // Repaint: cells outside the painted area follow the reference itself (noised to this step),
+    // so only the painted area is redrawn and it joins up with what is around it.
+    if (repaint) {
+      const sigma = sigmas[step + 1];
+      for (let cell = 0; cell < count; cell += 1) {
+        if (repaint[cell]) continue;
+        for (let channel = cell * 128; channel < cell * 128 + 128; channel += 1)
+          next[channel] = (1 - sigma) * tokens[channel] + sigma * noise[channel];
+      }
+    }
     latents = next;
   }
   return { latents, height, width };
+}
+
+/**
+ * Which latent cells (`width` x `height`, one per 16 px) a painted mask covers, grown by one cell
+ * so the redrawn area blends into its surroundings: 1 to redraw, 0 to keep.
+ */
+export function getRepaintCells(alpha, maskWidth, maskHeight, width, height) {
+  const cells = new Uint8Array(width * height);
+  for (let row = 0; row < height; row += 1)
+    for (let column = 0; column < width; column += 1) {
+      const x0 = Math.floor((column * maskWidth) / width);
+      const x1 = Math.ceil(((column + 1) * maskWidth) / width);
+      const y0 = Math.floor((row * maskHeight) / height);
+      const y1 = Math.ceil(((row + 1) * maskHeight) / height);
+      let painted = 0;
+      for (let y = y0; y < y1; y += 1)
+        for (let x = x0; x < x1; x += 1) if (alpha[y * maskWidth + x] > 32) painted += 1;
+      if (painted / Math.max(1, (x1 - x0) * (y1 - y0)) > 0.05) cells[row * width + column] = 1;
+    }
+  const grown = cells.slice();
+  for (let row = 0; row < height; row += 1)
+    for (let column = 0; column < width; column += 1) {
+      if (!cells[row * width + column]) continue;
+      for (const [dy, dx] of [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+        [-1, -1],
+        [-1, 1],
+        [1, -1],
+        [1, 1],
+      ]) {
+        const y = row + dy;
+        const x = column + dx;
+        if (y >= 0 && y < height && x >= 0 && x < width) grown[y * width + x] = 1;
+      }
+    }
+  return grown;
+}
+
+/**
+ * Redraws only the painted part of a top-down image: `image` (a square canvas on white, as
+ * generated) where `mask` (a canvas the same size, painted area opaque) is painted, following
+ * `prompt`. Resolves to one canvas per seed; outside the painted area (feathered) each is the
+ * original, pixel for pixel. The painted area is blanked in the reference the model sees
+ * (`clearReference`), or it simply copies what was there; outside it, the latents follow the
+ * original (`constrain`) so the new part joins up with the rest. Tested: "a second pair of wings"
+ * painted beside a dragon's body gave a second pair of wings; "four wings" over the existing
+ * pair did not (the model does not follow counts).
+ */
+export async function repaintTopDown(
+  image,
+  mask,
+  prompt,
+  { seeds = TOP_DOWN_SEEDS, createCanvas, onStatus, constrain = true, clearReference = true } = {},
+) {
+  const ort = await loadOrt();
+  const models = await loadSessions(ort, onStatus);
+  onStatus?.({ phase: 'generating', done: 0, total: seeds.length });
+  const size = image.width;
+  const reference = createCanvas(size, size);
+  const referenceContext = reference.getContext('2d');
+  referenceContext.fillStyle = '#fff';
+  referenceContext.fillRect(0, 0, size, size);
+  referenceContext.drawImage(image, 0, 0, size, size);
+  const embeds = await encodePrompt(ort, models.textEncoder, prompt);
+  const scaled = createCanvas(size, size);
+  scaled.getContext('2d').drawImage(mask, 0, 0, size, size);
+  let referenceInput = reference;
+  if (clearReference) {
+    referenceInput = createCanvas(size, size);
+    const context = referenceInput.getContext('2d');
+    context.drawImage(reference, 0, 0);
+    const blank = createCanvas(size, size);
+    const blankContext = blank.getContext('2d');
+    blankContext.fillStyle = '#fff';
+    blankContext.fillRect(0, 0, size, size);
+    blankContext.globalCompositeOperation = 'destination-in';
+    blankContext.drawImage(scaled, 0, 0);
+    context.drawImage(blank, 0, 0);
+  }
+  const encoded = await encodeReference(ort, models.vaeEncoder, referenceInput);
+  const maskPixels = scaled.getContext('2d').getImageData(0, 0, size, size).data;
+  const alpha = new Uint8ClampedArray(size * size);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = maskPixels[pixel * 4 + 3];
+  const repaint = getRepaintCells(alpha, size, size, encoded.width, encoded.height);
+  // The feathered painted area, in pixels, for pasting the redrawn part back over the original.
+  const feather = createCanvas(size, size);
+  const featherContext = feather.getContext('2d');
+  featherContext.filter = `blur(${Math.max(2, Math.round(size / 96))}px)`;
+  featherContext.drawImage(scaled, 0, 0);
+  featherContext.drawImage(scaled, 0, 0);
+  const results = [];
+  for (const seed of seeds) {
+    const latents = await denoise(ort, models.transformer, {
+      embeds,
+      reference: encoded,
+      seed,
+      repaint: constrain ? repaint : null,
+    });
+    const redrawn = await decode(ort, models.vaeDecoder, latents, createCanvas);
+    const patch = createCanvas(size, size);
+    const patchContext = patch.getContext('2d');
+    patchContext.drawImage(redrawn, 0, 0, size, size);
+    patchContext.globalCompositeOperation = 'destination-in';
+    patchContext.drawImage(feather, 0, 0);
+    const out = createCanvas(size, size);
+    const outContext = out.getContext('2d');
+    outContext.drawImage(reference, 0, 0);
+    outContext.drawImage(patch, 0, 0);
+    results.push(out);
+    onStatus?.({ phase: 'generating', done: results.length, total: seeds.length });
+  }
+  return results;
+}
+
+/** The prompt for repainting part of a top-down token: the change, and keep everything else. */
+export function buildRepaintPrompt(change) {
+  const text = String(change ?? '')
+    .trim()
+    .replace(/[.!?]+$/, '');
+  return [
+    `${text[0]?.toUpperCase() ?? ''}${text.slice(1)}.`,
+    'Change only that, and keep the rest of the creature, its pose, colours, markings and design exactly as in the reference image.',
+    'Seen from directly above, as a figure on a tabletop battle map.',
+    'Flat, even lighting with no shadows at all. Isolated on a pure solid white background.',
+  ].join(' ');
 }
 
 async function decode(ort, session, { latents, height, width }, createCanvas) {
