@@ -119,18 +119,20 @@ function toPhrase(sentence) {
 
 /**
  * What the prompt needs to know about an actor, from its system's data:
- * `{ name, size, kinds, appearance }`. Unknown fields stay null or empty.
+ * `{ name, size, kinds, appearance, group }`. Unknown fields stay null or empty.
  */
 export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
   const d = data ?? {};
   let size = null;
   let kinds = [];
   let appearance = '';
+  let group = false;
   switch (system) {
     case 'pf2e':
     case 'sf2e':
       size = sizeWord(d.traits?.size?.value);
       kinds = d.traits?.value ?? [];
+      group = kinds.includes('troop') || kinds.includes('swarm');
       appearance = pickAppearance(d.details?.publicNotes);
       break;
     case 'dnd5e':
@@ -138,10 +140,12 @@ export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
       kinds = [d.details?.type?.value, d.details?.type?.subtype, d.details?.type?.custom].filter(
         Boolean,
       );
+      group = Boolean(d.details?.type?.swarm);
       appearance = pickAppearance(d.details?.biography?.value);
       break;
     case 'daggerheart':
       size = sizeWord(d.size);
+      group = String(d.type ?? '').toLowerCase() === 'horde';
       // Short descriptions of how the adversary looks: taken whole.
       appearance = toPhrase(sentencesOf(d.description)[0] ?? '');
       break;
@@ -153,6 +157,7 @@ export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
           ? ({ T: 'tiny', S: 'small', M: 'medium', L: 'large' }[letter] ?? 'medium')
           : sizeFromSquares(squares);
       kinds = d.monster?.keywords ?? [];
+      group = /swarm|horde/i.test(String(d.monster?.organization ?? ''));
       break;
     }
     case 'crucible': {
@@ -180,6 +185,7 @@ export function getCreatureProfile({ name, system, data, footprint = [1, 1] }) {
       (kind) => /^[a-z][a-z -]*$/.test(kind) && !NOT_LOOKS.has(kind),
     ),
     appearance,
+    group,
   };
 }
 
@@ -198,11 +204,6 @@ function describeLooks(looks) {
   return `What it looks like: ${looks}.`;
 }
 
-/**
- * The top-down editing prompt for a creature profile. `appearance` is a short phrase saying what
- * the creature is ("a large spider-like creature"), from the actor's text, the image or the user:
- * it fixed most creatures the model otherwise turned into a generic figure.
- */
 // Which side faces the camera. Front (the face and chest seen from above, facing the bottom of
 // the image) showed people far better; Back (head to the top, body behind it) suits beasts and
 // flyers, which Front squashed into a creature looking up at the camera.
@@ -217,21 +218,67 @@ const VIEWS = Object.freeze({
     sees: 'We see the top of its head and its back. Its head points to the top of the image and the rest of its body extends behind it towards the bottom of the image.',
   },
 });
+// Groups (troops, swarms, hordes): one prompt for the whole group, which the model otherwise
+// merged into a single figure.
+const GROUP_VIEWS = Object.freeze({
+  front: {
+    onto: 'looking straight down onto this exact group of creatures',
+    sees: 'We see each of them from above: the tops of their heads, their faces and shoulders, all facing the bottom of the image.',
+  },
+  back: {
+    onto: 'looking straight down at the backs of this exact group of creatures',
+    sees: 'We see each of them from above and behind: the tops of their heads and their backs, heads towards the top of the image.',
+  },
+});
 
-export function buildTopDownPrompt({ name, size, kinds = [], appearance = '', facing = 'front' }) {
-  const view = VIEWS[facing] ?? VIEWS.front;
+// Kinds that showed better seen from behind: beasts, birds and dragons came out squashed into a
+// creature looking up at the camera when facing front. People and anything humanoid face front.
+const FRONT_KINDS =
+  /\b(humanoid|human|elf|dwarf|gnome|halfling|goblin|hobgoblin|orc|giant|fiend|devil|demon|celestial|angel|undead|construct)\b/;
+const BACK_KINDS =
+  /\b(beast|animal|dragon|monstrosity|vermin|insect|bird|fish|wyrm|drake|hydra|wyvern|linnorm)\b/;
+
+/** The facing that suits a creature: back for beasts and dragons, front for everything else. */
+export function getDefaultFacing({ name = '', kinds = [] } = {}) {
+  const text = [...kinds, name].join(' ').toLowerCase();
+  if (FRONT_KINDS.test(kinds.join(' ').toLowerCase())) return 'front';
+  return BACK_KINDS.test(text) ? 'back' : 'front';
+}
+
+/**
+ * The top-down editing prompt for a creature profile. `appearance` is a short phrase saying what
+ * the creature is ("a large spider-like creature"), from the actor's text, the image or the user:
+ * it fixed most creatures the model otherwise turned into a generic figure. `group` asks for a
+ * whole troop or swarm instead of one creature.
+ */
+export function buildTopDownPrompt({
+  name,
+  size,
+  kinds = [],
+  appearance = '',
+  facing = 'front',
+  group = false,
+}) {
+  const views = group ? GROUP_VIEWS : VIEWS;
+  const view = views[facing] ?? views.front;
   const kindText = kinds.length ? ` (${kinds.slice(0, 4).join(', ')})` : '';
   const looks = String(appearance ?? '')
     .trim()
     .replace(/[.!?]+$/, '');
   return [
-    `Seen from directly above, ${view.onto}, ${name || 'creature'}${kindText}, as a figure on a tabletop battle map.`,
+    `Seen from directly above, ${view.onto}, ${name || 'creature'}${kindText}, as ${group ? 'one token' : 'a figure'} on a tabletop battle map.`,
     describeLooks(looks),
-    'Show only the one main creature of the reference image, and nothing of its surroundings.',
+    group
+      ? 'Show the whole group of the reference image packed together, and nothing of its surroundings.'
+      : 'Show only the one main creature of the reference image, and nothing of its surroundings.',
     view.sees,
-    'Keep its body exactly as the reference image shows it, and keep everything it is holding exactly as in the reference.',
+    group
+      ? 'Keep their bodies exactly as the reference image shows them, and keep everything they hold exactly as in the reference.'
+      : 'Keep its body exactly as the reference image shows it, and keep everything it is holding exactly as in the reference.',
     'Add nothing that is not in the reference image.',
-    size ? `It is ${SIZE_PHRASES[size]}; give it the build and bulk of that size.` : '',
+    size
+      ? `${group ? 'The group' : 'It'} is ${SIZE_PHRASES[size]}; give it the build and bulk of that size.`
+      : '',
     LOOK,
   ]
     .filter(Boolean)

@@ -11,12 +11,16 @@ import {
 import {
   buildTopDownPrompt,
   getCreatureProfile,
+  getDefaultFacing,
   pickAppearance,
 } from '../scripts/top-down-prompt.js';
 import { cleanCaption } from '../scripts/creature-caption.js';
 import { tidyAlphaMask } from '../scripts/ai-tools.js';
+import { getTokenFrameLayout } from '../scripts/token-composer.js';
 import {
   checkTopDownSupport,
+  findSubjectBox,
+  fitViewToBox,
   formatTopDownChat,
   gaussianNoise,
   getGridIds,
@@ -275,4 +279,73 @@ test('top-down prompts face front by default and can show the back', () => {
   assert.match(back, /looking straight down at the back of this exact creature/);
   assert.match(back, /Its head points to the top of the image/);
   assert.equal(buildTopDownPrompt({ name: 'Ezren', facing: 'sideways' }), front);
+});
+
+test('the default facing is back for beasts and dragons, front for people', () => {
+  assert.equal(getDefaultFacing({ name: 'Eagle', kinds: ['beast'] }), 'back');
+  assert.equal(getDefaultFacing({ name: 'Young Ice Dragon', kinds: [] }), 'back');
+  assert.equal(getDefaultFacing({ name: 'Hydra', kinds: [] }), 'back');
+  assert.equal(getDefaultFacing({ name: 'Ezren', kinds: ['human', 'humanoid'] }), 'front');
+  assert.equal(getDefaultFacing({ name: 'Dragonborn Knight', kinds: ['humanoid'] }), 'front');
+  assert.equal(getDefaultFacing({ name: 'Imp', kinds: ['fiend', 'devil'] }), 'front');
+  assert.equal(getDefaultFacing({ name: 'Mystery' }), 'front');
+});
+
+test('the subject box covers the main figure, not bystanders, with a margin', () => {
+  const width = 100;
+  const height = 100;
+  const alpha = new Uint8ClampedArray(width * height);
+  const fill = (x0, y0, x1, y1) => {
+    for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) alpha[y * width + x] = 255;
+  };
+  fill(40, 20, 60, 80); // main figure, 1200 px
+  fill(5, 85, 10, 90); // small bystander, 25 px: left out
+  assert.deepEqual(findSubjectBox(alpha, width, height), { x: 35, y: 15, width: 30, height: 70 });
+  fill(0, 0, 100, 100);
+  assert.equal(findSubjectBox(alpha, width, height), null); // nearly the whole image
+  assert.equal(findSubjectBox(new Uint8ClampedArray(16), 4, 4), null);
+});
+
+test('top-down framing centres the creature and fills the square the same way', () => {
+  const box = { x: 100, y: 60, width: 200, height: 300 };
+  const view = fitViewToBox({ imageWidth: 512, imageHeight: 512, box, fill: 0.95 });
+  const size = 400;
+  const layout = getTokenFrameLayout({
+    imageWidth: 512,
+    imageHeight: 512,
+    size,
+    zoom: view.zoom,
+    offsetX: view.offsetX * size,
+    offsetY: view.offsetY * size,
+  });
+  const scale = layout.width / 512;
+  assert.ok(Math.abs(box.height * scale - 0.95 * size) < 1e-6);
+  assert.ok(Math.abs(layout.x + (box.x + box.width / 2) * scale - size / 2) < 1e-6);
+  assert.ok(Math.abs(layout.y + (box.y + box.height / 2) * scale - size / 2) < 1e-6);
+});
+
+test('troops, swarms and hordes are drawn as one group token', () => {
+  const troop = getCreatureProfile({
+    name: 'Sylirican Phalanx',
+    system: 'pf2e',
+    data: { traits: { size: { value: 'grg' }, value: ['human', 'troop'] } },
+  });
+  assert.equal(troop.group, true);
+  assert.equal(
+    getCreatureProfile({
+      name: 'Rats',
+      system: 'dnd5e',
+      data: { details: { type: { value: 'beast', swarm: 'tiny' } } },
+    }).group,
+    true,
+  );
+  assert.equal(
+    getCreatureProfile({ name: 'Mob', system: 'daggerheart', data: { type: 'Horde' } }).group,
+    true,
+  );
+  assert.equal(getCreatureProfile({ name: 'Eagle', system: 'dnd5e', data: {} }).group, false);
+  const prompt = buildTopDownPrompt({ ...troop, facing: 'front' });
+  assert.match(prompt, /this exact group of creatures/);
+  assert.match(prompt, /Show the whole group/);
+  assert.doesNotMatch(prompt, /only the one main creature/);
 });

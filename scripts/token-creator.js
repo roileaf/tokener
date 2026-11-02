@@ -95,9 +95,14 @@ import { describeCreature } from './creature-caption.js';
 import { TOP_DOWN_FACINGS } from './top-down-prompt.js';
 import {
   checkTopDownSupport,
+  cropCanvas,
   describeTopDownSupport,
+  findSubjectBox,
   generateTopDown,
   getActorAppearance,
+  getDefaultTopDownFacing,
+  fitViewToBox,
+  isTopDownGroup,
   getTopDownPrompt,
   isTopDownEnabled,
   registerTopDownSetting,
@@ -635,7 +640,7 @@ function prepareCreatorContext(app) {
       value: facing,
       label: localize(`Creator.TopDownFacing.${facing}`, facing),
       tooltip: localize(`Creator.TopDownFacingTooltip.${facing}`, ''),
-      selected: (app._topDownFacing ?? 'front') === facing,
+      selected: getTopDownFacing(app) === facing,
     })),
     topDownLooks: isTopDownEnabled()
       ? (app._topDownLooks ??= getActorAppearance(app.tokenDocument))
@@ -5026,8 +5031,9 @@ async function runTopDown(app) {
   try {
     // What the creature looks like: the field (filled from the actor's text when it has one), or
     // else a description of the image, which turns odd creatures into the right kind of thing.
+    const reference = await getTopDownReference(app, regular);
     let appearance = String(app._topDownLooks ?? '').trim();
-    if (!appearance) appearance = await describeTopDownImage(app, regular.canvas);
+    if (!appearance) appearance = await describeTopDownImage(app, reference);
     // New seeds on every press, so trying again gives new versions.
     app._topDownRuns = (app._topDownRuns ?? 0) + 1;
     const seeds = TOP_DOWN_SEEDS.map(
@@ -5035,9 +5041,9 @@ async function runTopDown(app) {
     );
     const prompt = getTopDownPrompt(app.tokenDocument, {
       appearance,
-      facing: app._topDownFacing ?? 'front',
+      facing: getTopDownFacing(app),
     });
-    const images = await generateTopDown(regular.canvas, prompt, {
+    const images = await generateTopDown(reference, prompt, {
       seeds,
       createCanvas,
       onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
@@ -5069,6 +5075,49 @@ async function runTopDown(app) {
   }
 }
 
+/** Front or back: the user's pick, else what suits the creature's kind. */
+function getTopDownFacing(app) {
+  return (app._topDownFacing ??= getDefaultTopDownFacing(app.tokenDocument));
+}
+
+/**
+ * The portrait cropped to its main creature (RMBG finds it; the crop keeps the background), so
+ * scenes and tall banner art reach the model as one large, centred figure. Worked out once per
+ * image; the whole image when nothing is found or the removal fails.
+ */
+async function getTopDownReference(app, source) {
+  if (source.topDownReference) return source.topDownReference;
+  setCreatorStatus(app, localize('Creator.TopDownFinding', 'Finding the creature in the image...'));
+  let reference = source.canvas;
+  try {
+    const cut = await removeBackgroundWithModel(source.canvas, TOP_DOWN_BACKGROUND_MODEL, {
+      tidy: true,
+    });
+    const { data, width, height } = cut.getContext('2d').getImageData(0, 0, cut.width, cut.height);
+    const alpha = new Uint8ClampedArray(width * height);
+    for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = data[pixel * 4 + 3];
+    // A group keeps every figure; otherwise bystanders and specks are left out.
+    const box = findSubjectBox(alpha, width, height, {
+      minShare: isTopDownGroup(app.tokenDocument) ? 0.02 : 0.15,
+    });
+    const scale = source.canvas.width / width;
+    reference = cropCanvas(
+      source.canvas,
+      box && {
+        x: Math.round(box.x * scale),
+        y: Math.round(box.y * scale),
+        width: Math.round(box.width * scale),
+        height: Math.round(box.height * scale),
+      },
+      createCanvas,
+    );
+  } catch (error) {
+    console.warn(`${MODULE_ID} | Could not find the creature; using the whole image`, error);
+  }
+  source.topDownReference = reference;
+  return reference;
+}
+
 /** Fills the Looks like field from the image, on request. */
 async function describeTopDownCreature(app) {
   const source = getPortraitWorkspace(app).source;
@@ -5083,7 +5132,8 @@ async function describeTopDownCreature(app) {
   }
   setCreatorBusy(app, true);
   try {
-    if (await describeTopDownImage(app, source.canvas)) setCreatorStatus(app, '');
+    const reference = await getTopDownReference(app, source);
+    if (await describeTopDownImage(app, reference)) setCreatorStatus(app, '');
   } finally {
     setCreatorBusy(app, false);
   }
@@ -5157,8 +5207,26 @@ async function applyTopDownOption(app, index) {
   if (app.editTarget === 'topdown') app._maskHistory = { undo: [], redo: [] };
   topDown.applied = index;
   syncTopDownOptions(app);
-  syncZoomInput(app);
   await updateCutout(app, workspace);
+  if (workspace.source?.canvas !== topDown.images[index]) return;
+  fitTopDownView(app);
+  syncZoomInput(app);
+  renderCreatorPreview(app);
+}
+
+/** Frames the top-down cut-out so the creature fills the token square like every other one. */
+function fitTopDownView(app) {
+  const cutout = app.workspaces.topDown.cutout;
+  if (!cutout) return;
+  const { data, width, height } = cutout
+    .getContext('2d')
+    .getImageData(0, 0, cutout.width, cutout.height);
+  const alpha = new Uint8ClampedArray(width * height);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = data[pixel * 4 + 3];
+  const box = findSubjectBox(alpha, width, height, { threshold: 32, minShare: 0, margin: 0 });
+  if (!box) return;
+  const view = fitViewToBox({ imageWidth: width, imageHeight: height, box });
+  app.topDownView = { ...view, zoom: clamp(view.zoom, ZOOM_MIN, ZOOM_MAX) };
 }
 
 /** The portrait's own workspace, or the token's while the portrait shares its image. */

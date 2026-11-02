@@ -1,5 +1,5 @@
 import { AI_TOP_DOWN_SETTING_KEY, MODULE_ID } from './constants.js';
-import { buildTopDownPrompt, getCreatureProfile } from './top-down-prompt.js';
+import { buildTopDownPrompt, getCreatureProfile, getDefaultFacing } from './top-down-prompt.js';
 import { loadTransformers } from './ai-tools.js';
 import { localize } from './utils.js';
 
@@ -137,6 +137,108 @@ export function getTopDownPrompt(
 /** What the actor's own text says the creature looks like ('' for most creatures). */
 export function getActorAppearance(tokenDocument, { systemId = globalThis.game?.system?.id } = {}) {
   return getTopDownProfile(tokenDocument, { systemId }).appearance;
+}
+
+/** Whether the actor is a group (troop, swarm, horde) drawn as one token. */
+export function isTopDownGroup(tokenDocument, { systemId = globalThis.game?.system?.id } = {}) {
+  return getTopDownProfile(tokenDocument, { systemId }).group;
+}
+
+/**
+ * The framing that fills the token square with the creature the same way every time: its
+ * opaque box (`box`, in image pixels) centred and scaled to `fill` of the square, whatever room
+ * the model left around it. Returns `{ zoom, offsetX, offsetY }` in the creator's view units.
+ */
+export function fitViewToBox({ imageWidth, imageHeight, box, fill = 0.95 }) {
+  const cover = Math.max(1 / imageWidth, 1 / imageHeight);
+  const zoom = fill / (Math.max(box.width, box.height) * cover);
+  const scale = cover * zoom;
+  return {
+    zoom,
+    offsetX: scale * (imageWidth / 2 - (box.x + box.width / 2)),
+    offsetY: scale * (imageHeight / 2 - (box.y + box.height / 2)),
+  };
+}
+
+/** Front or back, from the creature's kind (and its name, for systems without kinds). */
+export function getDefaultTopDownFacing(
+  tokenDocument,
+  { systemId = globalThis.game?.system?.id } = {},
+) {
+  return getDefaultFacing(getTopDownProfile(tokenDocument, { systemId }));
+}
+
+/**
+ * The box around the creature in a background-removal mask (`alpha`, one byte per pixel), with a
+ * margin, or null when it would keep nearly the whole image anyway. Solid shapes much smaller
+ * than the biggest one (bystanders in a scene, specks) are left out, so busy art is cropped to
+ * its main figure; the crop keeps the original background, which the model reads better than a
+ * cut-out.
+ */
+export function findSubjectBox(
+  alpha,
+  width,
+  height,
+  { threshold = 128, minShare = 0.15, margin = 0.08 } = {},
+) {
+  const labels = new Int32Array(alpha.length);
+  const boxes = [];
+  const queue = new Int32Array(alpha.length);
+  for (let start = 0; start < alpha.length; start += 1) {
+    if (alpha[start] < threshold || labels[start]) continue;
+    const label = boxes.length + 1;
+    const box = { count: 0, minX: width, minY: height, maxX: 0, maxY: 0 };
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    labels[start] = label;
+    while (head < tail) {
+      const index = queue[head++];
+      const x = index % width;
+      const y = (index - x) / width;
+      box.count += 1;
+      box.minX = Math.min(box.minX, x);
+      box.maxX = Math.max(box.maxX, x);
+      box.minY = Math.min(box.minY, y);
+      box.maxY = Math.max(box.maxY, y);
+      for (const next of [
+        index - width,
+        index + width,
+        x > 0 ? index - 1 : -1,
+        x < width - 1 ? index + 1 : -1,
+      ]) {
+        if (next < 0 || next >= alpha.length || labels[next] || alpha[next] < threshold) continue;
+        labels[next] = label;
+        queue[tail++] = next;
+      }
+    }
+    boxes.push(box);
+  }
+  if (!boxes.length) return null;
+  const biggest = Math.max(...boxes.map((box) => box.count));
+  const kept = boxes.filter((box) => box.count >= biggest * minShare);
+  const minX = Math.min(...kept.map((box) => box.minX));
+  const minY = Math.min(...kept.map((box) => box.minY));
+  const maxX = Math.max(...kept.map((box) => box.maxX));
+  const maxY = Math.max(...kept.map((box) => box.maxY));
+  const pad = Math.round(Math.max(maxX - minX, maxY - minY) * margin);
+  const box = {
+    x: Math.max(0, minX - pad),
+    y: Math.max(0, minY - pad),
+    width: Math.min(width, maxX + pad + 1) - Math.max(0, minX - pad),
+    height: Math.min(height, maxY + pad + 1) - Math.max(0, minY - pad),
+  };
+  return box.width * box.height > width * height * 0.9 ? null : box;
+}
+
+/** `canvas` cut down to `box` (or itself when there is no box). */
+export function cropCanvas(canvas, box, createCanvas) {
+  if (!box) return canvas;
+  const crop = createCanvas(box.width, box.height);
+  crop
+    .getContext('2d')
+    .drawImage(canvas, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
+  return crop;
 }
 
 function getTopDownProfile(tokenDocument, { systemId }) {

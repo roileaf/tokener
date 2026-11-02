@@ -412,6 +412,7 @@
   "PF2ETokener.Creator.TopDownLooksTooltip": "A few words saying what the picture shows, to help the AI recognise unusual creatures. It never replaces the picture. Left empty, the picture is described for you.",
   "PF2ETokener.Creator.TopDownFacing.front": "Facing front",
   "PF2ETokener.Creator.TopDownFacing.back": "Seen from behind",
-  "PF2ETokener.Creator.TopDownFacingTooltip.front": "Face and chest seen from above, facing the bottom of the token. Best for people and other upright creatures.",
-  "PF2ETokener.Creator.TopDownFacingTooltip.back": "Head to the top, body behind it. Often better for beasts, birds and dragons."
+  "PF2ETokener.Creator.TopDownFacingTooltip.front": "Face and chest seen from above, facing the bottom of the token, the way Foundry shows an unrotated token, so rotating it turns where it faces. Best for people and other upright creatures.",
+  "PF2ETokener.Creator.TopDownFacingTooltip.back": "Head to the top, body behind it. Often better for beasts, birds and dragons.",
+  "PF2ETokener.Creator.TopDownFinding": "Finding the creature in the image..."
 }
