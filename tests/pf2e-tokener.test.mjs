@@ -3560,7 +3560,7 @@ test('Token HUD button is removed when the user hides it', () => {
   const hud = { object: { document: { canUserModify: () => true } } };
   let show = true;
   root.querySelectorAll = (selector) =>
-    selector === '.pf2e-tokener-button'
+    selector.includes('.pf2e-tokener-button')
       ? target.children
           .filter((child) => child.className.includes('pf2e-tokener-button'))
           .map((child) => ({
