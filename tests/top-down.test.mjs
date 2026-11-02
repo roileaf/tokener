@@ -7,6 +7,7 @@ import {
   buildArtViewsUpdate,
   buildFlipFacingUpdate,
   buildLookUpdate,
+  buildSetFacingUpdate,
   getMovementRotation,
   getShownLook,
   listLooks,
@@ -553,4 +554,23 @@ test('a look that walks backwards is turned around', () => {
   assert.equal(back.rotation, undefined); // not shown: nothing to turn now
   assert.equal(buildFlipFacingUpdate(recorded, 'regular'), null);
   assert.equal(buildFlipFacingUpdate(recorded, 'casting'), null);
+});
+
+test('a facing fixed on a token can be recorded on the actor default token', () => {
+  const prototype = token(
+    { src: 'ring.webp' },
+    { regular: look('ring.webp'), topDown: look('top.webp') },
+  );
+  const update = buildSetFacingUpdate(prototype, 'topDown', 'front', {
+    src: 'top.webp',
+    prefix: 'prototypeToken.',
+  });
+  assert.equal(update[`prototypeToken.${ART_VIEWS_FLAG_PATH}`].topDown.facing, 'front');
+  // Not when the default token's look is other art, or already faces that way.
+  assert.equal(buildSetFacingUpdate(prototype, 'topDown', 'front', { src: 'other.webp' }), null);
+  const recorded = token(
+    { src: 'ring.webp' },
+    { regular: look('ring.webp'), topDown: { ...look('top.webp'), facing: 'front' } },
+  );
+  assert.equal(buildSetFacingUpdate(recorded, 'topDown', 'front'), null);
 });

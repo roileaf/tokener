@@ -178,6 +178,19 @@ export function buildFlipFacingUpdate(documentLike, id, fallback = 'front') {
   return update;
 }
 
+/**
+ * The flag change that records `facing` for look `id` (keys prefixed with `prefix`, e.g.
+ * `prototypeToken.`), or null when the document has no such look or it shows other art (`src`).
+ */
+export function buildSetFacingUpdate(documentLike, id, facing, { src, prefix = '' } = {}) {
+  const views = readArtViews(documentLike);
+  if (!views?.[id] || !FACING_HEADINGS[facing] || (src && views[id].src !== src)) return null;
+  if (views[id].facing === facing) return null;
+  return {
+    [`${prefix}${ART_VIEWS_FLAG_PATH}`]: storedViews({ ...views, [id]: { ...views[id], facing } }),
+  };
+}
+
 /** The facing recorded for the shown look, or null (a regular look, or none recorded). */
 export function getLookFacing(documentLike) {
   const views = readArtViews(documentLike);

@@ -5,7 +5,14 @@ import {
   revertLastTokenerChange,
   revertTokenerChangeToOriginal,
 } from './actions.js';
-import { buildFlipFacingUpdate, buildLookUpdate, getShownLook, listLooks } from './art-views.js';
+import {
+  ART_VIEWS_FLAG_PATH,
+  buildFlipFacingUpdate,
+  buildLookUpdate,
+  buildSetFacingUpdate,
+  getShownLook,
+  listLooks,
+} from './art-views.js';
 import { getDefaultTopDownFacing } from './top-down.js';
 import { canUseTokenHudDocument, isTokenHudButtonEnabled } from './permissions.js';
 import {
@@ -138,6 +145,20 @@ async function flipLookFacing(tokenDocument, id) {
     await Promise.all(updates.map(([token, update]) => token.update(update)));
   } catch (error) {
     console.error('pf2e-tokener | Failed to turn the token look around', error);
+  }
+  // The actor's default token gets the same facing, so tokens placed later face the right way.
+  const actors = new Map();
+  for (const [token, update] of updates) {
+    const actor = token.actor;
+    const look = update[ART_VIEWS_FLAG_PATH]?.[id];
+    if (actor?.isOwner && actor.prototypeToken && look?.facing) actors.set(actor, look);
+  }
+  for (const [actor, look] of actors) {
+    const update = buildSetFacingUpdate(actor.prototypeToken, id, look.facing, {
+      src: look.src,
+      prefix: 'prototypeToken.',
+    });
+    if (update) await actor.update(update).catch((error) => console.error(error));
   }
 }
 
