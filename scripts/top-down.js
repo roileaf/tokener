@@ -128,13 +128,17 @@ export function registerTopDownMovement(hooks = globalThis.Hooks) {
 // beneath it. Foundry stacks by elevation first, so creatures higher up still draw over it.
 const TOP_DOWN_SORT_BOOST = 1e7;
 
-/** Draws tokens showing a top-down look over other tokens at the same elevation. */
+/**
+ * Draws tokens showing a top-down look over other tokens at the same elevation, solid: Foundry
+ * would fade a token drawn over one you control to half, which shows through as a hole.
+ */
 export function registerTopDownLayering(hooks = globalThis.Hooks) {
   hooks?.on?.('refreshToken', (token) => {
     const mesh = token?.mesh;
     if (!mesh || !isShowingTopDown(token.document)) return;
     const sort = Number(token.document.sort) || 0;
     if (mesh.sort !== sort + TOP_DOWN_SORT_BOOST) mesh.sort = sort + TOP_DOWN_SORT_BOOST;
+    if (mesh.occludedAlpha !== 1) mesh.occludedAlpha = 1;
   });
 }
 

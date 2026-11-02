@@ -486,7 +486,7 @@ test('an animated look never sets a video as the ring subject', () => {
   assert.equal(readTokenArt(prepared).subject, '');
 });
 
-test('a token showing a top-down look draws over others at its elevation', () => {
+test('a token showing a top-down look draws solid over others at its elevation', () => {
   const handlers = {};
   registerTopDownLayering({ on: (name, fn) => (handlers[name] = fn) });
   const views = { regular: look('ring.webp'), topDown: look('top.webp') };
@@ -497,6 +497,7 @@ test('a token showing a top-down look draws over others at its elevation', () =>
   handlers.refreshToken(topDown);
   assert.ok(topDown.mesh.sort > 1e6);
   assert.equal(topDown.mesh.sort % 1e7, 3); // keeps its own order among top-down tokens
+  assert.equal(topDown.mesh.occludedAlpha, 1); // solid over tokens you control
   const regular = {
     mesh: { sort: 3 },
     document: { ...token({ src: 'ring.webp' }, views), sort: 3 },

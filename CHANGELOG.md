@@ -4,7 +4,7 @@
 
 ### Changed
 
-- A token showing a top-down look draws over other tokens at the same elevation, as a creature seen from above covers those beneath it. Tokens higher up still draw over it.
+- A token showing a top-down look draws over other tokens at the same elevation, as a creature seen from above covers those beneath it. Tokens higher up still draw over it. It stays solid over tokens you control, instead of Foundry fading a see-through circle around them.
 
 ### Fixed
 
