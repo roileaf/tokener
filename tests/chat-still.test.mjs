@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { buildTokenUpdate, STILL_FLAG_PATH } from '../scripts/actions.js';
 import { buildLookUpdate } from '../scripts/art-views.js';
-import { getTokenStill, showChatStill } from '../scripts/chat-still.js';
+import { getFittedSquare, getTokenStill, showChatStill } from '../scripts/chat-still.js';
 import { buildCreatedTokenCandidate } from '../scripts/token-composer.js';
 
 const still = (src, image) => ({ 'pf2e-tokener': { still: { src, image } } });
@@ -51,22 +51,33 @@ test('a still only counts while its video is the token image', () => {
   assert.equal(getTokenStill({ texture: { src: 'dragon.webm' } }), null);
 });
 
-test('chat cards show the speaker token still instead of the portrait', () => {
+test('chat cards show the speaker token still, fitted, instead of the portrait', async () => {
   const { html, img, classes } = chatCard();
+  img.style.transform = 'scale(1.26)';
   const token = {
     texture: { src: 'dragon.webm', scaleX: 1 },
     ring: { enabled: true },
     flags: still('dragon.webm', 'dragon-still.webp'),
   };
-  assert.equal(showChatStill({ token }, html), true);
-  assert.equal(img.src, 'dragon-still.webp');
-  assert.equal(img.style.transform, `scale(${1 / 0.7936514})`);
+  const fit = async (src) => `fitted:${src}`;
+  assert.equal(await showChatStill({ token }, html, { fit }), true);
+  assert.equal(img.src, 'fitted:dragon-still.webp');
+  assert.equal(img.style.transform, ''); // no ring enlargement
   assert.ok(classes.has('token') && !classes.has('actor-image'));
 
   // No still for this token: the portrait stays.
   const other = chatCard();
   assert.equal(showChatStill({ token: { texture: { src: 'x.webm' } } }, other.html), false);
   assert.equal(other.img.src, 'actor.webp');
+});
+
+test('a still is trimmed to a square whose circle holds its creature', () => {
+  // A 10 x 10 image with an opaque 4 x 2 block at (2, 6).
+  const alpha = new Uint8ClampedArray(100);
+  for (let y = 6; y < 8; y += 1) for (let x = 2; x < 6; x += 1) alpha[y * 10 + x] = 255;
+  assert.deepEqual(getFittedSquare(alpha, 10, 10, { margin: 0 }), { x: 2, y: 5, size: 5 });
+  assert.deepEqual(getFittedSquare(alpha, 10, 10, { margin: 0.25 }), { x: 1, y: 4, size: 7 });
+  assert.equal(getFittedSquare(new Uint8ClampedArray(100), 10, 10), null);
 });
 
 test('switching looks brings the shown look still along', () => {

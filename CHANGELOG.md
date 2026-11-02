@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The still token in PF2e chat cards shows the whole creature inside the round portrait, without the ring enlargement and faded edges that clipped breakout art.
+
 ## 3.0.2 - 2026-11-02
 
 ### Fixed
