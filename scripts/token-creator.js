@@ -89,6 +89,16 @@ import {
   updateKeyframeAt,
 } from './token-animation.js';
 import { fillLasso } from './region-motion.js';
+import {
+  checkTopDownSupport,
+  describeTopDownSupport,
+  generateTopDown,
+  getTopDownPrompt,
+  isTopDownEnabled,
+  registerTopDownSetting,
+  releaseTopDownModels,
+  TOP_DOWN_SEEDS,
+} from './top-down.js';
 import { encodeAlphaWebm, probeAnimationSupport } from './webm-alpha.js';
 import { encodeAnimatedWebp } from './webp-anim.js';
 import {
@@ -306,6 +316,7 @@ let worldRingAssets = null;
 
 export function registerTokenCreatorSettings(settings = globalThis.game?.settings) {
   registerAiToolsSetting(settings);
+  registerTopDownSetting(settings);
   settings?.register?.(MODULE_ID, CREATED_TOKEN_FOLDER_SETTING_KEY, {
     name: localize('Settings.CreatedTokenFolder.Name', 'Created token folder'),
     hint: localize(
@@ -558,6 +569,8 @@ export function getTokenCreatorApplicationClass() {
       globalThis.removeEventListener?.('keydown', this._onKeyDown, true);
       globalThis.removeEventListener?.('keyup', this._onKeyUp, true);
       if (activeCreator === this) activeCreator = null;
+      // The top-down model holds gigabytes of GPU memory; it reloads from the cache when needed.
+      if (this._topDown) releaseTopDownModels();
       await super._onClose?.(options);
     }
   };
@@ -602,6 +615,7 @@ function prepareCreatorContext(app) {
       selected: options.portraitBackground === background,
     })),
     aiTools: areAiToolsEnabled(),
+    topDown: isTopDownEnabled(),
     backgroundModes: BACKGROUND_MODES.filter(
       (mode) => !AI_BACKGROUND_MODES.includes(mode) || areAiToolsEnabled(),
     ).map((mode) => ({
@@ -920,6 +934,11 @@ function prepareCreatorContext(app) {
       autoComposeTooltip: localize(
         'Creator.AutoComposeTooltip',
         'Frame the art and choose what pops out automatically, then pick from a few alternatives.',
+      ),
+      topDown: localize('Creator.TopDown', 'Top-down'),
+      topDownTooltip: localize(
+        'Creator.TopDownTooltip',
+        'Redraw the token image as seen from directly above (AI, runs on your graphics card), then pick one of three versions. The portrait keeps the regular image.',
       ),
       fromPortraitTooltip: localize(
         'Creator.FromPortraitTooltip',
@@ -1461,7 +1480,14 @@ async function handleCreatorClick(app, event) {
       await applyComposeCandidate(app, Number(button.dataset.composeIndex));
       return;
     case 'token-from-portrait':
+      clearTopDown(app);
       await useEditedPortraitAsToken(app);
+      return;
+    case 'top-down':
+      await runTopDown(app);
+      return;
+    case 'top-down-pick':
+      await applyTopDownOption(app, Number(button.dataset.topDownIndex));
       return;
     case 'cleanup-reset':
       if (!app.cleanup.keep && !app.cleanup.remove) return;
@@ -1585,6 +1611,7 @@ function openProjectFilePicker(app) {
 async function loadCreatorSource(app, { path, file }) {
   // An image picked while a project is still opening wins over that project.
   app._projectLoadToken = (app._projectLoadToken ?? 0) + 1;
+  if (app.workspace === app.workspaces.token) clearTopDown(app);
   setCreatorStatus(app, localize('Creator.Loading', 'Loading image...'));
   try {
     const image = await loadImageElement(file ? URL.createObjectURL(file) : path, Boolean(file));
@@ -4902,6 +4929,175 @@ function describeComposeCandidate(candidate) {
   return `${framing}, ${popOut}`;
 }
 
+/**
+ * Top-down: the AI redraws the token's regular image as seen from directly above, three times
+ * (different seeds), and the token switches to the first. The regular image stays one click
+ * away next to them, and the portrait keeps it.
+ */
+async function runTopDown(app) {
+  if (app.editTarget === 'portrait') setEditTarget(app, 'token');
+  const regular = app._topDown?.regular ?? app.workspaces.token.source;
+  if (!regular?.canvas) {
+    setCreatorStatus(app, localize('Creator.NoImage', 'Choose an image first.'), true);
+    return;
+  }
+  const support = await checkTopDownSupport();
+  if (!support.ok) {
+    setCreatorStatus(app, describeTopDownSupport(support.reason), true);
+    return;
+  }
+  setCreatorBusy(app, true);
+  try {
+    // New seeds on every press, so trying again gives new versions.
+    app._topDownRuns = (app._topDownRuns ?? 0) + 1;
+    const seeds = TOP_DOWN_SEEDS.map(
+      (seed) => seed + (app._topDownRuns - 1) * TOP_DOWN_SEEDS.length,
+    );
+    const images = await generateTopDown(regular.canvas, getTopDownPrompt(app.tokenDocument), {
+      seeds,
+      createCanvas,
+      onStatus: (status) => setCreatorStatus(app, describeTopDownStatus(status)),
+    });
+    // An image loaded meanwhile wins.
+    if ((app._topDown?.regular ?? app.workspaces.token.source) !== regular) return;
+    app._topDown = { regular, images, applied: -1 };
+    renderTopDownOptions(app);
+    await applyTopDownOption(app, 0);
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.TopDownDone',
+        'Top-down token ready. Pick another version below, or the regular image to go back.',
+      ),
+    );
+  } catch (error) {
+    console.error(`${MODULE_ID} | Top-down generation failed`, error);
+    setCreatorStatus(
+      app,
+      localize(
+        'Creator.TopDownFailed',
+        'Top-down failed: {error}. The graphics card may not have enough memory.',
+      ).replace('{error}', describeError(error)),
+      true,
+    );
+  } finally {
+    setCreatorBusy(app, false);
+  }
+}
+
+function describeTopDownStatus({ phase, percent, done, total }) {
+  if (phase === 'download')
+    return localize(
+      'Creator.TopDownDownload',
+      'Downloading the top-down model (first time only, ~5.7 GB): {percent}%',
+    ).replace('{percent}', String(percent));
+  if (phase === 'stream')
+    return localize(
+      'Creator.TopDownStream',
+      'Downloading the top-down model (~5.7 GB). This browser has no room to keep it, so it downloads each session...',
+    );
+  if (phase === 'loading')
+    return localize('Creator.TopDownLoading', 'Loading the top-down model...');
+  return localize('Creator.TopDownGenerating', 'Drawing top-down versions: {done} of {total}...')
+    .replace('{done}', String(done))
+    .replace('{total}', String(total));
+}
+
+/** Shows top-down version `index` as the token image, or the regular image for -1. */
+async function applyTopDownOption(app, index) {
+  const topDown = app._topDown;
+  if (!topDown || (index >= 0 && !topDown.images[index])) return;
+  if (app.editTarget === 'portrait') setEditTarget(app, 'token');
+  // The portrait keeps the regular image.
+  if (!app.workspaces.portrait) {
+    app.workspaces.portrait = cloneWorkspace(app.workspaces.token);
+    const separate = getCreatorRoot(app)?.querySelector(
+      'input[name="portraitImage"][value="separate"]',
+    );
+    if (separate) separate.checked = true;
+    syncPortraitControls(app);
+  }
+  const token = app.workspaces.token;
+  token.source =
+    index < 0
+      ? topDown.regular
+      : { canvas: topDown.images[index], path: null, file: null, label: topDown.regular.label };
+  token.cleanup = { keep: null, remove: null };
+  app.popOutMask = null;
+  app._maskVersion += 1;
+  app._maskHistory = { undo: [], redo: [] };
+  app._compose = null;
+  app.view = { zoom: 1, offsetX: 0, offsetY: 0 };
+  clearAnimationPins(app);
+  app.topDown = index >= 0;
+  // Top-down versions come on white, so they need a background removal.
+  if (app.topDown && app.creatorOptions.backgroundMode === 'none') {
+    app.creatorOptions = normalizeTokenCreatorOptions({
+      ...app.creatorOptions,
+      backgroundMode: 'auto',
+    });
+    const radio = getCreatorRoot(app)?.querySelector('input[name="backgroundMode"][value="auto"]');
+    if (radio) radio.checked = true;
+    syncBackgroundControls(app);
+  }
+  topDown.applied = index;
+  syncTopDownOptions(app);
+  syncZoomInput(app);
+  await updateCutout(app, token);
+}
+
+/** Forgets the top-down versions (a new token image replaces them). */
+function clearTopDown(app) {
+  if (!app._topDown && !app.topDown) return;
+  app._topDown = null;
+  app.topDown = false;
+  const container = getCreatorRoot(app)?.querySelector('.pf2e-tokener-creator-topdown-options');
+  container?.replaceChildren();
+  container?.closest('.pf2e-tokener-creator-topdown')?.classList.remove('has-options');
+}
+
+function renderTopDownOptions(app) {
+  const container = getCreatorRoot(app)?.querySelector('.pf2e-tokener-creator-topdown-options');
+  const topDown = app._topDown;
+  if (!container || !topDown) return;
+  container.replaceChildren();
+  [topDown.regular.canvas, ...topDown.images].forEach((image, position) => {
+    const index = position - 1;
+    const button = globalThis.document.createElement('button');
+    button.type = 'button';
+    button.className = 'pf2e-tokener-creator-topdown-option';
+    button.dataset.creatorAction = 'top-down-pick';
+    button.dataset.topDownIndex = String(index);
+    button.dataset.tooltip =
+      index < 0
+        ? localize('Creator.TopDownRegular', 'Regular image')
+        : localize('Creator.TopDownVersion', 'Top-down version {number}').replace(
+            '{number}',
+            String(position),
+          );
+    const size = COMPOSE_THUMBNAIL_SIZE;
+    const canvas = createCanvas(size, size);
+    const scale = Math.min(size / image.width, size / image.height);
+    const width = image.width * scale;
+    const height = image.height * scale;
+    canvas
+      .getContext('2d')
+      .drawImage(image, (size - width) / 2, (size - height) / 2, width, height);
+    button.append(canvas);
+    container.append(button);
+  });
+  container.closest('.pf2e-tokener-creator-topdown')?.classList.add('has-options');
+}
+
+function syncTopDownOptions(app) {
+  const applied = app._topDown?.applied ?? -1;
+  getCreatorRoot(app)
+    ?.querySelectorAll('.pf2e-tokener-creator-topdown-option')
+    .forEach((button) =>
+      button.classList.toggle('is-active', Number(button.dataset.topDownIndex) === applied),
+    );
+}
+
 function syncComposeOptions(app) {
   const applied = app._compose?.applied ?? -1;
   getCreatorRoot(app)
@@ -4948,18 +5144,23 @@ export async function createToken(app, action) {
         canEncode: app.animationSupported,
         regions: app.effectRegions,
       }) === 'animated';
+    const tokenSuffix = app.topDown ? 'top-down' : '';
     let tokenSrc;
     if (animated) {
       tokenSrc = await uploadBlob(
         await encodeTokenAnimation(app, getAnimatedOutputSize(size)),
         folder,
-        buildCreatedTokenFileName(label, { now, extension: 'webm' }),
+        buildCreatedTokenFileName(label, { now, extension: 'webm', suffix: tokenSuffix }),
       );
       setCreatorStatus(app, localize('Creator.Saving', 'Saving token...'));
     } else {
       const tokenCanvas = createCanvas(size, size);
       withEditTarget(app, 'token', () => drawCreatedToken(tokenCanvas.getContext('2d'), app, size));
-      tokenSrc = await uploadCanvas(tokenCanvas, folder, buildCreatedTokenFileName(label, { now }));
+      tokenSrc = await uploadCanvas(
+        tokenCanvas,
+        folder,
+        buildCreatedTokenFileName(label, { now, suffix: tokenSuffix }),
+      );
     }
 
     const ringMode = app.creatorOptions.frameStyle === 'ring';
@@ -5056,6 +5257,7 @@ export async function createToken(app, action) {
       breakoutScale: 1 / getActiveRingScale(app),
       animated,
       projectSrc,
+      topDown: Boolean(app.topDown),
     });
     if (action) {
       await applyCreatedTokenCandidate(action, candidate, app.tokenDocument);

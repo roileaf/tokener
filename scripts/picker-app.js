@@ -1,3 +1,4 @@
+import { buildArtViewsUpdate } from './art-views.js';
 import { DEFAULT_LIMIT, MODULE_ID } from './constants.js';
 import {
   buildActorUpdate,
@@ -1812,9 +1813,16 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
   card?.classList.add('is-applying');
 
   try {
+    const topDown = Boolean(candidate.topDown);
     if (targets.token) {
+      const tokenUpdate = buildTokenUpdate(candidate, {
+        scale,
+        ringScale,
+        document: tokenDocument,
+      });
       await tokenDocument.update({
-        ...buildTokenUpdate(candidate, { scale, ringScale, document: tokenDocument }),
+        ...tokenUpdate,
+        ...buildArtViewsUpdate(tokenDocument, tokenUpdate, { topDown }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(tokenDocument, revertSnapshot, {
           replaceSnapshot: previewSnapshot,
         }),
@@ -1823,8 +1831,13 @@ async function applyCandidateAction(action, candidate, tokenDocument, card, app 
 
     if (targets.actor && actor) {
       pruneStaleDependentTokens(actor);
+      const actorUpdate = buildActorUpdate(candidate, { scale, ringScale, actor });
       await actor.update({
-        ...buildActorUpdate(candidate, { scale, ringScale, actor }),
+        ...actorUpdate,
+        ...buildArtViewsUpdate(actor.prototypeToken, actorUpdate, {
+          topDown,
+          prefix: 'prototypeToken.',
+        }),
         [REVERT_FLAG_PATH]: buildRevertHistoryFlagValue(actor, revertSnapshot),
       });
     }

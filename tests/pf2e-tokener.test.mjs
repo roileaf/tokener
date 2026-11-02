@@ -2379,7 +2379,7 @@ test('token scale slider previews scene token scale and reuses preview revert sn
   assert.match(picker, /dataScaleReset/);
   assert.match(
     picker,
-    /buildTokenUpdate\(candidate, \{ scale, ringScale, document: tokenDocument \}\)/,
+    /buildTokenUpdate\(candidate, \{\s*scale,\s*ringScale,\s*document: tokenDocument,?\s*\}\)/,
   );
   assert.match(picker, /buildActorUpdate\(candidate, \{ scale, ringScale, actor \}\)/);
 });

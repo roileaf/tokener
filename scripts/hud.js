@@ -5,6 +5,7 @@ import {
   revertLastTokenerChange,
   revertTokenerChangeToOriginal,
 } from './actions.js';
+import { buildArtToggleUpdate, isShowingTopDown } from './art-views.js';
 import { canUseTokenHudDocument, isTokenHudButtonEnabled } from './permissions.js';
 import {
   openRevertHistoryDialog,
@@ -38,6 +39,45 @@ export function renderTokenHud(app, html) {
     await revertFromHudButton(button, tokenDocument, { resetToOriginal: event.shiftKey });
   });
   target.append(button);
+  const toggle = createArtToggleButton(tokenDocument);
+  if (toggle) target.append(toggle);
+}
+
+/** Switches between a token's regular and top-down looks; shown only on tokens that have both. */
+function createArtToggleButton(tokenDocument) {
+  const showingTopDown = isShowingTopDown(tokenDocument);
+  if (showingTopDown === null) return null;
+  const button = document.createElement('div');
+  button.className = 'control-icon pf2e-tokener-button pf2e-tokener-view-toggle';
+  button.classList.toggle('active', showingTopDown);
+  button.dataset.action = 'pf2e-tokener-view';
+  button.dataset.tooltip = showingTopDown
+    ? localize('HUD.ShowRegular', 'Show the regular token')
+    : localize('HUD.ShowTopDown', 'Show the top-down token');
+  button.innerHTML = `<i class="fas ${showingTopDown ? 'fa-person' : 'fa-circle-down'}"></i>`;
+  button.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await toggleArtViews(tokenDocument, !showingTopDown);
+  });
+  return button;
+}
+
+/** Switches this token, and every other controlled token with both looks, to one look. */
+async function toggleArtViews(tokenDocument, toTopDown) {
+  const controlled = (globalThis.canvas?.tokens?.controlled ?? []).map((token) => token.document);
+  const tokens = [...new Set([tokenDocument, ...controlled])].filter(
+    (token) =>
+      token?.isOwner !== false && canUseTokener(token) && isShowingTopDown(token) === !toTopDown,
+  );
+  try {
+    await Promise.all(tokens.map((token) => token.update(buildArtToggleUpdate(token))));
+  } catch (error) {
+    console.error('pf2e-tokener | Failed to switch the token look', error);
+    globalThis.ui?.notifications?.error?.(
+      localize('Notifications.ViewToggleFailed', 'Tokener: failed to switch the token look.'),
+    );
+  }
 }
 
 function setHudButtonRevertState(button, tokenDocument) {

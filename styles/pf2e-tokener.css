@@ -2950,12 +2950,18 @@
   background: #e3c682;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-compose {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown {
   display: grid;
   gap: 7px;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-options {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown {
+  margin-top: 6px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-options,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-options {
   display: none;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
@@ -2963,11 +2969,15 @@
 
 .pf2e-tokener-creator-app
   .pf2e-tokener-creator-compose.has-options
-  .pf2e-tokener-creator-compose-options {
+  .pf2e-tokener-creator-compose-options,
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-topdown.has-options
+  .pf2e-tokener-creator-topdown-options {
   display: grid;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-option {
   display: block;
   width: 100%;
   height: auto;
@@ -2982,16 +2992,19 @@
   border-radius: 5px;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option:hover {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option:hover,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-option:hover {
   border-color: rgba(143, 185, 214, 0.6);
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option.is-active {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option.is-active,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-option.is-active {
   border-color: #d6b56d;
   box-shadow: 0 0 0 1px #d6b56d inset;
 }
 
-.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option canvas {
+.pf2e-tokener-creator-app .pf2e-tokener-creator-compose-option canvas,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-topdown-option canvas {
   display: block;
   width: 100%;
   height: 100%;

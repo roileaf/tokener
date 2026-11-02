@@ -24,3 +24,4 @@ export const TOKEN_CREATOR_DEFAULTS_SETTING_KEY = 'tokenCreatorDefaults';
 export const AI_TOOLS_SETTING_KEY = 'enableAiTools';
 export const AI_MODEL_SETTING_KEY = 'aiBackgroundModel';
 export const AI_CUSTOM_MODEL_SETTING_KEY = 'aiBackgroundCustomModel';
+export const AI_TOP_DOWN_SETTING_KEY = 'aiTopDownTokens';

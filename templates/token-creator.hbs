@@ -216,6 +216,17 @@
             data-tooltip='{{labels.fromPortraitTooltip}}'
           ><i class='fas fa-image-portrait'></i> {{labels.fromPortrait}}</button>
         </div>
+        {{#if topDown}}
+          <div class='pf2e-tokener-creator-topdown' data-token-only>
+            <button
+              type='button'
+              class='pf2e-tokener-creator-button'
+              data-creator-action='top-down'
+              data-tooltip='{{labels.topDownTooltip}}'
+            ><i class='fas fa-circle-down'></i> {{labels.topDown}}</button>
+            <div class='pf2e-tokener-creator-topdown-options'></div>
+          </div>
+        {{/if}}
         <div class='pf2e-tokener-creator-row pf2e-tokener-creator-flip'>
           <button
             type='button'

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- AI top-down tokens (experimental, off by default; turn on "AI top-down tokens" in the module settings). A Top-down button in the Token Creator redraws the token image as seen from directly above, without shadows, using the creature's name, kind and size from any supported system. You get three versions to pick from, plus the regular image to go back to. The portrait keeps the regular image, and the background is removed after generating. It runs on your graphics card through WebGPU (about 8 GB of graphics memory recommended). The model (FLUX.2 [klein] 4B, Apache-2.0, ~5.7 GB) downloads on first use and is kept in the browser's storage when there is room.
+- Tokens with both a regular and a top-down look get a second Token HUD button that switches between them. It also switches every other selected token that has both looks. Applying a top-down token keeps the art it replaced as the regular look, and new tokens of an actor that got a top-down token carry both looks.
+
 ## 2.3.4 - 2026-10-30
 
 ### Changed
