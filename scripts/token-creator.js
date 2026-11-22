@@ -183,7 +183,9 @@ const ZOOM_MAX = 4;
 const OUTPUT_SIZES = [256, 400, 512, 1024];
 const BACKGROUND_MODES = ['auto', 'ai', 'none'];
 const AI_BACKGROUND_MODES = ['ai'];
-const FRAME_STYLES = ['painted', 'ring'];
+const FRAME_STYLES = ['painted', 'ring', 'image'];
+/** Options holding the path of an image drawn into the token: the ring art and the background. */
+const FRAME_ASSET_KEYS = Object.freeze(['frameImage', 'fillImage']);
 const EDIT_TARGETS = [
   { value: 'token', icon: 'fas fa-circle-user' },
   { value: 'portrait', icon: 'fas fa-image-portrait' },
@@ -317,6 +319,8 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   borderColor: '#5c1d1d',
   fill: false,
   fillColor: '#1b1b1b',
+  fillImage: '',
+  frameImage: '',
   popOut: false,
   popOutShadow: true,
   originalInside: false,
@@ -344,6 +348,8 @@ const aiRemovers = new Map();
 // Top-down tokens: RMBG-1.4 with a tidied mask, which cut the test images cleanest.
 const TOP_DOWN_BACKGROUND_MODEL = Object.freeze({ key: 'best', ...BACKGROUND_MODELS.best });
 let worldRingAssets = null;
+// Custom ring and background images by path, kept for later tokens.
+const frameAssetCache = new Map();
 
 export function registerTokenCreatorSettings(settings = globalThis.game?.settings) {
   registerAiToolsSetting(settings);
@@ -394,6 +400,8 @@ export function normalizeTokenCreatorOptions(value = {}) {
     borderColor: normalizeColor(options.borderColor, defaults.borderColor),
     fill: Boolean(options.fill),
     fillColor: normalizeColor(options.fillColor, defaults.fillColor),
+    fillImage: normalizePath(options.fillImage),
+    frameImage: normalizePath(options.frameImage),
     popOut: Boolean(options.popOut),
     popOutShadow: Boolean(options.popOutShadow),
     originalInside: Boolean(options.originalInside),
@@ -683,6 +691,12 @@ function prepareCreatorContext(app) {
       tooltip: localize(`Creator.BackgroundMode.${mode}`, mode),
       selected: options.backgroundMode === mode,
     })),
+    frameImageName: options.frameImage
+      ? getFileLabel(options.frameImage)
+      : localize('Creator.NoImage', 'None chosen'),
+    fillImageName: options.fillImage
+      ? getFileLabel(options.fillImage)
+      : localize('Creator.NoImage', 'None chosen'),
     frameStyles: FRAME_STYLES.map((style) => ({
       value: style,
       label: localize(`Creator.FrameStyle.${style}`, style),
@@ -855,6 +869,18 @@ function prepareCreatorContext(app) {
       frame: localize('Creator.Frame', 'Frame'),
       borderWidth: localize('Creator.BorderWidth', 'Border width'),
       borderColor: localize('Creator.BorderColor', 'Border colour'),
+      frameImage: localize('Creator.FrameImage', 'Choose ring image'),
+      frameImageHint: localize(
+        'Creator.FrameImageHint',
+        'Any ring picture with a see-through middle. The art fills its opening; the ring is saved into the token image.',
+      ),
+      fillImage: localize('Creator.FillImage', 'Background image'),
+      fillImageClear: localize('Creator.FillImageClear', 'Remove the background image'),
+      fillImageHint: localize(
+        'Creator.FillImageHint',
+        'Shown behind the creature inside the frame, so it needs the background removed.',
+      ),
+      noImage: localize('Creator.NoImage', 'None chosen'),
       fill: localize('Creator.Fill', 'Fill background'),
       popOut: localize('Creator.PopOut', 'Pop out of frame'),
       breakoutRoom: localize('Creator.BreakoutRoom', 'Breakout room'),
@@ -1596,6 +1622,15 @@ async function handleCreatorClick(app, event) {
     case 'open-project':
       openProjectFilePicker(app);
       return;
+    case 'browse-frame-image':
+      openFrameAssetPicker(app, 'frameImage');
+      return;
+    case 'browse-fill-image':
+      openFrameAssetPicker(app, 'fillImage');
+      return;
+    case 'clear-fill-image':
+      setFrameAssetPath(app, 'fillImage', '');
+      return;
     case 'upload':
       getCreatorRoot(app)?.querySelector('input[name="upload"]')?.click();
       return;
@@ -1802,6 +1837,91 @@ function openCreatorFilePicker(app) {
     current,
     callback: (path) => void loadCreatorSource(app, { path }),
   }).render(true);
+}
+
+/** Browses for the custom ring image or the background image drawn into the token. */
+function openFrameAssetPicker(app, key) {
+  const FilePicker = getFilePickerImplementation();
+  if (!FilePicker) return;
+  new FilePicker({
+    type: 'image',
+    current: app.creatorOptions[key] || '',
+    callback: (path) => setFrameAssetPath(app, key, path),
+  }).render(true);
+}
+
+function setFrameAssetPath(app, key, path) {
+  app.creatorOptions = normalizeTokenCreatorOptions({ ...app.creatorOptions, [key]: path });
+  saveCreatorDefaults(app.creatorOptions);
+  syncFrameControls(app);
+  renderCreatorPreview(app);
+}
+
+/**
+ * The loaded image behind a frame asset option (`{ image, innerEdge }`), or null when none is
+ * chosen, it is still loading (the preview redraws once it arrives) or it failed to load.
+ */
+function getFrameAsset(app, key) {
+  const path = app.creatorOptions[key];
+  if (!path) return null;
+  const held = (app._frameAssets ??= {});
+  if (held[key]?.path === path) return held[key].asset;
+  const entry = (held[key] = { path, asset: null });
+  void loadFrameAsset(path).then((asset) => {
+    if (held[key] !== entry) return;
+    entry.asset = asset;
+    if (asset) renderCreatorPreview(app);
+    else
+      setCreatorStatus(
+        app,
+        localize('Creator.FrameImageFailed', 'Could not load {path}.').replace('{path}', path),
+        true,
+      );
+  });
+  return null;
+}
+
+/** Waits for the chosen ring and background images, so a save or a layout never misses them. */
+async function ensureFrameAssets(app) {
+  const held = (app._frameAssets ??= {});
+  for (const key of FRAME_ASSET_KEYS) {
+    const path = app.creatorOptions[key];
+    if (!path || held[key]?.asset) continue;
+    const entry = (held[key] = { path, asset: null });
+    entry.asset = await loadFrameAsset(path);
+  }
+}
+
+function loadFrameAsset(path) {
+  if (frameAssetCache.has(path)) return frameAssetCache.get(path);
+  const route = globalThis.foundry?.utils?.getRoute?.(path) ?? path;
+  const promise = loadImageElement(route, false)
+    .then((image) => ({ path, image, innerEdge: measureFrameOpening(image) }))
+    .catch((error) => {
+      console.warn(`${MODULE_ID} | Could not load frame image ${path}`, error);
+      frameAssetCache.delete(path);
+      return null;
+    });
+  frameAssetCache.set(path, promise);
+  return promise;
+}
+
+/** Where a ring picture's see-through middle ends, as a fraction of its half size. */
+function measureFrameOpening(image) {
+  try {
+    const size = 256;
+    const canvas = createCanvas(size, size);
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0, size, size);
+    return measureRingInnerEdge(context.getImageData(0, 0, size, size));
+  } catch {
+    return null;
+  }
+}
+
+/** The custom ring image in use, when that frame style is on and its image has loaded. */
+function getFrameImageAsset(app) {
+  return app.creatorOptions.frameStyle === 'image' ? getFrameAsset(app, 'frameImage') : null;
 }
 
 /** Browses for a `.tokener.json` project (text files) and opens it in the creator. */
@@ -2682,12 +2802,17 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
     });
     return;
   }
+  const frameArt = getFrameImageAsset(app);
   drawTokenFrame(context, art, {
     size,
     zoom: view.zoom,
     offsetX: view.offsetX,
     offsetY: view.offsetY,
-    borderWidth: options.borderWidth * ratio,
+    frameImage: frameArt?.image ?? null,
+    openingRadius: frameArt ? getPopOutRadius(app, size) : 0,
+    fillImage: getFrameAsset(app, 'fillImage')?.image ?? null,
+    // The custom ring has no painted border, also while its image is missing or loading.
+    borderWidth: options.frameStyle === 'image' ? 0 : options.borderWidth * ratio,
     borderColor: options.borderColor,
     fill: options.fill,
     fillColor: options.fillColor,
@@ -4727,10 +4852,15 @@ function getPopOutRadius(app, size) {
   const ringScale = getActiveRingScale(app);
   if (app.creatorOptions.frameStyle === 'ring')
     return (size / 2) * getRingClipRadius(app) * ringScale;
+  const { outerRadius } = getRingGeometry({ size, ringScale });
+  if (app.creatorOptions.frameStyle === 'image') {
+    const frameArt = getFrameImageAsset(app);
+    if (!frameArt) return outerRadius;
+    return (size / 2) * (frameArt.innerEdge ?? DEFAULT_RING_SUBJECT_RADIUS) * ringScale;
+  }
   return Math.max(
     0,
-    getRingGeometry({ size, ringScale }).outerRadius -
-      app.creatorOptions.borderWidth * (size / BORDER_REFERENCE_SIZE) * ringScale,
+    outerRadius - app.creatorOptions.borderWidth * (size / BORDER_REFERENCE_SIZE) * ringScale,
   );
 }
 
@@ -5027,6 +5157,7 @@ async function runAutoCompose(app) {
   if (!cutout || app.busy) return;
   setCreatorStatus(app, localize('Creator.Composing', 'Composing...'));
   if (app.creatorOptions.frameStyle === 'ring') app.ringAssets ??= await loadWorldRingAssets();
+  await ensureFrameAssets(app);
 
   const alpha = getAlphaGrid(
     cutout.getContext('2d').getImageData(0, 0, cutout.width, cutout.height),
@@ -6452,6 +6583,7 @@ async function createTokenFromTarget(app, action, savedTarget) {
     await ensureDataFolder(folder);
 
     if (app.creatorOptions.frameStyle === 'ring') app.ringAssets ??= await loadWorldRingAssets();
+    await ensureFrameAssets(app);
     const now = new Date();
     const label = tokenWorkspace.source.label;
     const size = app.creatorOptions.outputSize;
@@ -6779,6 +6911,7 @@ function snapshotTokenAnimation(app) {
       cutout: copyCanvas(app.cutout),
       view: { ...app.view },
       ringAssets: app.ringAssets,
+      _frameAssets: { ...app._frameAssets },
       tokenDocument: app.tokenDocument,
       popOutMask: null,
       insideImage: getInsideImage(app) ? copyCanvas(getInsideImage(app)) : null,
@@ -7106,6 +7239,13 @@ function syncFrameControls(app) {
   root
     ?.querySelector('.pf2e-tokener-creator-frame')
     ?.setAttribute('data-style', app.creatorOptions.frameStyle);
+  for (const key of FRAME_ASSET_KEYS) {
+    const path = app.creatorOptions[key];
+    const name = root?.querySelector(`[data-frame-asset-name="${key}"]`);
+    if (name)
+      name.textContent = path ? getFileLabel(path) : localize('Creator.NoImage', 'None chosen');
+    root?.querySelector(`[data-frame-asset-clear="${key}"]`)?.toggleAttribute('hidden', !path);
+  }
   getCreatorSection(app)?.setAttribute(
     'data-pop-out',
     app.creatorOptions.popOut ? 'true' : 'false',
@@ -7214,8 +7354,21 @@ function deriveSourceLabel(app, path, file) {
   return decodeURIComponent(name).replace(/\.[^.]+$/, '');
 }
 
+function getFileLabel(path) {
+  const name = String(path).split('/').pop() ?? '';
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
 function isDefaultArtwork(path) {
   return /^icons\/svg\/mystery-man|^systems\/[^/]+\/icons\/default-icons\//.test(String(path));
+}
+
+function normalizePath(value) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function normalizeColor(value, fallback) {

@@ -223,9 +223,15 @@ export function getRingGeometry({ size, ringScale = 1 }) {
   };
 }
 
+/** How far the art reaches under a custom ring image, as a fraction of the frame size. */
+const FRAME_IMAGE_UNDERLAP = 0.01;
+
 /**
  * Draws a circular token onto a 2D context. `image` should already have its background removed
  * when `popOut` is enabled, otherwise the part above the frame shows the original backdrop.
+ * With a `frameImage` (ring art with a see-through middle) that art is the frame instead of the
+ * painted border: it is drawn over the art, whose opening ends at `openingRadius` px. A
+ * `fillImage` covers the opening behind the art, over any fill colour.
  */
 export function drawTokenFrame(
   context,
@@ -244,10 +250,20 @@ export function drawTokenFrame(
     popOutShadow = false,
     ringScale = 1,
     insideImage = null,
+    frameImage = null,
+    openingRadius = 0,
+    fillImage = null,
   },
 ) {
-  const { center, outerRadius } = getRingGeometry({ size, ringScale });
-  const innerRadius = Math.max(0, outerRadius - borderWidth);
+  const { center, outerRadius, ringSize, offset } = getRingGeometry({ size, ringScale });
+  const innerRadius = frameImage
+    ? Math.max(0, Math.min(outerRadius, openingRadius))
+    : Math.max(0, outerRadius - borderWidth);
+  // The ring art's inner edge is soft and seldom a perfect circle, so the art goes a little
+  // way under it rather than leaving a see-through line.
+  const artRadius = frameImage
+    ? Math.min(outerRadius, innerRadius + ringSize * FRAME_IMAGE_UNDERLAP)
+    : innerRadius;
   const layout = getTokenFrameLayout({
     imageWidth: image.width,
     imageHeight: image.height,
@@ -261,16 +277,20 @@ export function drawTokenFrame(
 
   context.save();
   context.beginPath();
-  context.arc(center, center, innerRadius, 0, Math.PI * 2);
+  context.arc(center, center, artRadius, 0, Math.PI * 2);
   context.clip();
   if (fill) {
     context.fillStyle = fillColor;
     context.fillRect(0, 0, size, size);
   }
+  if (fillImage)
+    drawCover(context, fillImage, center - artRadius, center - artRadius, artRadius * 2);
   context.drawImage(insideImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
 
-  if (borderWidth > 0) {
+  if (frameImage) {
+    context.drawImage(frameImage, offset, offset, ringSize, ringSize);
+  } else if (borderWidth > 0) {
     context.beginPath();
     context.arc(center, center, outerRadius - borderWidth / 2, 0, Math.PI * 2);
     context.lineWidth = borderWidth;
@@ -285,6 +305,15 @@ export function drawTokenFrame(
     popOutImage,
     popOutShadow,
   });
+}
+
+/** Draws `image` over the `side` px square at (x, y), cropped rather than squashed to fit. */
+function drawCover(context, image, x, y, side) {
+  const width = image.naturalWidth ?? image.width;
+  const height = image.naturalHeight ?? image.height;
+  if (!width || !height || side <= 0) return;
+  const crop = Math.min(width, height);
+  context.drawImage(image, (width - crop) / 2, (height - crop) / 2, crop, crop, x, y, side, side);
 }
 
 /**

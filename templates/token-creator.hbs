@@ -487,8 +487,21 @@
           <span class='pf2e-tokener-creator-value'>{{options.borderWidth}}</span>
           <input type='range' name='borderWidth' min='0' max='60' step='1' value='{{options.borderWidth}}' />
         </label>
-        <div class='pf2e-tokener-creator-colors' data-frame-style='painted'>
-          <label class='pf2e-tokener-creator-swatch'>
+        <div class='pf2e-tokener-creator-row' data-frame-style='image'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button'
+            data-creator-action='browse-frame-image'
+          >
+            <i class='fas fa-ring'></i>
+            {{labels.frameImage}}
+          </button>
+          <span class='pf2e-tokener-creator-file' data-frame-asset-name='frameImage'>{{frameImageName}}</span>
+        </div>
+        <p class='pf2e-tokener-creator-hint' data-frame-style='image'>{{labels.frameImageHint}}</p>
+
+        <div class='pf2e-tokener-creator-colors' data-frame-baked>
+          <label class='pf2e-tokener-creator-swatch' data-frame-style='painted'>
             <input type='color' name='borderColor' value='{{options.borderColor}}' />
             <span>{{labels.borderColor}}</span>
           </label>
@@ -500,6 +513,26 @@
           <label class='pf2e-tokener-creator-swatch'>
             <input type='color' name='fillColor' value='{{options.fillColor}}' />
           </label>
+        </div>
+        <div class='pf2e-tokener-creator-row' data-frame-baked data-tooltip='{{labels.fillImageHint}}'>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button'
+            data-creator-action='browse-fill-image'
+          >
+            <i class='fas fa-image'></i>
+            {{labels.fillImage}}
+          </button>
+          <span class='pf2e-tokener-creator-file' data-frame-asset-name='fillImage'>{{fillImageName}}</span>
+          <button
+            type='button'
+            class='pf2e-tokener-creator-button is-secondary'
+            data-creator-action='clear-fill-image'
+            data-frame-asset-clear='fillImage'
+            data-tooltip='{{labels.fillImageClear}}'
+            aria-label='{{labels.fillImageClear}}'
+            {{#unless options.fillImage}}hidden{{/unless}}
+          ><i class='fas fa-xmark'></i></button>
         </div>
 
         <p class='pf2e-tokener-creator-hint' data-frame-style='ring'>{{labels.ringHint}}</p>

@@ -2352,3 +2352,112 @@ test('more breakout room shrinks the art with the frame, so only the space aroun
   assert.ok(Math.abs(after.y - 200 - (before.y - 200) * ratio) < 1e-6);
   assert.deepEqual(scaleViewForRoom(view, 40, 40), view);
 });
+
+test('custom ring image is a frame style with its own image path', async () => {
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  assert.equal(normalizeTokenCreatorOptions({ frameStyle: 'image' }).frameStyle, 'image');
+  assert.equal(normalizeTokenCreatorOptions().frameImage, '');
+  assert.equal(
+    normalizeTokenCreatorOptions({ frameImage: '  rings/gold.webp ' }).frameImage,
+    'rings/gold.webp',
+  );
+  assert.equal(normalizeTokenCreatorOptions({ frameImage: { path: 'x' } }).frameImage, '');
+});
+
+test('a custom ring image is drawn over the art in place of the painted border', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawTokenFrame } = await import('../scripts/token-composer.js');
+  const size = 100;
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = '#0000ff';
+  artContext.fillRect(0, 0, size, size);
+  // A red band from radius 35 to the edge of the token.
+  const ring = createCanvas(size, size);
+  const ringContext = ring.getContext('2d');
+  ringContext.beginPath();
+  ringContext.arc(50, 50, 50, 0, Math.PI * 2);
+  ringContext.arc(50, 50, 35, 0, Math.PI * 2, true);
+  ringContext.fillStyle = '#ff0000';
+  ringContext.fill();
+
+  const draw = (options) => {
+    const canvas = createCanvas(size, size);
+    drawTokenFrame(canvas.getContext('2d'), art, {
+      size,
+      borderWidth: 8,
+      borderColor: '#ffffff',
+      frameImage: ring,
+      openingRadius: 35,
+      ...options,
+    });
+    return (x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+  };
+
+  const plain = draw({});
+  assert.deepEqual(plain(50, 50), [0, 0, 255, 255]);
+  // On the band: the ring art, never the painted border colour or the art.
+  assert.deepEqual(plain(50, 8), [255, 0, 0, 255]);
+  assert.deepEqual(plain(50, 3), [255, 0, 0, 255]);
+  assert.deepEqual(plain(92, 50), [255, 0, 0, 255]);
+  // No gap between the art and the ring's inner edge.
+  for (let y = 13; y <= 17; y += 1) assert.equal(plain(50, y)[3], 255, `y ${y}`);
+  assert.equal(plain(2, 2)[3], 0);
+
+  // Popped parts cover the ring above the cutoff line and leave it alone below.
+  const popped = draw({ popOut: true });
+  assert.deepEqual(popped(50, 8), [0, 0, 255, 255]);
+  assert.deepEqual(popped(50, 92), [255, 0, 0, 255]);
+
+  // Breakout room shrinks the ring with the frame.
+  const roomy = draw({ ringScale: 0.5, openingRadius: 17.5 });
+  assert.equal(roomy(50, 8)[3], 0);
+  assert.deepEqual(roomy(50, 30), [255, 0, 0, 255]);
+  assert.deepEqual(roomy(50, 50), [0, 0, 255, 255]);
+});
+
+test('a custom background image fills the frame opening behind the art', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawTokenFrame } = await import('../scripts/token-composer.js');
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  assert.equal(normalizeTokenCreatorOptions().fillImage, '');
+  assert.equal(
+    normalizeTokenCreatorOptions({ fillImage: ' bg/cave.webp ' }).fillImage,
+    'bg/cave.webp',
+  );
+
+  const size = 100;
+  // Art: a blue square in the middle of an otherwise see-through cut-out.
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = '#0000ff';
+  artContext.fillRect(40, 40, 20, 20);
+  // A wide background, green on the left half and red on the right: it covers the opening
+  // without being squashed, so the split stays in the middle.
+  const background = createCanvas(200, 100);
+  const backgroundContext = background.getContext('2d');
+  backgroundContext.fillStyle = '#00ff00';
+  backgroundContext.fillRect(0, 0, 100, 100);
+  backgroundContext.fillStyle = '#ff0000';
+  backgroundContext.fillRect(100, 0, 100, 100);
+
+  const canvas = createCanvas(size, size);
+  drawTokenFrame(canvas.getContext('2d'), art, {
+    size,
+    borderWidth: 5,
+    borderColor: '#ffffff',
+    fill: true,
+    fillColor: '#000000',
+    fillImage: background,
+  });
+  const pixel = (x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+  assert.deepEqual(pixel(50, 50), [0, 0, 255, 255]);
+  assert.deepEqual(pixel(20, 50), [0, 255, 0, 255]);
+  assert.deepEqual(pixel(80, 50), [255, 0, 0, 255]);
+  assert.deepEqual(
+    pixel(50, 10),
+    pixel(50, 10).map((v, i) => (i === 3 ? 255 : v)),
+  );
+  assert.deepEqual(pixel(50, 3), [255, 255, 255, 255]);
+  assert.equal(pixel(2, 2)[3], 0);
+});

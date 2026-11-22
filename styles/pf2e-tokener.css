@@ -2718,6 +2718,11 @@
 .pf2e-tokener-creator-app
   .pf2e-tokener-creator-frame:not([data-style='ring'])
   [data-frame-style='ring'],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-frame:not([data-style='image'])
+  [data-frame-style='image'],
+.pf2e-tokener-creator-app .pf2e-tokener-creator-frame[data-style='ring'] [data-frame-baked],
+.pf2e-tokener-creator-app .pf2e-tokener-creator-frame [hidden],
 .pf2e-tokener-creator-app .pf2e-tokener-creator:not([data-pop-out='true']) [data-pop-out-tools] {
   display: none;
 }
@@ -3263,4 +3268,14 @@
 .pf2e-tokener-sequencer-preview small {
   opacity: 0.7;
   overflow-wrap: anywhere;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  opacity: 0.8;
 }
