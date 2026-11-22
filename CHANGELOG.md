@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.1 - 2026-11-22
+
+### Fixed
+
+- Custom ring and background images stored on The Forge or S3 load: their full web address was treated as a local path, so choosing one said "Could not load". The same fix covers opening Token Creator projects and previewing the dynamic ring from such storage.
+
 ## 3.2.0 - 2026-11-22
 
 ### Added
