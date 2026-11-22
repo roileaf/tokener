@@ -2721,7 +2721,17 @@
 .pf2e-tokener-creator-app
   .pf2e-tokener-creator-frame:not([data-style='image'])
   [data-frame-style='image'],
-.pf2e-tokener-creator-app .pf2e-tokener-creator-frame[data-style='ring'] [data-frame-baked],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-frame:not([data-inside='color'])
+  [data-frame-inside='color'],
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-frame:not([data-inside='image'])
+  [data-frame-inside='image'],
+/* Foundry draws the dynamic ring's own background colour. */
+.pf2e-tokener-creator-app
+  .pf2e-tokener-creator-frame[data-style='ring']
+  [data-inside-choice='color'],
+.pf2e-tokener-creator-app [data-creator-action='fill-move'][hidden],
 .pf2e-tokener-creator-app .pf2e-tokener-creator-frame [hidden],
 .pf2e-tokener-creator-app .pf2e-tokener-creator:not([data-pop-out='true']) [data-pop-out-tools] {
   display: none;
@@ -3278,4 +3288,50 @@
   white-space: nowrap;
   font-size: 11px;
   opacity: 0.8;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-thumb {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--color-border-dark-4, #444);
+  border-radius: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-recent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-recent-ring {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--color-border-dark-4, #444);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-recent-ring img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border: 0;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-recent-ring:hover,
+.pf2e-tokener-creator-app .pf2e-tokener-creator-recent-ring:focus-visible {
+  border-color: #8fb9d6;
+}
+
+.pf2e-tokener-creator-app .pf2e-tokener-creator-recent-ring.is-active {
+  border-color: #d6b56d;
+  box-shadow: 0 0 0 1px #d6b56d;
 }

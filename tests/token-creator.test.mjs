@@ -2461,3 +2461,223 @@ test('a custom background image fills the frame opening behind the art', async (
   assert.deepEqual(pixel(50, 3), [255, 255, 255, 255]);
   assert.equal(pixel(2, 2)[3], 0);
 });
+
+test('a dynamic ring subject carries the background image inside the ring opening', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawRingSubject } = await import('../scripts/token-composer.js');
+  const size = 100;
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = '#0000ff';
+  artContext.fillRect(40, 40, 20, 20);
+  const background = createCanvas(50, 50);
+  const backgroundContext = background.getContext('2d');
+  backgroundContext.fillStyle = '#00ff00';
+  backgroundContext.fillRect(0, 0, 50, 50);
+
+  const canvas = createCanvas(size, size);
+  drawRingSubject(canvas.getContext('2d'), art, { size, clipRadius: 0.6, fillImage: background });
+  const pixel = (x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+  assert.deepEqual(pixel(50, 50), [0, 0, 255, 255]);
+  assert.deepEqual(pixel(50, 25), [0, 255, 0, 255]);
+  assert.deepEqual(pixel(25, 50), [0, 255, 0, 255]);
+  // Foundry draws the subject over its ring, so nothing may reach past the opening.
+  assert.equal(pixel(50, 15)[3], 0);
+  assert.equal(pixel(8, 50)[3], 0);
+
+  const plain = createCanvas(size, size);
+  drawRingSubject(plain.getContext('2d'), art, { size, clipRadius: 0.6 });
+  assert.equal(plain.getContext('2d').getImageData(50, 25, 1, 1).data[3], 0);
+});
+
+test("a custom ring's see-through middle sits behind the art unless glass over art is on", async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawTokenFrame } = await import('../scripts/token-composer.js');
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  assert.equal(normalizeTokenCreatorOptions().frameImageOver, false);
+  assert.equal(normalizeTokenCreatorOptions({ frameImageOver: 1 }).frameImageOver, true);
+
+  const size = 100;
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = '#0000ff';
+  artContext.fillRect(40, 40, 20, 20);
+  // A red band from radius 35 out, and half see-through white "glass" across the middle.
+  const ring = createCanvas(size, size);
+  const ringContext = ring.getContext('2d');
+  ringContext.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  ringContext.beginPath();
+  ringContext.arc(50, 50, 35, 0, Math.PI * 2);
+  ringContext.fill();
+  ringContext.beginPath();
+  ringContext.arc(50, 50, 50, 0, Math.PI * 2);
+  ringContext.arc(50, 50, 35, 0, Math.PI * 2, true);
+  ringContext.fillStyle = '#ff0000';
+  ringContext.fill();
+
+  const draw = (options) => {
+    const canvas = createCanvas(size, size);
+    drawTokenFrame(canvas.getContext('2d'), art, {
+      size,
+      frameImage: ring,
+      openingRadius: 35,
+      ...options,
+    });
+    return (x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+  };
+
+  const behind = draw({});
+  assert.deepEqual(behind(50, 50), [0, 0, 255, 255]);
+  // The glass still shows where there is no art, and the band is drawn once, not doubled.
+  const glass = behind(50, 25);
+  assert.ok(glass[3] > 110 && glass[3] < 145, `glass alpha ${glass[3]}`);
+  assert.deepEqual(behind(50, 8), [255, 0, 0, 255]);
+  assert.deepEqual(behind(92, 50), [255, 0, 0, 255]);
+
+  const over = draw({ frameImageOver: true });
+  const tinted = over(50, 50);
+  assert.ok(tinted[0] > 100 && tinted[2] === 255, `tinted ${tinted}`);
+  assert.deepEqual(over(50, 8), [255, 0, 0, 255]);
+});
+
+test('the background image can be zoomed and moved inside the frame opening', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawRingSubject, drawTokenFrame } = await import('../scripts/token-composer.js');
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  const defaults = normalizeTokenCreatorOptions();
+  assert.deepEqual([defaults.fillZoom, defaults.fillOffsetX, defaults.fillOffsetY], [1, 0, 0]);
+  const wild = normalizeTokenCreatorOptions({ fillZoom: 99, fillOffsetX: -50, fillOffsetY: 'x' });
+  assert.deepEqual([wild.fillZoom, wild.fillOffsetX, wild.fillOffsetY], [5, -3, 0]);
+  assert.equal(normalizeTokenCreatorOptions({ fillZoom: 0 }).fillZoom, 0.2);
+
+  const size = 100;
+  const art = createCanvas(size, size);
+  // Green on the left half, red on the right.
+  const background = createCanvas(100, 100);
+  const backgroundContext = background.getContext('2d');
+  backgroundContext.fillStyle = '#00ff00';
+  backgroundContext.fillRect(0, 0, 50, 100);
+  backgroundContext.fillStyle = '#ff0000';
+  backgroundContext.fillRect(50, 0, 50, 100);
+  const GREEN = [0, 255, 0, 255];
+  const RED = [255, 0, 0, 255];
+
+  const framed = (fillView) => {
+    const canvas = createCanvas(size, size);
+    drawTokenFrame(canvas.getContext('2d'), art, { size, fillImage: background, fillView });
+    return (x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+  };
+  const still = framed(undefined);
+  assert.deepEqual(still(40, 50), GREEN);
+  assert.deepEqual(still(60, 50), RED);
+
+  // Moved a quarter of the opening to the right: the split follows.
+  const moved = framed({ zoom: 1, offsetX: 0.25, offsetY: 0 });
+  assert.deepEqual(moved(60, 50), GREEN);
+  assert.deepEqual(moved(90, 50), RED);
+
+  // Zoomed in about the middle: the split stays put, the picture still covers the opening.
+  const zoomed = framed({ zoom: 2, offsetX: 0, offsetY: 0 });
+  assert.deepEqual(zoomed(40, 50), GREEN);
+  assert.deepEqual(zoomed(60, 50), RED);
+  assert.deepEqual(zoomed(5, 50), GREEN);
+
+  // Zoomed out: the picture no longer reaches the opening's edge.
+  const small = framed({ zoom: 0.5, offsetX: 0, offsetY: 0 });
+  assert.equal(small(10, 50)[3], 0);
+  assert.deepEqual(small(40, 50), GREEN);
+
+  const ring = createCanvas(size, size);
+  drawRingSubject(ring.getContext('2d'), art, {
+    size,
+    clipRadius: 0.6,
+    fillImage: background,
+    fillView: { zoom: 1, offsetX: 0.25, offsetY: 0 },
+  });
+  assert.deepEqual([...ring.getContext('2d').getImageData(60, 50, 1, 1).data], GREEN);
+});
+
+test('what shows inside the frame is one choice, read from older options when missing', async () => {
+  const { normalizeTokenCreatorOptions } = await import('../scripts/token-creator.js');
+  const inside = (options) => normalizeTokenCreatorOptions(options).frameInside;
+  assert.equal(inside(), 'none');
+  assert.equal(inside({ frameInside: 'junk' }), 'none');
+  // Options saved before the choice existed.
+  assert.equal(inside({ fill: true }), 'color');
+  assert.equal(inside({ fill: true, fillImage: 'bg/cave.webp' }), 'image');
+  assert.equal(inside({ fill: true, fillImage: 'bg/cave.webp', originalInside: true }), 'original');
+  // The choice wins over them, and a chosen image is kept for later while another is shown.
+  const colour = normalizeTokenCreatorOptions({ frameInside: 'color', fillImage: 'bg/cave.webp' });
+  assert.equal(colour.frameInside, 'color');
+  assert.equal(colour.fillImage, 'bg/cave.webp');
+  // The older switches follow the choice, so only one of them is ever on.
+  for (const mode of ['none', 'color', 'image', 'original']) {
+    const options = normalizeTokenCreatorOptions({
+      frameInside: mode,
+      fill: true,
+      originalInside: true,
+    });
+    assert.equal(options.fill, mode === 'color', mode);
+    assert.equal(options.originalInside, mode === 'original', mode);
+  }
+  // Normalizing again changes nothing.
+  const once = normalizeTokenCreatorOptions({ fill: true });
+  assert.deepEqual(normalizeTokenCreatorOptions(once), once);
+});
+
+test('recent ring images keep the newest first, without repeats, up to a limit', async () => {
+  const { addRecentPath } = await import('../scripts/token-creator.js');
+  assert.deepEqual(addRecentPath([], 'rings/a.webp'), ['rings/a.webp']);
+  assert.deepEqual(addRecentPath(['rings/a.webp', 'rings/b.webp'], 'rings/b.webp'), [
+    'rings/b.webp',
+    'rings/a.webp',
+  ]);
+  assert.deepEqual(addRecentPath(['a', 'b', 'c'], 'd', 3), ['d', 'a', 'b']);
+  // Nothing to add, and junk from a damaged setting, leave a clean list.
+  assert.deepEqual(addRecentPath(['a', '', null, 'a', 7], '  '), ['a']);
+  assert.deepEqual(addRecentPath('junk', 'a'), ['a']);
+  const list = ['a'];
+  addRecentPath(list, 'b');
+  assert.deepEqual(list, ['a']);
+});
+
+test('the creature can be drawn faded, frame and background at full strength', async () => {
+  const { createCanvas } = await import('canvas');
+  const { drawRingSubject, drawTokenFrame } = await import('../scripts/token-composer.js');
+  const size = 100;
+  const art = createCanvas(size, size);
+  const artContext = art.getContext('2d');
+  artContext.fillStyle = '#0000ff';
+  artContext.fillRect(0, 0, size, size);
+  const background = createCanvas(10, 10);
+  const backgroundContext = background.getContext('2d');
+  backgroundContext.fillStyle = '#00ff00';
+  backgroundContext.fillRect(0, 0, 10, 10);
+  const pixel = (canvas, x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
+  const near = (value, target) => Math.abs(value - target) <= 3;
+
+  const framed = createCanvas(size, size);
+  drawTokenFrame(framed.getContext('2d'), art, {
+    size,
+    borderWidth: 6,
+    borderColor: '#ffffff',
+    fillImage: background,
+    popOut: true,
+    artAlpha: 0.4,
+  });
+  // Inside: 40% creature over the background. The border keeps its full colour.
+  const inside = pixel(framed, 50, 60);
+  assert.ok(near(inside[1], 153) && near(inside[2], 102) && inside[3] === 255, `${inside}`);
+  assert.deepEqual(pixel(framed, 50, 96), [255, 255, 255, 255]);
+  // Popped parts fade with the creature.
+  const popped = pixel(framed, 2, 2);
+  assert.ok(near(popped[3], 102), `popped alpha ${popped[3]}`);
+
+  const subject = createCanvas(size, size);
+  drawRingSubject(subject.getContext('2d'), art, { size, clipRadius: 0.6, artAlpha: 0.4 });
+  assert.ok(near(pixel(subject, 50, 50)[3], 102));
+
+  const solid = createCanvas(size, size);
+  drawTokenFrame(solid.getContext('2d'), art, { size, fillImage: background });
+  assert.deepEqual(pixel(solid, 50, 60), [0, 0, 255, 255]);
+});

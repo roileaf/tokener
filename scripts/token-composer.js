@@ -230,8 +230,11 @@ const FRAME_IMAGE_UNDERLAP = 0.01;
  * Draws a circular token onto a 2D context. `image` should already have its background removed
  * when `popOut` is enabled, otherwise the part above the frame shows the original backdrop.
  * With a `frameImage` (ring art with a see-through middle) that art is the frame instead of the
- * painted border: it is drawn over the art, whose opening ends at `openingRadius` px. A
- * `fillImage` covers the opening behind the art, over any fill colour.
+ * painted border: its band is drawn over the art, whose opening ends at `openingRadius` px. Ring
+ * art often has glass or a shine across its middle; that part goes behind the art so it does
+ * not tint the creature, or over it with `frameImageOver`. A `fillImage` covers the opening
+ * behind the art, over any fill colour. `artAlpha` fades the art alone, popped parts included,
+ * so what lies behind it can be seen while it is being placed.
  */
 export function drawTokenFrame(
   context,
@@ -252,7 +255,10 @@ export function drawTokenFrame(
     insideImage = null,
     frameImage = null,
     openingRadius = 0,
+    frameImageOver = false,
     fillImage = null,
+    fillView = null,
+    artAlpha = 1,
   },
 ) {
   const { center, outerRadius, ringSize, offset } = getRingGeometry({ size, ringScale });
@@ -284,12 +290,20 @@ export function drawTokenFrame(
     context.fillRect(0, 0, size, size);
   }
   if (fillImage)
-    drawCover(context, fillImage, center - artRadius, center - artRadius, artRadius * 2);
+    drawCover(context, fillImage, center - artRadius, center - artRadius, artRadius * 2, fillView);
+  if (frameImage && !frameImageOver)
+    context.drawImage(frameImage, offset, offset, ringSize, ringSize);
+  context.globalAlpha = artAlpha;
   context.drawImage(insideImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
 
   if (frameImage) {
+    context.save();
+    // The middle is already behind the art: only the band goes on top.
+    if (!frameImageOver)
+      clipOutsideOpening(context, { x: center, y: center, radius: artRadius }, size, size);
     context.drawImage(frameImage, offset, offset, ringSize, ringSize);
+    context.restore();
   } else if (borderWidth > 0) {
     context.beginPath();
     context.arc(center, center, outerRadius - borderWidth / 2, 0, Math.PI * 2);
@@ -298,6 +312,8 @@ export function drawTokenFrame(
     context.stroke();
   }
 
+  context.save();
+  context.globalAlpha = artAlpha;
   drawPopOut(context, image, layout, {
     center,
     radius: innerRadius,
@@ -305,15 +321,28 @@ export function drawTokenFrame(
     popOutImage,
     popOutShadow,
   });
+  context.restore();
 }
 
-/** Draws `image` over the `side` px square at (x, y), cropped rather than squashed to fit. */
-function drawCover(context, image, x, y, side) {
+/**
+ * Draws `image` over the `side` px square at (x, y), cropped rather than squashed to fit. `view`
+ * zooms it about the square's middle and moves it by fractions of `side`; the caller's clip keeps
+ * it inside the opening.
+ */
+function drawCover(context, image, x, y, side, view = null) {
   const width = image.naturalWidth ?? image.width;
   const height = image.naturalHeight ?? image.height;
   if (!width || !height || side <= 0) return;
-  const crop = Math.min(width, height);
-  context.drawImage(image, (width - crop) / 2, (height - crop) / 2, crop, crop, x, y, side, side);
+  const scale = (side / Math.min(width, height)) * (Number(view?.zoom) || 1);
+  const drawnWidth = width * scale;
+  const drawnHeight = height * scale;
+  context.drawImage(
+    image,
+    x + side / 2 - drawnWidth / 2 + (Number(view?.offsetX) || 0) * side,
+    y + side / 2 - drawnHeight / 2 + (Number(view?.offsetY) || 0) * side,
+    drawnWidth,
+    drawnHeight,
+  );
 }
 
 /**
@@ -378,6 +407,7 @@ export const DEFAULT_RING_SUBJECT_RADIUS = 0.666;
  * the ring, so the subject is clipped to the ring's inner circle (`clipRadius`, as a fraction of
  * the half size) and, with `popOut`, may break out over the ring. Previews pass the world's
  * ring `layers` (background, ring) to draw underneath, or a `guide` when that art is unavailable.
+ * A `fillImage` covers the opening behind the subject.
  */
 export function drawRingSubject(
   context,
@@ -395,6 +425,9 @@ export function drawRingSubject(
     layers = [],
     ringScale = 1,
     insideImage = null,
+    fillImage = null,
+    fillView = null,
+    artAlpha = 1,
   },
 ) {
   const { center, ringSize, offset } = getRingGeometry({ size, ringScale });
@@ -428,9 +461,16 @@ export function drawRingSubject(
   context.beginPath();
   context.arc(center, center, radius, 0, Math.PI * 2);
   context.clip();
+  // Saved into the subject, the background image covers Foundry's own ring background.
+  if (fillImage)
+    drawCover(context, fillImage, center - radius, center - radius, radius * 2, fillView);
+  context.globalAlpha = artAlpha;
   context.drawImage(insideImage ?? image, layout.x, layout.y, layout.width, layout.height);
   context.restore();
+  context.save();
+  context.globalAlpha = artAlpha;
   drawPopOut(context, image, layout, { center, radius, popOut, popOutImage, popOutShadow });
+  context.restore();
 }
 
 export function buildCreatedTokenFileName(

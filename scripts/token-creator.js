@@ -34,6 +34,7 @@ import {
   CREATED_TOKEN_FOLDER_SETTING_KEY,
   MODULE_ID,
   TOKEN_CREATOR_DEFAULTS_SETTING_KEY,
+  TOKEN_CREATOR_RECENT_RINGS_SETTING_KEY,
 } from './constants.js';
 import {
   getMaskShortcut,
@@ -186,6 +187,17 @@ const AI_BACKGROUND_MODES = ['ai'];
 const FRAME_STYLES = ['painted', 'ring', 'image'];
 /** Options holding the path of an image drawn into the token: the ring art and the background. */
 const FRAME_ASSET_KEYS = Object.freeze(['frameImage', 'fillImage']);
+/** Custom ring images offered again in the Frame card. */
+const RECENT_RINGS_LIMIT = 8;
+/** What shows behind the creature inside the frame; only one at a time. */
+const FRAME_INSIDES = ['none', 'color', 'image', 'original'];
+// The background image's own framing: zoom about the opening's middle, and how far it is moved
+// as a fraction of the opening's width.
+const FILL_ZOOM_MIN = 0.2;
+const FILL_ZOOM_MAX = 5;
+const FILL_OFFSET_MAX = 3;
+/** How solid the creature stays in the preview while its background is moved or zoomed. */
+const FILL_ADJUST_ART_ALPHA = 0.35;
 const EDIT_TARGETS = [
   { value: 'token', icon: 'fas fa-circle-user' },
   { value: 'portrait', icon: 'fas fa-image-portrait' },
@@ -317,10 +329,15 @@ export const DEFAULT_TOKEN_CREATOR_OPTIONS = Object.freeze({
   feather: DEFAULT_BACKGROUND_FEATHER,
   borderWidth: 10,
   borderColor: '#5c1d1d',
+  frameInside: 'none',
   fill: false,
   fillColor: '#1b1b1b',
   fillImage: '',
+  fillZoom: 1,
+  fillOffsetX: 0,
+  fillOffsetY: 0,
   frameImage: '',
+  frameImageOver: false,
   popOut: false,
   popOutShadow: true,
   originalInside: false,
@@ -366,6 +383,12 @@ export function registerTokenCreatorSettings(settings = globalThis.game?.setting
     default: '',
     onChange: () => syncCreatedTokenSubjectPath(),
   });
+  settings?.register?.(MODULE_ID, TOKEN_CREATOR_RECENT_RINGS_SETTING_KEY, {
+    scope: 'client',
+    config: false,
+    type: Array,
+    default: [],
+  });
   settings?.register?.(MODULE_ID, TOKEN_CREATOR_DEFAULTS_SETTING_KEY, {
     scope: 'client',
     config: false,
@@ -387,6 +410,7 @@ export function canUseTokenCreator(user = globalThis.game?.user) {
 export function normalizeTokenCreatorOptions(value = {}) {
   const defaults = DEFAULT_TOKEN_CREATOR_OPTIONS;
   const options = { ...defaults, ...(value ?? {}) };
+  const frameInside = getFrameInside(value);
   return {
     backgroundMode: BACKGROUND_MODES.includes(options.backgroundMode)
       ? options.backgroundMode
@@ -398,13 +422,19 @@ export function normalizeTokenCreatorOptions(value = {}) {
     feather: clamp(Math.round(numberOr(options.feather, defaults.feather)), 0, 8),
     borderWidth: clamp(Math.round(numberOr(options.borderWidth, defaults.borderWidth)), 0, 60),
     borderColor: normalizeColor(options.borderColor, defaults.borderColor),
-    fill: Boolean(options.fill),
+    frameInside,
+    // The older switches follow the choice, for everything that still reads them.
+    fill: frameInside === 'color',
     fillColor: normalizeColor(options.fillColor, defaults.fillColor),
     fillImage: normalizePath(options.fillImage),
+    fillZoom: clamp(numberOr(options.fillZoom, defaults.fillZoom), FILL_ZOOM_MIN, FILL_ZOOM_MAX),
+    fillOffsetX: clamp(numberOr(options.fillOffsetX, 0), -FILL_OFFSET_MAX, FILL_OFFSET_MAX),
+    fillOffsetY: clamp(numberOr(options.fillOffsetY, 0), -FILL_OFFSET_MAX, FILL_OFFSET_MAX),
     frameImage: normalizePath(options.frameImage),
+    frameImageOver: Boolean(options.frameImageOver),
     popOut: Boolean(options.popOut),
     popOutShadow: Boolean(options.popOutShadow),
-    originalInside: Boolean(options.originalInside),
+    originalInside: frameInside === 'original',
     breakoutRoom: clamp(
       Math.round(numberOr(options.breakoutRoom, defaults.breakoutRoom) / 5) * 5,
       0,
@@ -697,6 +727,16 @@ function prepareCreatorContext(app) {
     fillImageName: options.fillImage
       ? getFileLabel(options.fillImage)
       : localize('Creator.NoImage', 'None chosen'),
+    frameImageSrc: options.frameImage ? getAssetRoute(options.frameImage) : '',
+    fillImageSrc: options.fillImage ? getAssetRoute(options.fillImage) : '',
+    recentRings: getRecentRings(options),
+    frameInsides: FRAME_INSIDES.map((mode) => ({
+      value: mode,
+      label: localize(`Creator.FrameInside.${mode}`, mode),
+      tooltip: localize(`Creator.FrameInsideTooltip.${mode}`, ''),
+      selected: options.frameInside === mode,
+    })),
+    fillZoom: { min: FILL_ZOOM_MIN, max: FILL_ZOOM_MAX, label: formatZoom(options.fillZoom) },
     frameStyles: FRAME_STYLES.map((style) => ({
       value: style,
       label: localize(`Creator.FrameStyle.${style}`, style),
@@ -859,7 +899,9 @@ function prepareCreatorContext(app) {
         'Creator.DropHint',
         'Drop or paste an image here. Drag to move, scroll to zoom.',
       ),
-      background: localize('Creator.Background', 'Background'),
+      background: localize('Creator.Background', 'Remove background'),
+      frameInside: localize('Creator.FrameInside.Title', 'Inside the frame'),
+      fillColor: localize('Creator.FillColor', 'Colour'),
       tolerance: localize('Creator.Tolerance', 'Tolerance'),
       feather: localize('Creator.Feather', 'Edge softness'),
       aiHint: localize(
@@ -874,22 +916,27 @@ function prepareCreatorContext(app) {
         'Creator.FrameImageHint',
         'Any ring picture with a see-through middle. The art fills its opening; the ring is saved into the token image.',
       ),
-      fillImage: localize('Creator.FillImage', 'Background image'),
+      frameImageOver: localize('Creator.FrameImageOver', "Ring's shine over the creature"),
+      frameImageOverTooltip: localize(
+        'Creator.FrameImageOverTooltip',
+        "Draw the ring picture's see-through middle (glass, shine) over the creature instead of behind it.",
+      ),
+      fillImage: localize('Creator.FillImage', 'Choose image'),
+      fillMoveTooltip: localize(
+        'Creator.FillMoveTooltip',
+        'Move the background image: drag to move it, scroll to zoom it. Pick another tool to go back to the art.',
+      ),
+      fillZoom: localize('Creator.FillZoom', 'Background zoom'),
+      fillReset: localize('Creator.FillReset', 'Centre and fit the background'),
       fillImageClear: localize('Creator.FillImageClear', 'Remove the background image'),
       fillImageHint: localize(
         'Creator.FillImageHint',
         'Shown behind the creature inside the frame, so it needs the background removed.',
       ),
       noImage: localize('Creator.NoImage', 'None chosen'),
-      fill: localize('Creator.Fill', 'Fill background'),
       popOut: localize('Creator.PopOut', 'Pop out of frame'),
       breakoutRoom: localize('Creator.BreakoutRoom', 'Breakout room'),
       popOutShadow: localize('Creator.PopOutShadow', 'Shadow under popped parts'),
-      originalInside: localize('Creator.OriginalInside', 'Original background inside the frame'),
-      originalInsideTooltip: localize(
-        'Creator.OriginalInsideTooltip',
-        'Inside the frame, show the picture as it was, backdrop included; only the cut-out parts pop out over the frame',
-      ),
       breakoutRoomTooltip: localize(
         'Creator.BreakoutRoomTooltip',
         'Space around the frame for popped-out parts to reach past its edge. The token is scaled up in Foundry so the frame still fits the grid.',
@@ -1174,6 +1221,19 @@ function bindPreviewInteractions(app, canvas) {
       canvas.setPointerCapture?.(event.pointerId);
       return;
     }
+    if (isMovingFill(app)) {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      drag = {
+        fill: true,
+        x: event.clientX,
+        y: event.clientY,
+        offsetX: app.creatorOptions.fillOffsetX,
+        offsetY: app.creatorOptions.fillOffsetY,
+      };
+      canvas.setPointerCapture?.(event.pointerId);
+      return;
+    }
     if (app.maskTool === 'pin') {
       event.preventDefault();
       if (!canEditPins(app)) return;
@@ -1292,6 +1352,20 @@ function bindPreviewInteractions(app, canvas) {
       renderCreatorPreview(app);
       return;
     }
+    if (drag.fill) {
+      // Offsets are fractions of the opening, so the picture follows the pointer.
+      const ratio = canvas.width / (canvas.clientWidth || canvas.width) / app.viewport.scale;
+      const side = Math.max(1, getPopOutRadius(app, canvas.width) * 2);
+      setFillView(
+        app,
+        {
+          fillOffsetX: drag.offsetX + ((event.clientX - drag.x) * ratio) / side,
+          fillOffsetY: drag.offsetY + ((event.clientY - drag.y) * ratio) / side,
+        },
+        { save: false },
+      );
+      return;
+    }
     if (drag.pinId) {
       // A small tremor on a press is still a click: it neither keyframes nor keeps the selection.
       if (!drag.moved && !isPastDragDeadZone(drag.press, { x: event.clientX, y: event.clientY }))
@@ -1331,6 +1405,7 @@ function bindPreviewInteractions(app, canvas) {
       app.selectedPinIds = [drag.pinId];
       renderCreatorPreview(app);
     }
+    if (drag?.fill) saveCreatorDefaults(app.creatorOptions);
     if (drag?.lasso) fillEffectRegionLasso(app, drag.region, drag.lasso, drag.mode);
     app._lasso = null;
     if (drag?.region) finishRegionStroke(app);
@@ -1366,6 +1441,12 @@ function bindPreviewInteractions(app, canvas) {
       }
       if (event.altKey) {
         setViewScale(app, stepViewScale(app.viewport.scale, event.deltaY < 0 ? 1 : -1));
+        return;
+      }
+      if (isMovingFill(app)) {
+        setFillView(app, {
+          fillZoom: app.creatorOptions.fillZoom * (event.deltaY < 0 ? 1.05 : 1 / 1.05),
+        });
         return;
       }
       if ((event.ctrlKey || event.metaKey) && (canMask(app) || app.maskTool === 'region')) {
@@ -1529,6 +1610,8 @@ export function handleCreatorInput(app, event) {
   if (!getCreatorOptionKey(name, app.creatorOptions)) return;
 
   const room = app.creatorOptions.breakoutRoom;
+  // Dragging the background's zoom slider; the change event ends it.
+  app._fillAdjusting = name === 'fillZoom';
   updateCreatorOption(app, target);
   updateValueLabel(target);
   // The art shrinks or grows with the frame, so more room only adds space around it.
@@ -1584,9 +1667,14 @@ export async function handleCreatorChange(app, event) {
   if (!getCreatorOptionKey(target?.name, app.creatorOptions)) return;
   updateCreatorOption(app, target);
   saveCreatorDefaults(app.creatorOptions);
+  if (app._fillAdjusting) {
+    app._fillAdjusting = false;
+    renderCreatorPreview(app);
+  }
   if (target.name === 'portraitBackground') syncPortraitControls(app);
-  if (target.name === 'frameStyle') {
+  if (target.name === 'frameStyle' || target.name === 'frameInside') {
     syncFrameControls(app);
+    syncMaskControls(app);
     renderCreatorPreview(app);
   }
   if (
@@ -1625,11 +1713,20 @@ async function handleCreatorClick(app, event) {
     case 'browse-frame-image':
       openFrameAssetPicker(app, 'frameImage');
       return;
+    case 'use-frame-image':
+      if (button.dataset.path) setFrameAssetPath(app, 'frameImage', button.dataset.path);
+      return;
     case 'browse-fill-image':
       openFrameAssetPicker(app, 'fillImage');
       return;
     case 'clear-fill-image':
       setFrameAssetPath(app, 'fillImage', '');
+      return;
+    case 'fill-move':
+      setFillMove(app, !app.fillMove);
+      return;
+    case 'fill-reset':
+      setFillView(app, { fillZoom: 1, fillOffsetX: 0, fillOffsetY: 0 });
       return;
     case 'upload':
       getCreatorRoot(app)?.querySelector('input[name="upload"]')?.click();
@@ -1846,13 +1943,134 @@ function openFrameAssetPicker(app, key) {
   new FilePicker({
     type: 'image',
     current: app.creatorOptions[key] || '',
-    callback: (path) => setFrameAssetPath(app, key, path),
+    callback: (path) => {
+      if (key === 'frameImage') saveRecentRings(addRecentPath(readRecentRings(), path));
+      setFrameAssetPath(app, key, path);
+    },
   }).render(true);
 }
 
+/** `list` with `path` put first: no repeats, no empty entries, at most `limit` long. */
+export function addRecentPath(list, path, limit = RECENT_RINGS_LIMIT) {
+  const paths = [path, ...(Array.isArray(list) ? list : [])]
+    .map((entry) => normalizePath(entry))
+    .filter(Boolean);
+  return [...new Set(paths)].slice(0, limit);
+}
+
+function readRecentRings() {
+  return addRecentPath(readSetting(TOKEN_CREATOR_RECENT_RINGS_SETTING_KEY), '');
+}
+
+function saveRecentRings(list) {
+  try {
+    void globalThis.game?.settings?.set?.(MODULE_ID, TOKEN_CREATOR_RECENT_RINGS_SETTING_KEY, list);
+  } catch {}
+}
+
+/**
+ * The rings to offer: those picked before, in the order they were picked, plus the one in use
+ * when it was chosen before the list existed. Using one from the list does not reorder it.
+ */
+function getRecentRings(options) {
+  const recent = readRecentRings();
+  const current = options.frameImage;
+  const paths = current && !recent.includes(current) ? addRecentPath(recent, current) : recent;
+  return paths.map((path) => ({
+    path,
+    src: getAssetRoute(path),
+    name: getFileLabel(path),
+    selected: path === current,
+  }));
+}
+
+function renderRecentRings(app) {
+  const list = getCreatorRoot(app)?.querySelector('[data-recent-rings]');
+  if (!list) return;
+  const document = list.ownerDocument;
+  const rings = getRecentRings(app.creatorOptions);
+  list.replaceChildren(
+    ...rings.map((ring) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pf2e-tokener-creator-recent-ring';
+      button.classList.toggle('is-active', ring.selected);
+      button.dataset.creatorAction = 'use-frame-image';
+      button.dataset.path = ring.path;
+      button.dataset.tooltip = ring.name;
+      button.setAttribute('aria-label', ring.name);
+      button.setAttribute('aria-pressed', ring.selected ? 'true' : 'false');
+      const image = document.createElement('img');
+      image.src = ring.src;
+      image.alt = '';
+      button.append(image);
+      return button;
+    }),
+  );
+  list.toggleAttribute('hidden', !rings.length);
+}
+
 function setFrameAssetPath(app, key, path) {
-  app.creatorOptions = normalizeTokenCreatorOptions({ ...app.creatorOptions, [key]: path });
+  // A new background starts centred and fitted; without one there is nothing to move.
+  const reset =
+    key === 'fillImage'
+      ? { fillZoom: 1, fillOffsetX: 0, fillOffsetY: 0, frameInside: 'image' }
+      : {};
+  if (key === 'fillImage' && !path) app.fillMove = false;
+  app.creatorOptions = normalizeTokenCreatorOptions({
+    ...app.creatorOptions,
+    ...reset,
+    [key]: path,
+  });
   saveCreatorDefaults(app.creatorOptions);
+  syncFrameControls(app);
+  syncMaskControls(app);
+  renderCreatorPreview(app);
+}
+
+function getFillView(options) {
+  return { zoom: options.fillZoom, offsetX: options.fillOffsetX, offsetY: options.fillOffsetY };
+}
+
+/** The background image, when that is what shows inside the frame and it has loaded. */
+function getFillImageAsset(app) {
+  return app.creatorOptions.frameInside === 'image' ? getFrameAsset(app, 'fillImage') : null;
+}
+
+/** A background image is showing on the token, so it can be moved and zoomed. */
+function isFillMovable(app) {
+  const options = app.creatorOptions;
+  return (
+    options.frameInside === 'image' &&
+    Boolean(options.fillImage) &&
+    (app.editTarget ?? 'token') === 'token'
+  );
+}
+
+/**
+ * The background is being placed right now: its Move tool is on, or its zoom slider is being
+ * dragged. The preview then fades the creature so the background can be seen; saves never do.
+ */
+function isAdjustingFill(app) {
+  return isMovingFill(app) || (Boolean(app._fillAdjusting) && isFillMovable(app));
+}
+
+/** True while dragging and scrolling on the preview move the background instead of the art. */
+function isMovingFill(app) {
+  return Boolean(app.fillMove) && isFillMovable(app);
+}
+
+function setFillMove(app, active) {
+  const on = Boolean(active) && isFillMovable(app);
+  if (on && app.maskTool) setMaskTool(app, null);
+  app.fillMove = on;
+  syncMaskControls(app);
+}
+
+/** Changes the background's zoom or position; `save` keeps it for later tokens. */
+function setFillView(app, view, { save = true } = {}) {
+  app.creatorOptions = normalizeTokenCreatorOptions({ ...app.creatorOptions, ...view });
+  if (save) saveCreatorDefaults(app.creatorOptions);
   syncFrameControls(app);
   renderCreatorPreview(app);
 }
@@ -1871,12 +2089,18 @@ function getFrameAsset(app, key) {
     if (held[key] !== entry) return;
     entry.asset = asset;
     if (asset) renderCreatorPreview(app);
-    else
+    else {
+      // A ring that is gone stops being offered.
+      if (key === 'frameImage') {
+        saveRecentRings(readRecentRings().filter((entry) => entry !== path));
+        renderRecentRings(app);
+      }
       setCreatorStatus(
         app,
         localize('Creator.FrameImageFailed', 'Could not load {path}.').replace('{path}', path),
         true,
       );
+    }
   });
   return null;
 }
@@ -1894,8 +2118,7 @@ async function ensureFrameAssets(app) {
 
 function loadFrameAsset(path) {
   if (frameAssetCache.has(path)) return frameAssetCache.get(path);
-  const route = globalThis.foundry?.utils?.getRoute?.(path) ?? path;
-  const promise = loadImageElement(route, false)
+  const promise = loadImageElement(getAssetRoute(path), false)
     .then((image) => ({ path, image, innerEdge: measureFrameOpening(image) }))
     .catch((error) => {
       console.warn(`${MODULE_ID} | Could not load frame image ${path}`, error);
@@ -2767,8 +2990,10 @@ function getTokenPoint(app, canvas, event) {
   return viewportPointToToken(getViewport(app, canvas.width), getCanvasPoint(canvas, event));
 }
 
-function drawCreatedToken(context, app, size, { preview = false, bent = null } = {}) {
+function drawCreatedToken(context, app, size, { preview = false, bent = null, fade = false } = {}) {
   const options = app.creatorOptions;
+  // The editing preview fades the creature while the background behind it is being placed.
+  const artAlpha = fade && isAdjustingFill(app) ? FILL_ADJUST_ART_ALPHA : 1;
   // A bent art canvas is already laid out in token space, so it draws at an identity layout.
   const art = bent ? bent.art : app.cutout;
   const popOutImage = bent ? bent.popOut : getPopOutImage(app);
@@ -2791,6 +3016,9 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
       popOutImage,
       popOutShadow: options.popOutShadow,
       insideImage,
+      fillImage: getFillImageAsset(app)?.image ?? null,
+      fillView: getFillView(options),
+      artAlpha,
       layers: layers ?? [],
       guide:
         preview && !layers
@@ -2809,8 +3037,11 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
     offsetX: view.offsetX,
     offsetY: view.offsetY,
     frameImage: frameArt?.image ?? null,
+    frameImageOver: options.frameImageOver,
     openingRadius: frameArt ? getPopOutRadius(app, size) : 0,
-    fillImage: getFrameAsset(app, 'fillImage')?.image ?? null,
+    fillImage: getFillImageAsset(app)?.image ?? null,
+    fillView: getFillView(options),
+    artAlpha,
     // The custom ring has no painted border, also while its image is missing or loading.
     borderWidth: options.frameStyle === 'image' ? 0 : options.borderWidth * ratio,
     borderColor: options.borderColor,
@@ -2829,7 +3060,7 @@ function drawCreatedToken(context, app, size, { preview = false, bent = null } =
  * on and parts pop out (the cut-out still provides the popped parts); null otherwise.
  */
 function getInsideImage(app) {
-  if (!app.creatorOptions.originalInside || !isPopOutEnabled(app)) return null;
+  if (!app.creatorOptions.originalInside) return null;
   return app.insideImage ?? app.source?.canvas ?? null;
 }
 
@@ -4076,7 +4307,7 @@ function shouldAnimatePreview(app) {
  */
 function drawPreviewToken(context, app, size) {
   if (!shouldAnimatePreview(app)) {
-    drawCreatedToken(context, app, size, { preview: true });
+    drawCreatedToken(context, app, size, { preview: true, fade: true });
     return;
   }
   const popOutImage = isPopOutEnabled(app) ? getPopOutImage(app) : null;
@@ -4105,7 +4336,7 @@ function drawPreviewToken(context, app, size) {
     animation: app.animation,
     createCanvas,
     drawFrame: (frameContext, frameBent) =>
-      drawCreatedToken(frameContext, app, size, { preview: true, bent: frameBent }),
+      drawCreatedToken(frameContext, app, size, { preview: true, bent: frameBent, fade: true }),
     bent: reuse,
     effectClip: getEffectClip(app, size),
     clips: requestClips(app, app.animation.effects),
@@ -4362,6 +4593,8 @@ function setMaskTool(app, tool) {
   // The mask overlay and brushes map to the still art, so editing tools pause the preview loop.
   if (!canPlayWithTool(tool)) stopAnimationPlayback(app);
   app.maskTool = tool;
+  // Any tool, the art's own Move included, takes the preview's drags back from the background.
+  app.fillMove = false;
   if (tool && !['pin', 'region', 'repaint'].includes(tool) && !isCleanupTool(tool))
     ensurePopOutMask(app);
   if (tool === 'select') void prepareSamSelector(app).catch(() => {});
@@ -4677,7 +4910,8 @@ function syncMaskControls(app) {
   root.querySelectorAll('[data-creator-action^="mask-"]').forEach((button) => {
     const action = button.dataset.creatorAction;
     if (tools.includes(action.replace('mask-', ''))) {
-      const active = action === `mask-${tool}`;
+      // While the background is being moved, the art's own Move is not the active tool.
+      const active = action === `mask-${tool}` && !(action === 'mask-move' && isMovingFill(app));
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
       button.classList.toggle('is-active', active);
     }
@@ -4686,6 +4920,10 @@ function syncMaskControls(app) {
     if (action === 'mask-undo') button.disabled = !app._maskHistory.undo.length;
     if (action === 'mask-redo') button.disabled = !app._maskHistory.redo.length;
   });
+  const fillMove = root.querySelector('[data-creator-action="fill-move"]');
+  fillMove?.toggleAttribute('hidden', !isFillMovable(app));
+  fillMove?.classList.toggle('is-active', isMovingFill(app));
+  fillMove?.setAttribute('aria-pressed', isMovingFill(app) ? 'true' : 'false');
 }
 
 function syncBrushCursor(app) {
@@ -7236,15 +7474,32 @@ function syncZoomInput(app) {
 
 function syncFrameControls(app) {
   const root = getCreatorRoot(app);
-  root
-    ?.querySelector('.pf2e-tokener-creator-frame')
-    ?.setAttribute('data-style', app.creatorOptions.frameStyle);
+  const frame = root?.querySelector('.pf2e-tokener-creator-frame');
+  frame?.setAttribute('data-style', app.creatorOptions.frameStyle);
+  frame?.setAttribute('data-inside', app.creatorOptions.frameInside);
   for (const key of FRAME_ASSET_KEYS) {
     const path = app.creatorOptions[key];
     const name = root?.querySelector(`[data-frame-asset-name="${key}"]`);
-    if (name)
+    if (name) {
       name.textContent = path ? getFileLabel(path) : localize('Creator.NoImage', 'None chosen');
+      name.setAttribute('title', path);
+    }
+    const thumb = root?.querySelector(`[data-frame-asset-thumb="${key}"]`);
+    if (thumb) {
+      if (path) thumb.setAttribute('src', getAssetRoute(path));
+      else thumb.removeAttribute('src');
+      thumb.toggleAttribute('hidden', !path);
+    }
     root?.querySelector(`[data-frame-asset-clear="${key}"]`)?.toggleAttribute('hidden', !path);
+  }
+  renderRecentRings(app);
+  root
+    ?.querySelectorAll('[data-fill-view]')
+    .forEach((element) => element.toggleAttribute('hidden', !app.creatorOptions.fillImage));
+  const zoom = root?.querySelector('input[name="fillZoom"]');
+  if (zoom) {
+    zoom.value = String(app.creatorOptions.fillZoom);
+    updateValueLabel(zoom);
   }
   getCreatorSection(app)?.setAttribute(
     'data-pop-out',
@@ -7294,7 +7549,8 @@ function updateValueLabel(input) {
     .closest?.('.pf2e-tokener-creator-slider')
     ?.querySelector('.pf2e-tokener-creator-value');
   if (!label) return;
-  if (input.name === 'zoom') label.textContent = formatZoom(input.value);
+  if (input.name === 'zoom' || input.name === 'fillZoom')
+    label.textContent = formatZoom(input.value);
   else if (input.name === 'brushSize') label.textContent = `${input.value}px`;
   else if (input.name === 'breakoutRoom') label.textContent = `${input.value}%`;
   else label.textContent = input.value;
@@ -7354,6 +7610,10 @@ function deriveSourceLabel(app, path, file) {
   return decodeURIComponent(name).replace(/\.[^.]+$/, '');
 }
 
+function getAssetRoute(path) {
+  return globalThis.foundry?.utils?.getRoute?.(path) ?? path;
+}
+
 function getFileLabel(path) {
   const name = String(path).split('/').pop() ?? '';
   try {
@@ -7365,6 +7625,14 @@ function getFileLabel(path) {
 
 function isDefaultArtwork(path) {
   return /^icons\/svg\/mystery-man|^systems\/[^/]+\/icons\/default-icons\//.test(String(path));
+}
+
+/** The inside-the-frame choice, worked out from the older switches when it was never made. */
+function getFrameInside(value) {
+  if (FRAME_INSIDES.includes(value?.frameInside)) return value.frameInside;
+  if (value?.originalInside) return 'original';
+  if (normalizePath(value?.fillImage)) return 'image';
+  return value?.fill ? 'color' : 'none';
 }
 
 function normalizePath(value) {
