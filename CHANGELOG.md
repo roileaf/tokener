@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 3.1.0 - 2026-11-22
 
 ### Added
 
+- Custom ring: a third frame style in the Token Creator next to Painted border and Dynamic ring. Choose any ring picture with a see-through middle and it becomes the token's frame, saved into the token image. Its opening is measured from the picture, so the art fills it and popped-out parts, breakout room and Auto compose work as with a painted border.
+- Background image: painted-border and custom-ring tokens can show a picture behind the creature inside the frame, cropped to fill the opening. It shows where the creature's own background has been removed.
 - Pick the creature has Click, Wand and Brush tools. Click selects the whole creature clicked, the wand just the part clicked (a wing, the rock), and the brush paints the selection. Right-click or Alt removes with any of them, so a rock under a dragon can be taken out. Only the selection goes to the generator; the rest of its box is left white. The selection is filled and outlined so its shape shows.
 
 ### Fixed
