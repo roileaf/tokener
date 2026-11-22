@@ -2280,7 +2280,7 @@ export async function loadCreatorProject(
 }
 
 async function fetchProjectJson(path) {
-  const url = globalThis.foundry?.utils?.getRoute?.(path) ?? path;
+  const url = routeAssetPath(path);
   const fetchJsonWithTimeout = globalThis.foundry?.utils?.fetchJsonWithTimeout;
   if (typeof fetchJsonWithTimeout === 'function') return fetchJsonWithTimeout(url);
   const response = await fetch(url);
@@ -2289,8 +2289,7 @@ async function fetchProjectJson(path) {
 }
 
 function loadProjectImage(src) {
-  const url = src.startsWith('data:') ? src : (globalThis.foundry?.utils?.getRoute?.(src) ?? src);
-  return loadImageElement(url, false);
+  return loadImageElement(routeAssetPath(src), false);
 }
 
 /** Loads every image a parsed project refers to into canvases, without touching the app. */
@@ -5355,7 +5354,7 @@ function loadWorldRingAssets() {
   if (!path) return Promise.resolve(null);
   if (worldRingAssets?.path === path) return worldRingAssets.promise;
 
-  const route = (value) => globalThis.foundry?.utils?.getRoute?.(value) ?? value;
+  const route = routeAssetPath;
   const promise = (async () => {
     const response = await fetch(route(path));
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -7610,8 +7609,19 @@ function deriveSourceLabel(app, path, file) {
   return decodeURIComponent(name).replace(/\.[^.]+$/, '');
 }
 
+/**
+ * The URL to load a Foundry file path from. Local paths get the server's route prefix; a full
+ * URL (files on The Forge or S3 are stored as one), `data:` or `blob:` is used as it is, since
+ * Foundry's `getRoute` would turn it into a broken local path.
+ */
+export function routeAssetPath(path) {
+  const text = String(path ?? '');
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(text)) return text;
+  return globalThis.foundry?.utils?.getRoute?.(text) ?? text;
+}
+
 function getAssetRoute(path) {
-  return globalThis.foundry?.utils?.getRoute?.(path) ?? path;
+  return routeAssetPath(path);
 }
 
 function getFileLabel(path) {

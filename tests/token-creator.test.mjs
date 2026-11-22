@@ -2681,3 +2681,25 @@ test('the creature can be drawn faded, frame and background at full strength', a
   drawTokenFrame(solid.getContext('2d'), art, { size, fillImage: background });
   assert.deepEqual(pixel(solid, 50, 60), [0, 0, 255, 255]);
 });
+
+test('full URLs (The Forge, S3) are loaded as they are; only local paths get the route prefix', async () => {
+  const { routeAssetPath } = await import('../scripts/token-creator.js');
+  const previous = globalThis.foundry;
+  // Foundry's getRoute, which prefixes whatever it is given.
+  globalThis.foundry = {
+    utils: { getRoute: (path) => `/vtt/${String(path).replace(/^\/+|\/+$/g, '')}` },
+  };
+  try {
+    assert.equal(routeAssetPath('modules/rings/gold.webp'), '/vtt/modules/rings/gold.webp');
+    const forge =
+      'https://assets.forge-vtt.com/bazaar/modules/token-frames/assets/frame-green.webp';
+    assert.equal(routeAssetPath(forge), forge);
+    assert.equal(routeAssetPath('http://example.com/a.png'), 'http://example.com/a.png');
+    assert.equal(routeAssetPath('//cdn.example.com/a.png'), '//cdn.example.com/a.png');
+    assert.equal(routeAssetPath('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
+    assert.equal(routeAssetPath('blob:https://x/1'), 'blob:https://x/1');
+  } finally {
+    globalThis.foundry = previous;
+  }
+  assert.equal(routeAssetPath('modules/rings/gold.webp'), 'modules/rings/gold.webp');
+});
