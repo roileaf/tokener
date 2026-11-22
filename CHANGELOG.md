@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.2.0 - 2026-11-22
+
+### Added
+
+- Custom ring remembers the last 8 ring images you chose and shows them as thumbnails under the chooser; click one to use it again. A ring whose file is gone drops off the list.
+- The background image can be framed: the picture tool above the preview drags it and zooms it with the scroll wheel, a Background zoom slider sits under it, and a reset button centres and fits it again. Zoomed out, it no longer has to fill the whole opening. While it is being moved or zoomed the creature fades in the preview, so the background can be seen; the saved token is not affected.
+- Background image works with the Dynamic ring frame style too: it is saved into the token inside the ring's opening and covers Foundry's own ring background, so the ring's Background colour no longer shows there. The ring, its colour and its effects are still Foundry's.
+
+### Changed
+
+- The Frame card asks one question, "Inside the frame": Nothing, Colour, Image or Original. It replaces "Fill background", "Background image" and "Original background inside the frame", which could be on together. Tokens and projects saved before open with the matching choice. Original no longer needs Pop out of frame.
+- The ring and background images show a thumbnail next to their file name.
+- The Background card is named "Remove background", which is what it does.
+- A custom ring's see-through middle (glass, a shine) is drawn behind the creature instead of over it, so the creature is no longer tinted by it. Only the ring's band covers the art. Tick "Ring's shine over the creature" for the old look.
+
 ## 3.1.0 - 2026-11-22
 
 ### Added
