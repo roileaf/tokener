@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.2.2 - 2026-11-23
+
+### Fixed
+
+- Tokener no longer floods The Forge with file requests and warnings. Building the art list looked in up to four guessed folders (tokens, assets/tokens, ...) in every installed module, and on The Forge each look is a request that fails with a warning when the folder is not there. A module's folders are now read once and only the ones that exist are opened: one request for a module without art instead of four, and none for missing folders.
+- On The Forge the art list is no longer built in the background when the world loads; it is built the first time the picker is opened and reused after that. A world where Tokener is never opened makes no file requests.
+
 ## 3.2.1 - 2026-11-22
 
 ### Fixed
