@@ -655,3 +655,131 @@ test('a rebuild started during a rescan does not read the cache', async () => {
     resetIndexState();
   }
 });
+
+/** A file host that, like The Forge, answers every browse with a request and rejects missing folders. */
+function installFakeHost(tree, { modules }) {
+  const calls = [];
+  const missing = [];
+  globalThis.game = {
+    system: { id: 'pf2e' },
+    world: { id: 'test-world' },
+    user: { isGM: true },
+    modules: new Map(modules.map((id) => [id, { id, title: id, version: '1.0.0', flags: {} }])),
+    settings: { get: () => undefined },
+  };
+  globalThis.foundry = {
+    applications: {
+      apps: {
+        FilePicker: {
+          implementation: {
+            browse: async (_source, target, options) => {
+              calls.push(target);
+              const folder = tree[target];
+              if (!folder) {
+                missing.push(target);
+                throw new Error(`Directory ${target} does not exist`);
+              }
+              const files = options?.recursive
+                ? Object.entries(tree)
+                    .filter(([path]) => path === target || path.startsWith(`${target}/`))
+                    .flatMap(([, entry]) => entry.files ?? [])
+                : (folder.files ?? []);
+              return { target, dirs: folder.dirs ?? [], files };
+            },
+          },
+        },
+      },
+    },
+    utils: { fetchJsonWithTimeout: async () => [] },
+  };
+  return { calls, missing };
+}
+
+test('the index build never browses a folder that is not there', async () => {
+  const saved = saveGlobals();
+  globalThis.indexedDB = undefined;
+  resetIndexState();
+  try {
+    const { calls, missing } = installFakeHost(
+      {
+        'modules/plain': { dirs: ['modules/plain/scripts', 'modules/plain/lang'] },
+        'modules/plain/scripts': {},
+        'modules/plain/lang': {},
+        'modules/art-pack': { dirs: ['modules/art-pack/assets'] },
+        'modules/art-pack/assets': {
+          dirs: ['modules/art-pack/assets/tokens', 'modules/art-pack/assets/portraits'],
+        },
+        'modules/art-pack/assets/tokens': { files: ['modules/art-pack/assets/tokens/goblin.webp'] },
+        'modules/art-pack/assets/portraits': {
+          files: ['modules/art-pack/assets/portraits/goblin.webp'],
+        },
+        // Folders come back as full web addresses on some hosts.
+        'modules/cloud-pack': {
+          dirs: ['https://assets.example.com/bazaar/modules/cloud-pack/tokens/'],
+        },
+        'modules/cloud-pack/tokens': {
+          files: ['https://assets.example.com/bazaar/modules/cloud-pack/tokens/orc.webp'],
+        },
+      },
+      { modules: ['plain', 'art-pack', 'cloud-pack', 'not-installed-here'] },
+    );
+
+    const index = await rebuildIndex();
+
+    assert.deepEqual(missing, ['modules/not-installed-here'], 'only a missing module is asked for');
+    // A module without art folders costs one request; one that cannot be read, one and no more.
+    assert.deepEqual(
+      calls.filter((target) => target.startsWith('modules/plain')),
+      ['modules/plain'],
+    );
+    assert.deepEqual(
+      calls.filter((target) => target.startsWith('modules/not-installed-here')),
+      ['modules/not-installed-here'],
+    );
+    assert.ok(calls.includes('modules/art-pack/assets/tokens'));
+    assert.ok(calls.includes('modules/art-pack/assets/portraits'));
+    assert.ok(calls.includes('modules/cloud-pack/tokens'));
+    const paths = index.map((candidate) => JSON.stringify(candidate));
+    assert.ok(paths.some((text) => text.includes('art-pack/assets/tokens/goblin.webp')));
+    assert.ok(paths.some((text) => text.includes('cloud-pack/tokens/orc.webp')));
+  } finally {
+    restoreGlobals(saved);
+    resetIndexState();
+  }
+});
+
+test('on The Forge the background warm-up only reads the cache; opening the picker builds', async () => {
+  const saved = saveGlobals();
+  const idb = createFakeIndexedDB();
+  globalThis.indexedDB = idb;
+  globalThis.ForgeVTT = { usingTheForge: true };
+  resetIndexState();
+  const now = (callback) => callback();
+  try {
+    let browseCalls = installFakeFoundry();
+    warmIndexInBackground({ schedule: now });
+    await flush();
+    await flush();
+    assert.equal(browseCalls.length, 0, 'nothing is browsed just because the world loaded');
+    assert.equal(isIndexReady(), false);
+
+    const built = await ensureIndex();
+    assert.ok(browseCalls.length > 0);
+    assert.equal(built.length, 1);
+
+    // Next load: the cache is there, so the warm-up makes the index ready without browsing.
+    resetIndexState();
+    browseCalls = installFakeFoundry();
+    globalThis.indexedDB = idb;
+    warmIndexInBackground({ schedule: now });
+    await flush();
+    await flush();
+    assert.equal(browseCalls.length, 0);
+    assert.equal(isIndexReady(), true);
+    assert.equal(state.index.length, 1);
+  } finally {
+    delete globalThis.ForgeVTT;
+    restoreGlobals(saved);
+    resetIndexState();
+  }
+});

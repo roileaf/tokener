@@ -92,12 +92,35 @@ export function hasIndexFailed() {
   return state.failed && !state.indexing;
 }
 
-/** Builds (or loads) the index once the world is idle so the first picker open is instant. */
-export function warmIndexInBackground({ schedule = scheduleIdle } = {}) {
+/**
+ * Builds (or loads) the index once the world is idle so the first picker open is instant. Where
+ * every folder listing is a request to the host's API (`cacheOnly`, The Forge), only the saved
+ * index is loaded: a world that never opens the picker asks the host for nothing, and the first
+ * open builds the index instead.
+ */
+export function warmIndexInBackground({
+  schedule = scheduleIdle,
+  cacheOnly = isMeteredFileHost(),
+} = {}) {
   schedule(() => {
     if (state.indexing || hasLoadedIndex()) return;
-    void ensureIndex();
+    void (cacheOnly ? loadCachedIndex() : ensureIndex());
   });
+}
+
+function isMeteredFileHost() {
+  return Boolean(globalThis.ForgeVTT?.usingTheForge);
+}
+
+/** Makes the saved index the current one when it still matches; browses nothing. */
+async function loadCachedIndex() {
+  const generation = state.generation;
+  const cached = await readIndexCache(getCurrentIndexSignature(getIndexedModules()));
+  // A build that started meanwhile owns the result.
+  if (!cached || generation !== state.generation || state.indexing || hasLoadedIndex()) return;
+  state.index = cached;
+  state.builtIndex = cached;
+  state.failed = false;
 }
 
 function scheduleIdle(callback) {
@@ -175,16 +198,15 @@ function getIndexedModules() {
 async function buildFoundryIndex(modules = getIndexedModules()) {
   const profile = getCurrentSystemProfile();
   const candidates = [];
+  const folders = createFolderLister();
 
   const mappedCandidates = await mapWithConcurrency(modules, INDEX_SCAN_CONCURRENCY, (module) =>
-    collectMappedModuleCandidates(module, profile),
+    collectMappedModuleCandidates(module, profile, folders),
   );
   for (const moduleCandidates of mappedCandidates) candidates.push(...moduleCandidates);
 
-  const folderCandidates = await mapWithConcurrency(
-    modules,
-    INDEX_SCAN_CONCURRENCY,
-    collectFolderModuleCandidates,
+  const folderCandidates = await mapWithConcurrency(modules, INDEX_SCAN_CONCURRENCY, (module) =>
+    collectFolderModuleCandidates(module, folders),
   );
   for (const moduleCandidates of folderCandidates) candidates.push(...moduleCandidates);
 
@@ -207,7 +229,11 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   return results;
 }
 
-async function collectMappedModuleCandidates(module, profile = getCurrentSystemProfile()) {
+async function collectMappedModuleCandidates(
+  module,
+  profile = getCurrentSystemProfile(),
+  folders = createFolderLister(),
+) {
   const candidates = [];
   const seenDatasheets = new Set();
   for (const key of profile.nativeMappingKeys) {
@@ -255,7 +281,7 @@ async function collectMappedModuleCandidates(module, profile = getCurrentSystemP
   }
 
   if (isTokenDataModule(module, profile)) {
-    for (const sheet of await discoverDatasheetSheets(module)) {
+    for (const sheet of await discoverDatasheetSheets(module, folders)) {
       await addDatasheetCandidates({ module, candidates, seenDatasheets, sheet });
     }
   }
@@ -277,11 +303,11 @@ async function addDatasheetCandidates({ module, candidates, seenDatasheets, shee
   }
 }
 
-async function discoverDatasheetSheets(module) {
+async function discoverDatasheetSheets(module, folders) {
   const sheets = new Set();
   for (const { root, recursive } of DATASHEET_BROWSE_ROOTS) {
     const target = root ? `modules/${module.id}/${root}` : `modules/${module.id}`;
-    for (const file of await browseFilesCompat(target, { recursive })) {
+    for (const file of await folders.files(target, { recursive })) {
       const normalized = normalizePath(file);
       if (DATASHEET_JSON.test(normalized)) sheets.add(normalized);
     }
@@ -289,19 +315,19 @@ async function discoverDatasheetSheets(module) {
   return [...sheets];
 }
 
-async function collectFolderModuleCandidates(module) {
+async function collectFolderModuleCandidates(module, folders = createFolderLister()) {
   const candidates = [];
   const tokenFiles = [];
   for (const root of [...TOKEN_FOLDER_ROOTS, ...MIXED_ART_FOLDER_ROOTS]) {
     const target = `modules/${module.id}/${root}`;
-    tokenFiles.push(...(await browseFilesCompat(target)));
+    tokenFiles.push(...(await folders.files(target)));
   }
   if (!tokenFiles.length) return candidates;
 
   const relatedFiles = [...tokenFiles];
   for (const root of [...PORTRAIT_FOLDER_ROOTS, ...SUBJECT_FOLDER_ROOTS]) {
     const target = `modules/${module.id}/${root}`;
-    relatedFiles.push(...(await browseFilesCompat(target)));
+    relatedFiles.push(...(await folders.files(target)));
   }
   candidates.push(...createFolderCandidates({ module, files: relatedFiles }));
   return candidates;
@@ -345,6 +371,71 @@ async function fetchJsonCompat(path) {
   const response = await globalThis.fetch(path);
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${path}`);
   return response.json();
+}
+
+/**
+ * Reads module folders for one index build without asking for folders that are not there. The art
+ * folders are guesses (`tokens`, `assets/tokens`, ...) that most modules lack, and on a hosted
+ * service every guess is an API request that fails with a warning. So a module's folder list is
+ * read once, kept for the build, and a guessed folder is only opened when its parent lists it.
+ */
+function createFolderLister() {
+  const listings = new Map();
+  const list = (path) => {
+    if (!listings.has(path)) listings.set(path, browseFolder(path));
+    return listings.get(path);
+  };
+  const exists = async (path) => {
+    const parts = path.split('/');
+    // `modules/<id>` itself: there when it can be read.
+    if (parts.length <= 2) return Boolean(await list(path));
+    for (let depth = 2; depth < parts.length; depth += 1) {
+      const listing = await list(parts.slice(0, depth).join('/'));
+      if (!listing) return false;
+      // A host that lists no folders cannot say what is missing: open the guess as before.
+      if (!listing.dirs) return true;
+      if (!listing.dirs.has(parts[depth])) return false;
+    }
+    return true;
+  };
+  return {
+    async files(target, { recursive = true } = {}) {
+      const path = normalizePath(target);
+      if (!path || !(await exists(path))) return [];
+      if (!recursive) return (await list(path))?.files ?? [];
+      return browseFilesCompat(path, { recursive: true });
+    },
+  };
+}
+
+/** One folder's own files and sub-folder names; null when it cannot be read. */
+async function browseFolder(path) {
+  const picker = getFilePickerImplementation();
+  if (!picker || typeof picker.browse !== 'function') return null;
+  try {
+    const result = await picker.browse('data', path, { recursive: false });
+    return {
+      files: Array.isArray(result?.files) ? result.files : [],
+      dirs: Array.isArray(result?.dirs) ? new Set(result.dirs.map(getFolderName)) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The last part of a folder path, which some hosts return as a full, encoded web address. */
+function getFolderName(path) {
+  const name =
+    String(path ?? '')
+      .replace(/[?#].*$/, '')
+      .replace(/\/+$/, '')
+      .split('/')
+      .pop() ?? '';
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
 }
 
 async function browseFilesCompat(target, { recursive = true } = {}) {
