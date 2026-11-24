@@ -5029,3 +5029,37 @@ test('actor sheet adds a Create token image button beside Tokener when the creat
     globalThis.game = previousGame;
   }
 });
+
+test('a sheet opened from a token on the canvas acts on that token, not only the actor', async () => {
+  const { getSheetTokenerDocument } = await import('../scripts/actor-entry.js');
+  const { getCreatedTokenApplyActions } = await import('../scripts/picker-app.js');
+  const previousGame = globalThis.game;
+  globalThis.game = { user: { isGM: true }, settings: { get: () => undefined } };
+  const actionsFor = (document) =>
+    getCreatedTokenApplyActions(document).map((option) => option.action);
+  try {
+    const token = { documentName: 'Token', id: 't1', texture: { src: 'a.webp' }, update() {} };
+
+    // An unlinked token's sheet: its actor is the token's own copy.
+    const synthetic = { id: 'a1', name: 'Bat', isToken: true, token };
+    assert.equal(getSheetTokenerDocument({ actor: synthetic }, synthetic), token);
+
+    // A linked token's sheet opened by double-clicking the token.
+    const linked = { id: 'a2', name: 'Hero', prototypeToken: {} };
+    assert.equal(getSheetTokenerDocument({ actor: linked, token }, linked), token);
+    assert.equal(getSheetTokenerDocument({ actor: linked, options: { token } }, linked), token);
+    assert.deepEqual(actionsFor(token), ['token', 'actor', 'portrait', 'both']);
+
+    // Opened from the Actors tab: there is no token, so only the actor can be updated.
+    const fromDirectory = getSheetTokenerDocument({ actor: linked, token: null }, linked);
+    assert.equal(fromDirectory.isTokenerActorProxy, true);
+    assert.deepEqual(actionsFor(fromDirectory), ['actor', 'portrait']);
+    // Something that only looks like a token is not trusted.
+    assert.equal(
+      getSheetTokenerDocument({ actor: linked, token: { id: 'x' } }, linked).isTokenerActorProxy,
+      true,
+    );
+  } finally {
+    globalThis.game = previousGame;
+  }
+});

@@ -19,6 +19,7 @@ import { registerTokenCreatorSettings, syncCreatedTokenSubjectPath } from './tok
 export { MODULE_ID } from './constants.js';
 export {
   createActorTokenDocument,
+  getSheetTokenerDocument,
   openTokenPickerForActor,
   renderActorDirectoryTokenerEntry,
   renderActorSheetTokenerEntry,

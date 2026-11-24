@@ -27,7 +27,23 @@ export function renderActorSheetTokenerEntry(app, html) {
   const root = normalizeHudElement(html);
   const actor = getSheetActor(app);
   if (!root || !canUseTokenerActor(actor)) return;
-  installActorSheetTokenerButton(root, actor);
+  installActorSheetTokenerButton(root, actor, app);
+}
+
+/**
+ * What a sheet's Tokener buttons act on. A sheet opened from a token on the canvas (double-click)
+ * gets that token, so the token itself can be updated as from the Token HUD; an unlinked token's
+ * actor is its own copy, where updating "the actor" alone would change nothing on the scene. A
+ * sheet opened from the Actors tab has no token and gets the actor's default token.
+ */
+export function getSheetTokenerDocument(app, actor) {
+  const token = app?.token ?? app?.options?.token ?? actor?.token ?? null;
+  return isTokenDocument(token) ? token : createActorTokenDocument(actor);
+}
+
+function isTokenDocument(document) {
+  if (!document || typeof document.update !== 'function') return false;
+  return (document.documentName ?? document.constructor?.documentName) === 'Token';
 }
 
 export function renderActorDirectoryTokenerEntry(_app, html) {
@@ -102,12 +118,14 @@ export function createActorTokenDocument(actor) {
   return proxy;
 }
 
-function installActorSheetTokenerButton(root, actor) {
+function installActorSheetTokenerButton(root, actor, app = null) {
   const image = root.querySelector?.(ACTOR_SHEET_IMAGE_SELECTOR);
   const host = getActorSheetImageHost(image);
   if (!host || host.querySelector?.(`.${ACTOR_SHEET_BUTTON_CLASS}`)) return;
 
-  const button = createActorSheetTokenerButton(root, actor);
+  // Read on click: the sheet can be handed a token after it first renders.
+  const getDocument = () => getSheetTokenerDocument(app, actor);
+  const button = createActorSheetTokenerButton(root, actor, getDocument);
   if (!button) return;
 
   host.classList?.add(ACTOR_SHEET_IMAGE_HOST_CLASS);
@@ -118,18 +136,23 @@ function installActorSheetTokenerButton(root, actor) {
       className: `${ACTOR_SHEET_BUTTON_CLASS} ${ACTOR_SHEET_CREATE_CLASS}`,
       tooltip: localize('HUD.ActorSheetCreateTooltip', 'Create token image'),
       icon: 'fa-wand-magic-sparkles',
-      onClick: () => openTokenCreator(createActorTokenDocument(actor)),
+      onClick: () => openTokenCreator(getDocument()),
     });
     if (create) host.append?.(create);
   }
 }
 
-function createActorSheetTokenerButton(root, actor) {
+function createActorSheetTokenerButton(root, actor, getDocument) {
   return createActorSheetButton(root, {
     className: ACTOR_SHEET_BUTTON_CLASS,
     tooltip: localize('HUD.ActorSheetButtonTooltip', 'Open Tokener'),
     icon: 'fa-images',
-    onClick: () => openTokenPickerForActor(actor),
+    onClick: () => {
+      const document = getDocument();
+      return document.isTokenerActorProxy
+        ? openTokenPickerForActor(actor)
+        : openTokenPicker(document);
+    },
   });
 }
 
