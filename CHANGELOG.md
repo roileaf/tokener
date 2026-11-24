@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.3 - 2026-11-24
+
+### Fixed
+
+- Opening Tokener or the Token Creator from a character sheet that was opened by double-clicking a token on the canvas now works on that token: the Token and Both buttons are there, as from the Token HUD. Before, only Actor and Portrait were offered, and for an unlinked token Actor changed nothing visible on the scene. Sheets opened from the Actors tab still offer Actor and Portrait only.
+
 ## 3.2.2 - 2026-11-23
 
 ### Fixed
