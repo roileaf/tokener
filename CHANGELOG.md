@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.4 - 2026-11-27
+
+### Fixed
+
+- Saving from the Token Creator when it was opened with the "Create token image" button on a character sheet no longer ends in "Failed to save the token": the art was applied, then an error followed because no Tokener picker window was open. The creator now finishes the save normally.
+
 ## 3.2.3 - 2026-11-24
 
 ### Fixed
