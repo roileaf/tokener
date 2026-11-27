@@ -923,6 +923,8 @@ function closestTarget(target, selector) {
 }
 
 function renderMainPart(app, { preserveScroll = false } = {}) {
+  // No picker window is open when the Token Creator was started straight from a sheet.
+  if (!app) return undefined;
   if (preserveScroll) app._restoreScroll = capturePickerScroll(app);
   return app?.render?.({ parts: ['main'] });
 }
